@@ -1,0 +1,123 @@
+rules_version = '2';
+
+// =====================================================
+// Cloud Firestore Security Rules — MANNOL POS PWA
+// =====================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isActiveUser() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
+    }
+
+    function userRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function userWarehouseIds() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.warehouseIds;
+    }
+
+    // Settings: public read, admin write
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Rates: public read, authenticated write
+    match /rates/{id} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Rate config: public read (tasas del día), admin write
+    match /rateConfig/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Warehouses: public read, admin write
+    match /warehouses/{id} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Users: self read, admin all
+    match /users/{id} {
+      allow read: if request.auth != null && (request.auth.uid == id || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Managers (gestores): public read, admin write
+    match /managers/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Cards (tarjetas): public read, admin write
+    match /cards/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Categories / Subcategories: public read, admin write
+    match /categories/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /subcategories/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Products: public read, admin/gestor write
+    match /products/{id} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() || (isActiveUser() && userRole() == 'gestor');
+    }
+
+    // Stock: authenticated read, active user write
+    // TODO: validate warehouseId in user's warehouseIds for stricter security
+    match /stock/{id} {
+      allow read: if isActiveUser();
+      allow write: if isActiveUser();
+    }
+
+    // Stock movements (auditoría): authenticated read, active user create
+    match /stockMovements/{id} {
+      allow read: if isActiveUser();
+      allow create: if isActiveUser();
+      allow update, delete: if isAdmin();
+    }
+
+    // Sales: authenticated read, active user create, admin/gestor update
+    match /sales/{id} {
+      allow read: if isActiveUser();
+      allow create: if isActiveUser();
+      allow update, delete: if isAdmin() || (isActiveUser() && userRole() == 'gestor');
+    }
+
+    // Commission payouts (marcar comisiones como pagadas)
+    match /commissionPayouts/{id} {
+      allow read: if isActiveUser();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Commissions (legacy): authenticated read, admin create, admin/gestor update
+    match /commissions/{id} {
+      allow read: if isActiveUser();
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (isActiveUser() && userRole() == 'gestor');
+      allow delete: if isAdmin();
+    }
+  }
+}

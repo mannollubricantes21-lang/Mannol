@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#10b981" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f172a" />
+  <meta name="description" content="Sistema de control de ventas y stock en tiempo real para distribuidor MANNOL con múltiples almacenes. Funciona offline." />
+  <meta name="application-name" content="MANNOL" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="MANNOL" />
+  <meta name="format-detection" content="telephone=no" />
+  <meta name="keywords" content="MANNOL,aceites,automotriz,stock,ventas,almacenes" />
+  <title>MANNOL · Control de Ventas y Stock</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="shortcut icon" href="./icons/favicon.png" />
+  <link rel="icon" href="./icons/icon-64.png" sizes="64x64" type="image/png" />
+  <link rel="icon" href="./icons/icon-192.png" sizes="192x192" type="image/png" />
+  <link rel="icon" href="./icons/icon-512.png" sizes="512x512" type="image/png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="./css/styles.css" />
+
+  <!-- Theme bootstrap (evita FOUC) -->
+  <script>
+    (function() {
+      try {
+        var stored = localStorage.getItem('almacen-pos-state-v1');
+        var theme = 'system';
+        if (stored) {
+          var parsed = JSON.parse(stored);
+          if (parsed.theme) theme = parsed.theme;
+        }
+        var systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var isDark = theme === 'dark' || (theme === 'system' && systemDark);
+        document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+      } catch (e) {}
+    })();
+  </script>
+
+  <style>
+    /* Critical inline CSS so loading screen always looks ok even if styles.css fails */
+    .loading-screen {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 1rem;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #64748b;
+      background: #f8fafc;
+    }
+    .spinner {
+      width: 2.5rem;
+      height: 2.5rem;
+      border: 3px solid #e2e8f0;
+      border-top-color: #10b981;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-screen {
+      display: none;
+      padding: 2rem;
+      text-align: center;
+      min-height: 100vh;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f8fafc;
+      color: #0f172a;
+    }
+    .error-screen h2 { color: #ef4444; font-size: 1.5rem; margin: 0; }
+    .error-screen p { color: #64748b; max-width: 400px; margin: 0; line-height: 1.5; }
+    .error-screen .retry-btn {
+      padding: 0.625rem 1.5rem;
+      background: #10b981;
+      color: white;
+      border: none;
+      border-radius: 0.5rem;
+      cursor: pointer;
+      font-size: 1rem;
+      font-weight: 500;
+      margin-top: 0.5rem;
+    }
+    .error-screen .retry-btn:hover { background: #059669; }
+    .error-screen details {
+      margin-top: 1rem;
+      max-width: 500px;
+      text-align: left;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 0.5rem;
+      padding: 0.75rem;
+      font-size: 0.75rem;
+      color: #64748b;
+    }
+    .error-screen summary { cursor: pointer; font-weight: 500; }
+    .error-screen pre {
+      margin-top: 0.5rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-family: ui-monospace, monospace;
+      font-size: 0.7rem;
+    }
+  </style>
+</head>
+<body>
+  <!-- App container — all views render here -->
+  <div id="app">
+    <div class="loading-screen" id="loading-screen">
+      <div class="spinner"></div>
+      <p>Cargando MANNOL…</p>
+    </div>
+  </div>
+
+  <!-- Hidden error screen (shown if app.js fails to load) -->
+  <div class="error-screen" id="error-screen">
+    <h2>⚠️ No se pudo cargar la app</h2>
+    <p>Esto puede deberse a:</p>
+    <p>• El archivo <code>js/firebase-config.js</code> no existe (copia <code>firebase-config.example.js</code> y renómbralo)<br>
+       • No hay conexión a internet (requerida para cargar Firebase desde el CDN)<br>
+       • El navegador bloquea la ejecución de módulos ES</p>
+    <button class="retry-btn" onclick="location.reload()">Reintentar</button>
+    <details>
+      <summary>Ver detalles técnicos</summary>
+      <pre id="error-details">Sin información disponible</pre>
+    </details>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- Modal container -->
+  <div id="modal-container"></div>
+
+  <!--
+    Bootstrap with error handling.
+    We use dynamic import() so that if app.js (or any of its dependencies)
+    fails to load — e.g. CDN blocked, syntax error, missing file — we can
+    catch the error and show a friendly message instead of an infinite spinner.
+  -->
+  <script type="module">
+    const loadingScreen = document.getElementById('loading-screen');
+    const errorScreen = document.getElementById('error-screen');
+    const errorDetails = document.getElementById('error-details');
+
+    // Timeout: if app doesn't render in 12s, show error
+    const timeoutId = setTimeout(() => {
+      showError('La aplicación tardó demasiado en cargar. Posible problema de conexión o configuración.');
+    }, 12000);
+
+    function showError(msg, err) {
+      clearTimeout(timeoutId);
+      loadingScreen.style.display = 'none';
+      errorScreen.style.display = 'flex';
+      const detail = err ? (err.stack || err.message || String(err)) : msg;
+      errorDetails.textContent = detail;
+      console.error('[Bootstrap]', msg, err || '');
+    }
+
+    // Hide loading screen once app renders something
+    function hideLoading() {
+      clearTimeout(timeoutId);
+      // Only hide if app has actual content (not just the loading screen)
+      const app = document.getElementById('app');
+      if (app && !app.querySelector('.loading-screen')) {
+        loadingScreen.style.display = 'none';
+      } else {
+        // App replaced loading screen with real content
+        if (app && app.children.length > 0 && !app.querySelector('.loading-screen')) {
+          loadingScreen.style.display = 'none';
+        }
+      }
+    }
+
+    // Dynamic import with error handling
+    import('./js/app.js')
+      .then(() => {
+        // Give app.js a moment to render
+        setTimeout(hideLoading, 100);
+      })
+      .catch((err) => {
+        showError('Error al cargar el módulo principal (app.js)', err);
+      });
+  </script>
+
+  <!-- Fallback if JavaScript is disabled -->
+  <noscript>
+    <div style="padding: 2rem; text-align: center; font-family: sans-serif; max-width: 500px; margin: 2rem auto;">
+      <h2 style="color: #ef4444;">JavaScript requerido</h2>
+      <p style="color: #666; line-height: 1.6;">MANNOL POS necesita JavaScript para funcionar. Por favor habilítalo en tu navegador.</p>
+    </div>
+  </noscript>
+</body>
+</html>

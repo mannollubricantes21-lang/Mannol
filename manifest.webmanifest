@@ -1,0 +1,59 @@
+{
+  "name": "MANNOL · Control de Ventas y Stock",
+  "short_name": "MANNOL",
+  "description": "Sistema de control de ventas y stock en tiempo real para distribuidor MANNOL con múltiples almacenes. Funciona offline.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#10b981",
+  "lang": "es",
+  "dir": "ltr",
+  "categories": ["business", "productivity", "shopping"],
+  "icons": [
+    {
+      "src": "./icons/icon-64.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Registrar venta",
+      "short_name": "Vender",
+      "description": "Registrar una nueva venta",
+      "url": "./?view=dashboard&tab=sales"
+    },
+    {
+      "name": "Inventario",
+      "short_name": "Stock",
+      "description": "Ver inventario del almacén",
+      "url": "./?view=dashboard&tab=stock"
+    }
+  ]
+}
