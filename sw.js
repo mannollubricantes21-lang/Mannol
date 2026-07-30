@@ -4,7 +4,7 @@
 // IndexedDB queue for offline sale POSTs.
 // =====================================================
 
-const CACHE_VERSION = "almacen-pos-v6";
+const CACHE_VERSION = "almacen-pos-v7";
 const STATIC_ASSETS = [
   "./",
   "./index.html",

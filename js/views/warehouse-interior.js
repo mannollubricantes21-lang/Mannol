@@ -68,6 +68,8 @@ export function mountWarehouseInterior(container, navigate) {
     const stats = calculateStats(periodSales);
     const stockMap = {};
     stock.forEach((s) => (stockMap[s.productId] = s));
+    const user = store.getState().currentUser;
+    const isAdmin = user?.role === "admin";
     const filteredProducts = products.filter((p) =>
       !search || p.name.toLowerCase().includes(search.toLowerCase()) || (p.brand || "").toLowerCase().includes(search.toLowerCase()) || (p.sku || "").toLowerCase().includes(search.toLowerCase())
     );
@@ -182,7 +184,7 @@ export function mountWarehouseInterior(container, navigate) {
                   <div style="display:flex;align-items:center;gap:0.5rem;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius)">
                     <div style="flex:1;min-width:0">
                       <div class="text-xs font-medium truncate">${p.name}</div>
-                      <div class="text-xs text-muted">${p.brand} · ${formatMoney(s?.localPrice || p.salePrice, "USD")}</div>
+                      <div class="text-xs text-muted">${p.brand} ${isAdmin ? '· ' + formatMoney(s?.localPrice || p.salePrice, "USD") : ''}</div>
                     </div>
                     <span class="text-sm font-bold ${isOut ? 'text-danger' : isLow ? 'text-warning' : ''}">${qty}</span>
                     ${isOut ? '<span class="badge badge-danger" style="font-size:0.5rem">Agotado</span>' : isLow ? '<span class="badge badge-warning" style="font-size:0.5rem">Bajo</span>' : ''}

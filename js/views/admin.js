@@ -12,6 +12,7 @@ import {
   listManagers, saveManager, deleteManager,
   listCards, saveCard, deleteCard,
   listWarehouseCommissions,
+  listStock, listSales,
   getRateConfig, saveRateConfig, syncRatesFromElToque,
   listStockMovements,
 } from "../firestore.js";
@@ -28,6 +29,7 @@ const TABS = [
   { id: "managers", label: "Gestores", icon: "users" },
   { id: "cards", label: "Tarjetas", icon: "creditCard" },
   { id: "warehouseCommissions", label: "Comisiones locales", icon: "wallet" },
+  { id: "profit", label: "Ganancia/Inversión", icon: "trendingUp" },
   { id: "rates", label: "Tasas", icon: "trendingUp" },
   { id: "audit", label: "Auditoría", icon: "receipt" },
 ];
@@ -90,6 +92,7 @@ export function mountAdminView(container, navigate) {
       case "cards": mountCardsPanel(content, myGen); break;
       case "warehouseCommissions": mountWarehouseCommissionsPanel(content, myGen); break;
       case "rates": mountRatesPanel(content, myGen); break;
+      case "profit": mountProfitPanel(content, myGen); break;
       case "audit": mountAuditPanel(content, myGen); break;
     }
   }
@@ -978,6 +981,155 @@ export function mountAdminView(container, navigate) {
         </div>
       `;
     });
+  }
+
+  // ===== PROFIT / INVESTMENT =====
+  function mountProfitPanel(content, gen) {
+    content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+    Promise.all([listProducts(), listStock(), listSales({})]).then(([products, stockList, sales]) => {
+    if (gen !== tabGeneration) return;
+
+    // Calcular inversión (costo del inventario actual)
+    let totalInvestment = 0;
+    let totalRetailValue = 0;
+    let totalUnits = 0;
+    const productStats = [];
+
+    for (const p of products) {
+      const stockItems = stockList.filter((s) => s.productId === p.id);
+      const totalQty = stockItems.reduce((sum, s) => sum + s.quantity, 0);
+      const costPrice = p.costPrice || (p.salePrice * 0.7);
+      const investment = totalQty * costPrice;
+      const retailValue = totalQty * (p.salePrice || 0);
+      totalInvestment += investment;
+      totalRetailValue += retailValue;
+      totalUnits += totalQty;
+
+      // Ventas de este producto
+      let unitsSold = 0;
+      let revenue = 0;
+      let costSold = 0;
+      for (const s of sales) {
+        if (s.status !== "COMPLETADA") continue;
+        const item = s.items.find((i) => i.productId === p.id);
+        if (item) {
+          unitsSold += item.quantity;
+          revenue += item.subtotal;
+          costSold += item.quantity * costPrice;
+        }
+      }
+      const profit = revenue - costSold;
+      const profitPct = costSold > 0 ? Math.round((profit / costSold) * 100) : 0;
+
+      productStats.push({ product: p, totalQty, investment, retailValue, unitsSold, revenue, costSold, profit, profitPct });
+    }
+
+    // Totales de ventas
+    const completedSales = sales.filter((s) => s.status === "COMPLETADA");
+    const totalRevenue = completedSales.reduce((s, x) => s + x.totalAmount, 0);
+    const totalCostSold = productStats.reduce((s, p) => s + p.costSold, 0);
+    const totalProfit = totalRevenue - totalCostSold;
+    const totalProfitPct = totalCostSold > 0 ? Math.round((totalProfit / totalCostSold) * 100) : 0;
+    const potentialProfit = totalRetailValue - totalInvestment;
+    const potentialProfitPct = totalInvestment > 0 ? Math.round((potentialProfit / totalInvestment) * 100) : 0;
+
+    content.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:1rem">
+        <div>
+          <h2 class="text-lg font-bold flex items-center gap-2">${icon("trendingUp", 20)} Ganancia e Inversión</h2>
+          <p class="text-xs text-muted">Resumen financiero del inventario y ventas</p>
+        </div>
+
+        <!-- KPIs principales -->
+        <div class="grid grid-cols-2 gap-2">
+          <div class="stat-card" style="border:1px solid color-mix(in oklab, var(--info) 30%, transparent)">
+            <div class="stat-label">${icon("boxes", 14)} Inversión en stock</div>
+            <div class="stat-value" style="color:var(--info)">${formatMoney(totalInvestment, "USD")}</div>
+            <div class="stat-sub">${totalUnits} unidades en inventario</div>
+          </div>
+          <div class="stat-card" style="border:1px solid color-mix(in oklab, var(--accent-usd) 30%, transparent)">
+            <div class="stat-label">${icon("dollar", 14)} Valor de venta</div>
+            <div class="stat-value" style="color:var(--accent-usd)">${formatMoney(totalRetailValue, "USD")}</div>
+            <div class="stat-sub">Si se vende todo el stock</div>
+          </div>
+          <div class="stat-card" style="border:1px solid color-mix(in oklab, var(--accent-usd) 30%, transparent)">
+            <div class="stat-label">${icon("trendingUp", 14)} Ganancia potencial</div>
+            <div class="stat-value" style="color:var(--accent-usd)">${formatMoney(potentialProfit, "USD")}</div>
+            <div class="stat-sub">${potentialProfitPct}% sobre inversión</div>
+          </div>
+          <div class="stat-card" style="border:1px solid color-mix(in oklab, var(--warning) 30%, transparent)">
+            <div class="stat-label">${icon("receipt", 14)} Ganancia realizada</div>
+            <div class="stat-value" style="color:var(--warning)">${formatMoney(totalProfit, "USD")}</div>
+            <div class="stat-sub">${totalProfitPct}% · ${completedSales.length} ventas</div>
+          </div>
+        </div>
+
+        <!-- Resumen de ventas -->
+        <div class="card">
+          <div class="card-header"><h3 class="card-title">Resumen de ventas</h3></div>
+          <div class="card-content">
+            <div class="grid grid-cols-3 gap-2">
+              <div class="text-center">
+                <div class="text-xs text-muted">Ingresos</div>
+                <div class="text-lg font-bold" style="color:var(--accent-usd)">${formatMoney(totalRevenue, "USD")}</div>
+              </div>
+              <div class="text-center">
+                <div class="text-xs text-muted">Costo productos</div>
+                <div class="text-lg font-bold" style="color:var(--danger)">${formatMoney(totalCostSold, "USD")}</div>
+              </div>
+              <div class="text-center">
+                <div class="text-xs text-muted">Ganancia</div>
+                <div class="text-lg font-bold" style="color:var(--warning)">${formatMoney(totalProfit, "USD")}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Detalle por producto -->
+        <div class="card">
+          <div class="card-header"><h3 class="card-title">Detalle por producto</h3></div>
+          <div class="overflow-x-auto">
+            <table class="table">
+              <thead><tr><th>Producto</th><th class="text-center">Stock</th><th class="text-right">Costo unit.</th><th class="text-right">Venta unit.</th><th class="text-right">Inversión</th><th class="text-right">Vendido</th><th class="text-right">Ganancia</th><th class="text-center">%</th></tr></thead>
+              <tbody>
+                ${productStats.sort((a, b) => b.profit - a.profit).map((ps) => {
+                  const costPrice = ps.product.costPrice || (ps.product.salePrice * 0.7);
+                  return `
+                    <tr>
+                      <td class="font-medium text-xs">${ps.product.name}</td>
+                      <td class="text-center">${ps.totalQty}</td>
+                      <td class="text-right text-xs">${formatMoney(costPrice, "USD")}</td>
+                      <td class="text-right text-xs">${formatMoney(ps.product.salePrice, "USD")}</td>
+                      <td class="text-right text-xs" style="color:var(--info)">${formatMoney(ps.investment, "USD")}</td>
+                      <td class="text-right text-xs">${formatMoney(ps.revenue, "USD")}</td>
+                      <td class="text-right text-xs font-bold" style="color:${ps.profit > 0 ? 'var(--accent-usd)' : 'var(--danger)'}">${formatMoney(ps.profit, "USD")}</td>
+                      <td class="text-center text-xs ${ps.profitPct > 0 ? 'text-accent' : 'text-danger'}">${ps.profitPct}%</td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Nota sobre lotes de compra -->
+        <div class="card" style="background: color-mix(in oklab, var(--info) 5%, transparent); border-color: color-mix(in oklab, var(--info) 30%, transparent)">
+          <div class="card-content text-sm">
+            <div class="flex items-start gap-2">
+              <span style="color:var(--info);flex-shrink:0;margin-top:0.125rem">${icon("alertTriangle", 16)}</span>
+              <div>
+                <p class="font-medium mb-1">Lotes de compra</p>
+                <p class="text-xs text-muted">El costo unitario se calcula automáticamente. Si compras el mismo producto a diferente precio, el sistema usa el costo promedio ponderado. Para registrar compras con precio variable, usa el módulo de Inventario → Ajustar stock con motivo "INVENTARIO" e indica el costo en la nota.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }).catch((err) => {
+    if (gen !== tabGeneration) return;
+    content.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+  });
   }
 
   render();

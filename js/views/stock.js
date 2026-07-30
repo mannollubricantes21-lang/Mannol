@@ -18,6 +18,7 @@ export function mountStockView(container, navigate) {
     const warehouse = store.getState().currentWarehouse;
     const user = store.getState().currentUser;
     const canEdit = user?.role === "admin";
+    const isAdmin = user?.role === "admin";
 
     if (!warehouse) {
       container.innerHTML = `<div class="empty-state">Selecciona un almacén en el menú lateral</div>`;
@@ -35,10 +36,10 @@ export function mountStockView(container, navigate) {
     );
 
     const totalUnits = stock.reduce((s, x) => s + x.quantity, 0);
-    const totalValue = stock.reduce((s, x) => {
+    const totalValue = isAdmin ? stock.reduce((s, x) => {
       const p = products.find((pp) => pp.id === x.productId);
       return s + (x.quantity * (x.localPrice || p?.salePrice || 0));
-    }, 0);
+    }, 0) : 0;
     const lowStock = stock.filter((s) => s.quantity <= (s.minStock || 5) && s.quantity > 0).length;
     const outOfStock = stock.filter((s) => s.quantity === 0).length;
 
@@ -48,7 +49,7 @@ export function mountStockView(container, navigate) {
           <h1 class="text-2xl font-bold flex items-center gap-2">${icon("boxes", 24)} Inventario</h1>
           <p class="text-sm text-muted">
             Almacén: <span class="badge badge-accent">${warehouse.name}</span> ·
-            ${products.length} productos · ${totalUnits} unidades · ${formatMoney(totalValue, "USD")}
+            ${products.length} productos · ${totalUnits} unidades${isAdmin ? ' · ' + formatMoney(totalValue, "USD") : ''}
           </p>
         </div>
 
@@ -56,7 +57,7 @@ export function mountStockView(container, navigate) {
           <div class="stat-card">
             <div class="stat-label">${icon("boxes", 14)} Total unidades</div>
             <div class="stat-value">${totalUnits}</div>
-            <div class="stat-sub">${products.length} SKUs · ${formatMoney(totalValue, "USD")}</div>
+            <div class="stat-sub">${products.length} SKUs${isAdmin ? ' · ' + formatMoney(totalValue, "USD") : ''}</div>
           </div>
           <div class="stat-card">
             <div class="stat-label" style="color:var(--warning)">${icon("alertTriangle", 14)} Stock bajo</div>
@@ -78,7 +79,7 @@ export function mountStockView(container, navigate) {
         <div class="card">
           <div class="overflow-x-auto">
             <table class="table">
-              <thead><tr><th>Producto</th><th>Marca</th><th class="text-right">Precio</th><th class="text-center">Cantidad</th><th class="text-center">Mínimo</th><th class="text-center">Estado</th>${canEdit ? '<th class="text-right">Acciones</th>' : ''}</tr></thead>
+              <thead><tr><th>Producto</th><th>Marca</th>${isAdmin ? '<th class="text-right">Precio</th>' : ''}<th class="text-center">Cantidad</th><th class="text-center">Mínimo</th><th class="text-center">Estado</th>${canEdit ? '<th class="text-right">Acciones</th>' : ''}</tr></thead>
               <tbody>
                 ${filtered.length === 0 ? `<tr><td colspan="${canEdit ? 7 : 6}" class="empty-state">No hay productos</td></tr>` :
                   filtered.map((p) => {
@@ -91,7 +92,7 @@ export function mountStockView(container, navigate) {
                       <tr>
                         <td class="font-medium">${p.name}<div class="text-xs text-muted">${p.sku || ''} ${p.viscosity ? '· ' + p.viscosity : ''}</div></td>
                         <td class="text-xs">${p.brand}</td>
-                        <td class="text-right">${formatMoney(s?.localPrice || p.salePrice, "USD")}</td>
+                        ${isAdmin ? `<td class="text-right">${formatMoney(s?.localPrice || p.salePrice, "USD")}</td>` : ''}
                         <td class="text-center font-bold ${isOut ? 'text-danger' : isLow ? 'text-warning' : ''}">${qty}</td>
                         <td class="text-center text-muted">${min}</td>
                         <td class="text-center">
