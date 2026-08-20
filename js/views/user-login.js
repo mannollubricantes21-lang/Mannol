@@ -45,6 +45,34 @@ export function renderUserLoginView() {
             <p class="text-xs text-muted text-center mt-2">
               ¿No tienes cuenta? Pídele al administrador que te cree una.
             </p>
+
+            <div id="demo-creds" style="margin-top: 0.5rem; padding: 0.75rem; background: color-mix(in oklab, var(--primary) 5%, transparent); border: 1px dashed color-mix(in oklab, var(--primary) 30%, transparent); border-radius: var(--radius);">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem">
+                <p class="text-xs font-semibold" style="color: var(--primary); margin:0;">
+                  ${icon("key", 12)} Modo demo — credenciales
+                </p>
+                <button type="button" class="btn btn-ghost btn-sm" id="toggle-demo-creds" style="padding: 0.125rem 0.5rem; font-size: 0.625rem; min-height: auto;">
+                  Mostrar
+                </button>
+              </div>
+              <div id="demo-creds-list" style="display:none;flex-direction:column;gap:0.375rem;font-size:0.75rem;">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                  <span class="text-muted">Administrador:</span>
+                  <code style="background:var(--bg-soft);padding:0.125rem 0.375rem;border-radius:var(--radius-sm);font-size:0.6875rem">admin / admin123</code>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                  <span class="text-muted">Vendedor Central:</span>
+                  <code style="background:var(--bg-soft);padding:0.125rem 0.375rem;border-radius:var(--radius-sm);font-size:0.6875rem">cen / central2025</code>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                  <span class="text-muted">Vendedor Vedado:</span>
+                  <code style="background:var(--bg-soft);padding:0.125rem 0.375rem;border-radius:var(--radius-sm);font-size:0.6875rem">ved / vedado2025</code>
+                </div>
+                <button type="button" class="btn btn-outline btn-sm" id="fill-admin-creds" style="margin-top:0.25rem;font-size:0.6875rem;min-height:auto">
+                  Autocompletar admin
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </main>
@@ -64,6 +92,28 @@ export function mountUserLoginView(container, navigate) {
   container.querySelectorAll("[data-nav]").forEach((btn) => {
     btn.addEventListener("click", () => navigate(btn.dataset.nav));
   });
+
+  // Demo creds toggle
+  const toggleBtn = container.querySelector("#toggle-demo-creds");
+  const credsList = container.querySelector("#demo-creds-list");
+  if (toggleBtn && credsList) {
+    toggleBtn.addEventListener("click", () => {
+      const isHidden = credsList.style.display === "none";
+      credsList.style.display = isHidden ? "flex" : "none";
+      toggleBtn.textContent = isHidden ? "Ocultar" : "Mostrar";
+    });
+  }
+
+  // Fill admin creds button
+  const fillBtn = container.querySelector("#fill-admin-creds");
+  if (fillBtn && emailInput && passwordInput) {
+    fillBtn.addEventListener("click", () => {
+      emailInput.value = "admin";
+      passwordInput.value = "admin123";
+      passwordInput.focus();
+      toast("Credenciales admin autocompletadas", "info", 1500);
+    });
+  }
 
   if (emailInput) emailInput.focus();
 

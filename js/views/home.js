@@ -40,7 +40,7 @@ export function renderHomeView(navigate) {
               ${icon("menu", 20)}
             </button>
             <div class="flex items-center gap-2 min-w-0">
-              <div class="brand-logo">
+              <div class="brand-logo" id="home-logo" style="cursor: pointer; user-select: none;" title="MANNOL" role="button" tabindex="0" aria-label="Logo MANNOL">
                 ${icon("droplet", 18)}
               </div>
               <div class="min-w-0" style="leading-tight;">
@@ -198,10 +198,10 @@ export function mountHomeView(container, navigate) {
     // Si no hay Firebase configurado o no hay almacenes, usar datos demo
     if (!list || list.length === 0) {
       const demoWarehouses = [
-        { id: "demo-1", name: "Víbora", code: "VIB", address: "Obispo #45, Habana Vieja", phone: "+53 7 866-2020", active: true, pinCode: "2025", hasPin: true },
-        { id: "demo-2", name: "Lisa", code: "LIS", address: "Av. 51 #7308, La Lisa", phone: "+53 7 855-3030", active: true, pinCode: "2025", hasPin: true },
-        { id: "demo-3", name: "Playa", code: "PLY", address: "Calle 70 #1108, Miramar", phone: "+53 7 855-4040", active: true, pinCode: "2025", hasPin: true },
-        { id: "demo-4", name: "Centro Habana", code: "CHB", address: "Galiano #258, Centro Habana", phone: "+53 7 866-5050", active: true, pinCode: "2025", hasPin: true },
+        { id: "demo-1", name: "Víbora", code: "VIB", address: "Obispo #45, Habana Vieja", phone: "+53 7 866-2020", active: true, pin: "2025", hasPin: true },
+        { id: "demo-2", name: "Lisa", code: "LIS", address: "Av. 51 #7308, La Lisa", phone: "+53 7 855-3030", active: true, pin: "2025", hasPin: true },
+        { id: "demo-3", name: "Playa", code: "PLY", address: "Calle 70 #1108, Miramar", phone: "+53 7 855-4040", active: true, pin: "2025", hasPin: true },
+        { id: "demo-4", name: "Centro Habana", code: "CHB", address: "Galiano #258, Centro Habana", phone: "+53 7 866-5050", active: true, pin: "2025", hasPin: true },
       ];
       store.setState({ _warehouses: demoWarehouses });
     } else {
@@ -221,6 +221,35 @@ export function mountHomeView(container, navigate) {
   }
 
   function wireEvents() {
+    // ===== Easter egg: 3 clicks en el logo → acceso admin =====
+    const logo = container.querySelector("#home-logo");
+    if (logo) {
+      let clickCount = 0;
+      let clickTimer = null;
+      const handleLogoClick = () => {
+        clickCount++;
+        if (clickTimer) clearTimeout(clickTimer);
+        if (clickCount >= 3) {
+          clickCount = 0;
+          // Pequeña animación de confirmación
+          logo.style.transform = "scale(1.2)";
+          logo.style.transition = "transform 0.2s";
+          setTimeout(() => { logo.style.transform = ""; }, 200);
+          toast("Acceso admin", "info", 1000);
+          navigate("login");
+        } else {
+          clickTimer = setTimeout(() => { clickCount = 0; }, 800);
+        }
+      };
+      logo.addEventListener("click", handleLogoClick);
+      logo.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          handleLogoClick();
+        }
+      });
+    }
+
     // Navigation buttons
     container.querySelectorAll("[data-nav]").forEach((btn) => {
       btn.addEventListener("click", () => navigate(btn.dataset.nav));

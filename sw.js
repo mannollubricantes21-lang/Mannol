@@ -4,12 +4,14 @@
 // IndexedDB queue for offline sale POSTs.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v4";
+const CACHE_VERSION = "mannol-pos-supabase-v7";
 const STATIC_ASSETS = [
   "./",
   "./index.html",
+  "./admin.html",
   "./css/styles.css",
   "./js/app.js",
+  "./js/admin-app.js",
   "./js/supabase.js",
   "./js/supabase-config.example.js",
   "./js/store.js",

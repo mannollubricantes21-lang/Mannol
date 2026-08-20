@@ -4,11 +4,14 @@
 
 import { getStore } from "../store.js";
 import { getSettings, listWarehouses } from "../db.js";
+import { isSupabaseConfigured } from "../supabase.js";
 import { toast, icon } from "../ui.js";
 
 export function renderPinLoginView() {
   const store = getStore();
   const warehouse = store.getState()._selectedWarehouse;
+  // isSupabaseConfigured es síncrono después del primer loadConfig (que ocurre en init)
+  const isDemo = !isSupabaseConfigured;
 
   if (!warehouse) {
     return `
@@ -42,6 +45,14 @@ export function renderPinLoginView() {
               Ingresa el PIN del almacén <strong>${warehouse.code} · ${warehouse.name}</strong> para registrar ventas y ver el inventario.
             </p>
           </div>
+
+          ${isDemo ? `
+            <div style="background: color-mix(in oklab, var(--primary) 5%, transparent); border: 1px dashed color-mix(in oklab, var(--primary) 30%, transparent); border-radius: var(--radius); padding: 0.5rem 0.75rem; text-align: center;">
+              <p class="text-xs" style="color: var(--primary); margin: 0;">
+                ${icon("key", 12)} <strong>Modo demo</strong> — PIN de este almacén: <code style="background:var(--bg-soft);padding:0.125rem 0.375rem;border-radius:var(--radius-sm);font-weight:700">${warehouse.pin || "2025"}</code>
+              </p>
+            </div>
+          ` : ''}
 
           <div id="pin-error" class="hidden" style="background: color-mix(in oklab, var(--danger) 10%, transparent); border: 1px solid color-mix(in oklab, var(--danger) 30%, transparent); color: var(--danger); padding: 0.5rem 0.75rem; border-radius: var(--radius); font-size: 0.875rem;"></div>
 

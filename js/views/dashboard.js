@@ -18,7 +18,6 @@ import { mountUsersView } from "./users.js";
 import { mountSettingsView } from "./settings.js";
 import { mountSalesHistoryView } from "./sales-history.js";
 import { mountManagersView } from "./managers.js";
-import { mountAdminView } from "./admin.js";
 import { mountWarehouseInterior } from "./warehouse-interior.js";
 import { createSyncBanner } from "../components/sync-banner.js";
 
@@ -259,7 +258,11 @@ export function mountDashboardView(container, navigate) {
         case "transfers": cleanup = mountTransfersView(content, navigate); break;
         case "catalog": cleanup = mountCatalogView(content, navigate); break;
         case "users": cleanup = mountUsersView(content, navigate); break;
-        case "admin": cleanup = mountAdminView(content, navigate); break;
+        case "admin":
+          // Admin se abre en su propio HTML (admin.html) para no cargar
+          // todo el código de admin en la app de vendedores.
+          window.location.href = "./admin.html";
+          break;
         case "settings": cleanup = mountSettingsView(content, navigate); break;
         default: content.innerHTML = '<div class="empty-state">Vista no encontrada</div>';
       }

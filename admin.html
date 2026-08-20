@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#10b981" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f172a" />
+  <meta name="description" content="Panel de administración MANNOL — gestión de usuarios, productos, almacenes y configuración." />
+  <meta name="application-name" content="MANNOL Admin" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="MANNOL Admin" />
+  <meta name="format-detection" content="telephone=no" />
+  <title>MANNOL · Panel Admin</title>
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="./css/styles.css" />
+
+  <!-- Theme bootstrap (evita FOUC) -->
+  <script>
+    (function() {
+      try {
+        var stored = localStorage.getItem('almacen-pos-state-v1');
+        var theme = 'system';
+        if (stored) {
+          var parsed = JSON.parse(stored);
+          if (parsed.theme) theme = parsed.theme;
+        }
+        var systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var isDark = theme === 'dark' || (theme === 'system' && systemDark);
+        document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+      } catch (e) {}
+    })();
+  </script>
+
+  <style>
+    /* Admin-specific layout — sidebar + main content */
+    .admin-shell {
+      display: flex;
+      min-height: 100vh;
+      background: var(--bg);
+    }
+    .admin-sidebar {
+      width: 16rem;
+      flex-shrink: 0;
+      background: var(--bg-elevated);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+    .admin-sidebar-header {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .admin-sidebar-nav {
+      flex: 1;
+      padding: 0.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.125rem;
+    }
+    .admin-nav-item {
+      display: flex;
+      align-items: center;
+      gap: 0.625rem;
+      padding: 0.5rem 0.75rem;
+      border: none;
+      background: transparent;
+      color: var(--text-soft);
+      text-align: left;
+      cursor: pointer;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: background 0.15s, color 0.15s;
+      width: 100%;
+    }
+    .admin-nav-item:hover {
+      background: var(--bg-soft);
+      color: var(--text);
+    }
+    .admin-nav-item.active {
+      background: var(--primary-tint);
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .admin-nav-item-icon {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .admin-nav-section-label {
+      padding: 0.75rem 0.75rem 0.375rem;
+      font-size: 0.625rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    .admin-main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .admin-topbar {
+      background: color-mix(in oklab, var(--bg) 80%, transparent);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .admin-content {
+      padding: 1.5rem;
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+    .admin-sidebar-footer {
+      padding: 0.75rem;
+      border-top: 1px solid var(--border);
+    }
+    /* Mobile: sidebar collapse */
+    .admin-sidebar-toggle {
+      display: none;
+    }
+    @media (max-width: 768px) {
+      .admin-sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 50;
+        transform: translateX(-100%);
+        transition: transform 0.2s ease;
+        box-shadow: var(--shadow-lg);
+      }
+      .admin-sidebar.open {
+        transform: translateX(0);
+      }
+      .admin-sidebar-toggle {
+        display: flex;
+      }
+      .admin-content {
+        padding: 1rem;
+      }
+    }
+    .admin-sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 40;
+    }
+    .admin-sidebar-overlay.show {
+      display: block;
+    }
+    /* Loading screen */
+    .admin-loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 1rem;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #64748b;
+      background: #f8fafc;
+    }
+    .admin-loading .spinner {
+      width: 2.5rem;
+      height: 2.5rem;
+      border: 3px solid #e2e8f0;
+      border-top-color: #10b981;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="admin-app">
+    <div class="admin-loading">
+      <div class="spinner"></div>
+      <p>Cargando panel admin…</p>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- Modal container -->
+  <div id="modal-container"></div>
+
+  <!-- Bootstrap admin app -->
+  <script type="module">
+    import('./js/admin-app.js')
+      .catch((err) => {
+        console.error('[Admin Bootstrap]', err);
+        document.getElementById('admin-app').innerHTML = `
+          <div style="padding: 2rem; text-align: center; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; font-family: sans-serif;">
+            <h2 style="color: #ef4444;">⚠️ No se pudo cargar el panel admin</h2>
+            <p style="color: #666; max-width: 400px;">${err.message || 'Error desconocido'}</p>
+            <p style="color: #999; font-size: 0.75rem;">Verifica que js/supabase-config.js exista y tengas permisos de administrador.</p>
+            <a href="./index.html" style="padding: 0.5rem 1.5rem; background: #10b981; color: white; text-decoration: none; border-radius: 0.5rem; font-size: 1rem;">Volver al inicio</a>
+          </div>
+        `;
+      });
+  </script>
+</body>
+</html>

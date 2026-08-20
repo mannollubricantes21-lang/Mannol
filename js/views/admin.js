@@ -1,6 +1,6 @@
 // =====================================================
-// Admin Panel — 9 sub-paneles (Tabs)
-// Users, Products, Categories, Warehouses, Managers, Cards, Commissions, Rates, Audit
+// Admin Panel — sidebar + 10 secciones
+// Layout limpio: sidebar lateral fijo + contenido principal
 // =====================================================
 
 import { getStore } from "../store.js";
@@ -16,72 +16,202 @@ import {
   getRateConfig, saveRateConfig, syncRatesFromElToque,
   listStockMovements,
 } from "../db.js";
+import { logout } from "../auth.js";
 import { formatMoney, formatDate } from "../currency.js";
 import { toast, icon, showModal, closeModal, confirmDialog } from "../ui.js";
 import { CURRENCIES, CATEGORY_COLORS, STOCK_REASONS, STOCK_REASON_LABELS } from "../types.js";
 import { uploadImageAsWebP, pickImageFile } from "../image-upload.js";
 
-const TABS = [
-  { id: "users", label: "Usuarios", icon: "userCog" },
-  { id: "products", label: "Productos", icon: "tags" },
-  { id: "categories", label: "Categorías", icon: "tags" },
-  { id: "warehouses", label: "Almacenes", icon: "store" },
-  { id: "managers", label: "Gestores", icon: "users" },
-  { id: "cards", label: "Tarjetas", icon: "creditCard" },
-  { id: "warehouseCommissions", label: "Comisiones locales", icon: "wallet" },
-  { id: "profit", label: "Ganancia/Inversión", icon: "trendingUp" },
-  { id: "rates", label: "Tasas", icon: "trendingUp" },
-  { id: "audit", label: "Auditoría", icon: "receipt" },
+// Secciones agrupadas por categoría para mejor organización
+const NAV_SECTIONS = [
+  {
+    label: "Gestión",
+    items: [
+      { id: "users", label: "Usuarios", icon: "userCog" },
+      { id: "products", label: "Productos", icon: "tags" },
+      { id: "categories", label: "Categorías", icon: "tags" },
+      { id: "warehouses", label: "Almacenes", icon: "store" },
+      { id: "managers", label: "Gestores", icon: "users" },
+      { id: "cards", label: "Tarjetas", icon: "creditCard" },
+    ],
+  },
+  {
+    label: "Finanzas",
+    items: [
+      { id: "warehouseCommissions", label: "Comisiones locales", icon: "wallet" },
+      { id: "profit", label: "Ganancia/Inversión", icon: "trendingUp" },
+      { id: "rates", label: "Tasas", icon: "trendingUp" },
+    ],
+  },
+  {
+    label: "Sistema",
+    items: [
+      { id: "audit", label: "Auditoría", icon: "receipt" },
+    ],
+  },
 ];
 
-export function mountAdminView(container, navigate) {
-  const store = getStore();
-  const user = store.getState().currentUser;
+const ALL_TABS = NAV_SECTIONS.flatMap((s) => s.items);
+
+// Exporta mountAdminPanel para que admin-app.js lo use
+export function mountAdminPanel(container, user) {
+  return mountAdminView(container, user);
+}
+
+export function mountAdminView(container, navigateOrUser) {
+  // Soporta ambas firmas: (container, navigate) o (container, user)
+  let user;
+  let navigate = null;
+  if (typeof navigateOrUser === "function") {
+    navigate = navigateOrUser;
+    user = getStore().getState().currentUser;
+  } else {
+    user = navigateOrUser;
+  }
+
   if (!user || user.role !== "admin") {
     container.innerHTML = `<div class="empty-state">⚠️ Solo administradores pueden acceder a este panel</div>`;
     return () => {};
   }
 
+  const store = getStore();
   let activeTab = "users";
-  let tabGeneration = 0; // evita race condition al cambiar tabs rápido
+  let tabGeneration = 0;
+  let sidebarOpen = false;
 
   function render() {
     container.innerHTML = `
-      <div style="display:flex;flex-direction:column;gap:1rem">
-        <div>
-          <h1 class="text-2xl font-bold flex items-center gap-2">${icon("settings", 24)} Panel admin</h1>
-          <p class="text-sm text-muted">Gestión completa del sistema</p>
-        </div>
-
-        <div class="tabs-list" style="grid-template-columns: repeat(${TABS.length}, 1fr); overflow-x:auto">
-          ${TABS.map((t) => `
-            <button class="tabs-trigger ${activeTab === t.id ? 'active' : ''}" data-tab="${t.id}">
-              ${icon(t.icon, 14)}
-              <span class="md:show" style="display:none">${t.label}</span>
+      <div class="admin-shell">
+        <!-- Sidebar -->
+        <aside class="admin-sidebar" id="admin-sidebar">
+          <div class="admin-sidebar-header">
+            <div class="brand-logo">${icon("droplet", 18)}</div>
+            <div style="min-width:0;flex:1">
+              <p class="font-bold" style="margin:0;font-size:0.875rem">MANNOL Admin</p>
+              <p class="text-xs text-muted truncate" style="margin:0">${user.displayName}</p>
+            </div>
+          </div>
+          <nav class="admin-sidebar-nav" aria-label="Navegación admin">
+            ${NAV_SECTIONS.map((section) => `
+              <div class="admin-nav-section-label">${section.label}</div>
+              ${section.items.map((item) => `
+                <button class="admin-nav-item ${activeTab === item.id ? 'active' : ''}" data-tab="${item.id}" aria-label="${item.label}">
+                  <span class="admin-nav-item-icon">${icon(item.icon, 16)}</span>
+                  <span>${item.label}</span>
+                </button>
+              `).join('')}
+            `).join('')}
+          </nav>
+          <div class="admin-sidebar-footer">
+            <a href="./index.html" class="admin-nav-item" aria-label="Volver a la app principal">
+              <span class="admin-nav-item-icon">${icon("arrowLeft", 16)}</span>
+              <span>App principal</span>
+            </a>
+            <button class="admin-nav-item" id="admin-logout" style="color: var(--danger); width: 100%; margin-top: 0.25rem" aria-label="Cerrar sesión">
+              <span class="admin-nav-item-icon">${icon("logout", 16)}</span>
+              <span>Cerrar sesión</span>
             </button>
-          `).join('')}
-        </div>
+          </div>
+        </aside>
 
-        <div id="admin-tab-content"></div>
+        <!-- Mobile overlay -->
+        <div class="admin-sidebar-overlay" id="admin-sidebar-overlay"></div>
+
+        <!-- Main -->
+        <div class="admin-main">
+          <header class="admin-topbar">
+            <div class="flex items-center gap-2">
+              <button class="btn btn-ghost btn-icon admin-sidebar-toggle" id="admin-toggle-sidebar" aria-label="Abrir menú">
+                ${icon("menu", 20)}
+              </button>
+              <div>
+                <h1 class="text-lg font-bold" style="margin:0" id="admin-page-title">${getActiveTabLabel()}</h1>
+                <p class="text-xs text-muted" style="margin:0" id="admin-page-subtitle">Gestión completa del sistema</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-1">
+              <button class="btn btn-ghost btn-icon" id="admin-refresh" aria-label="Refrescar" title="Refrescar">${icon("refresh", 18)}</button>
+              <button class="btn btn-ghost btn-icon" id="admin-theme" aria-label="Cambiar tema" title="Tema">${store.getState().theme === 'dark' ? icon("sun", 18) : icon("moon", 18)}</button>
+            </div>
+          </header>
+          <div class="admin-content" id="admin-tab-content"></div>
+        </div>
       </div>
     `;
 
+    // Wire up navigation
     container.querySelectorAll("[data-tab]").forEach((btn) => {
       btn.addEventListener("click", () => {
         activeTab = btn.dataset.tab;
         container.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === activeTab));
+        const titleEl = container.querySelector("#admin-page-title");
+        if (titleEl) titleEl.textContent = getActiveTabLabel();
+        closeSidebar();
         renderTabContent();
       });
+    });
+
+    // Mobile sidebar toggle
+    const toggleBtn = container.querySelector("#admin-toggle-sidebar");
+    const overlay = container.querySelector("#admin-sidebar-overlay");
+    const sidebar = container.querySelector("#admin-sidebar");
+    if (toggleBtn) {
+      toggleBtn.addEventListener("click", () => {
+        sidebarOpen = !sidebarOpen;
+        sidebar.classList.toggle("open", sidebarOpen);
+        overlay.classList.toggle("show", sidebarOpen);
+      });
+    }
+    if (overlay) {
+      overlay.addEventListener("click", closeSidebar);
+    }
+
+    // Refresh
+    container.querySelector("#admin-refresh")?.addEventListener("click", () => {
+      const btn = container.querySelector("#admin-refresh");
+      btn.innerHTML = `<div class="spinner spinner-sm"></div>`;
+      setTimeout(() => {
+        btn.innerHTML = icon("refresh", 18);
+        renderTabContent();
+      }, 400);
+    });
+
+    // Theme
+    container.querySelector("#admin-theme")?.addEventListener("click", () => {
+      const current = store.getState().theme;
+      const next = current === 'dark' ? 'light' : 'dark';
+      store.setTheme(next);
+      render();
+    });
+
+    // Logout
+    container.querySelector("#admin-logout")?.addEventListener("click", async () => {
+      await logout();
+      toast("Sesión cerrada", "info");
+      window.location.href = "./index.html";
     });
 
     renderTabContent();
   }
 
+  function closeSidebar() {
+    sidebarOpen = false;
+    const sidebar = container.querySelector("#admin-sidebar");
+    const overlay = container.querySelector("#admin-sidebar-overlay");
+    if (sidebar) sidebar.classList.remove("open");
+    if (overlay) overlay.classList.remove("show");
+  }
+
+  function getActiveTabLabel() {
+    const tab = ALL_TABS.find((t) => t.id === activeTab);
+    return tab ? tab.label : "Admin";
+  }
+
   function renderTabContent() {
     const content = container.querySelector("#admin-tab-content");
     if (!content) return;
-    const myGen = ++tabGeneration; // incrementa generación al cambiar de tab
-    content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+    const myGen = ++tabGeneration;
+    content.innerHTML = `<div class="empty-state"><div class="spinner spinner-lg"></div><p class="text-sm text-muted mt-2">Cargando…</p></div>`;
 
     switch (activeTab) {
       case "users": mountUsersPanel(content, myGen); break;
@@ -101,7 +231,7 @@ export function mountAdminView(container, navigate) {
   function mountUsersPanel(content, gen) {
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
     listUsers().then((users) => {
-      if (gen !== tabGeneration) return; // tab cambió, ignorar resultado
+      if (gen !== tabGeneration) return;
       content.innerHTML = `
         <div class="card">
           <div class="card-header flex justify-between">
