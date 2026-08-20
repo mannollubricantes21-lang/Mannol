@@ -139,3 +139,39 @@ from (values
 ) as v(name, brand, sku, viscosity, volume_liters, category_name, cost_price, sale_price, min_stock, gestor_commission, gestor_commission_currency, vendor_commission, vendor_commission_currency, active)
 join public.categories c on c.name = v.category_name
 where not exists (select 1 from public.products limit 1);
+
+-- =====================================================
+-- Configuración mayorista (units_per_box + wholesale_tiers)
+-- =====================================================
+-- Se aplica después del INSERT para los 5 productos mayoristas.
+-- Si ya tienen units_per_box configurado, se saltan (ON CONFLICT no aplica a UPDATE).
+
+update public.products set units_per_box = 6, wholesale_tiers = '[
+  {"minBoxes":1,"maxBoxes":5,"pricePerUnit":22,"vendorCommission":0.50,"gestorCommission":0.30},
+  {"minBoxes":6,"maxBoxes":20,"pricePerUnit":20,"vendorCommission":0.75,"gestorCommission":0.40},
+  {"minBoxes":21,"maxBoxes":null,"pricePerUnit":18,"vendorCommission":1.00,"gestorCommission":0.50}
+]'::jsonb where sku = 'MN-7511' and units_per_box is null;
+
+update public.products set units_per_box = 6, wholesale_tiers = '[
+  {"minBoxes":1,"maxBoxes":5,"pricePerUnit":20,"vendorCommission":0.50,"gestorCommission":0.25},
+  {"minBoxes":6,"maxBoxes":20,"pricePerUnit":18,"vendorCommission":0.70,"gestorCommission":0.35},
+  {"minBoxes":21,"maxBoxes":null,"pricePerUnit":16,"vendorCommission":0.90,"gestorCommission":0.45}
+]'::jsonb where sku = 'MN-7512' and units_per_box is null;
+
+update public.products set units_per_box = 6, wholesale_tiers = '[
+  {"minBoxes":1,"maxBoxes":5,"pricePerUnit":15,"vendorCommission":0.40,"gestorCommission":0.20},
+  {"minBoxes":6,"maxBoxes":20,"pricePerUnit":14,"vendorCommission":0.60,"gestorCommission":0.30},
+  {"minBoxes":21,"maxBoxes":null,"pricePerUnit":13,"vendorCommission":0.80,"gestorCommission":0.40}
+]'::jsonb where sku = 'MN-7515' and units_per_box is null;
+
+update public.products set units_per_box = 4, wholesale_tiers = '[
+  {"minBoxes":1,"maxBoxes":5,"pricePerUnit":27,"vendorCommission":0.60,"gestorCommission":0.35},
+  {"minBoxes":6,"maxBoxes":20,"pricePerUnit":25,"vendorCommission":0.90,"gestorCommission":0.45},
+  {"minBoxes":21,"maxBoxes":null,"pricePerUnit":23,"vendorCommission":1.20,"gestorCommission":0.60}
+]'::jsonb where sku = 'MN-7521' and units_per_box is null;
+
+update public.products set units_per_box = 4, wholesale_tiers = '[
+  {"minBoxes":1,"maxBoxes":3,"pricePerUnit":34,"vendorCommission":0.80,"gestorCommission":0.50},
+  {"minBoxes":4,"maxBoxes":15,"pricePerUnit":32,"vendorCommission":1.10,"gestorCommission":0.65},
+  {"minBoxes":16,"maxBoxes":null,"pricePerUnit":30,"vendorCommission":1.40,"gestorCommission":0.80}
+]'::jsonb where sku = 'MN-7531' and units_per_box is null;

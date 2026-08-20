@@ -86,6 +86,7 @@ export function mountDashboardView(container, navigate) {
               </div>
             </div>
             <div class="flex items-center gap-1">
+              ${user.role === "admin" ? `<a href="./admin.html" class="admin-quick-btn" aria-label="Panel admin" title="Panel admin">${icon("shield", 14)} Admin</a>` : ''}
               <button class="btn btn-ghost btn-icon" id="search-trigger-btn" aria-label="Búsqueda global (Ctrl+K)" title="Buscar (Ctrl+K)">${icon("search", 18)}</button>
               <button class="btn btn-ghost btn-icon" id="refresh-btn" aria-label="Refrescar datos" title="Refrescar">${icon("refresh", 18)}</button>
               <button class="btn btn-ghost btn-icon" id="theme-btn" aria-label="Cambiar tema claro/oscuro" title="Tema">${state.theme === 'dark' ? icon("sun", 18) : icon("moon", 18)}</button>
@@ -327,16 +328,16 @@ export function mountDashboardView(container, navigate) {
       }
 
       content.innerHTML = `
-        <div style="display:flex;flex-direction:column;gap:1rem">
-          <div>
-            <h1 class="text-2xl font-bold">Hola, ${user.displayName}</h1>
-            <p class="text-sm text-muted" style="margin-top:0.25rem">
-              Rol: <span class="badge badge-outline">${user.role}</span>
-              ${warehouse ? ` · Almacén: <span class="badge badge-accent">${warehouse.name}</span>` : ""}
-            </p>
+        <div class="overview-grid">
+          <div class="overview-header" style="grid-column: 1 / -1">
+            <h1>Hola, ${user.displayName}</h1>
+            <div class="meta">
+              <span>Rol: <strong>${user.role}</strong></span>
+              ${warehouse ? `<span>· Almacén: <strong>${warehouse.name}</strong></span>` : ""}
+            </div>
           </div>
 
-          <div class="grid md:grid-cols-2 stats-grid-desktop gap-3">
+          <div class="kpi-row" style="grid-column: 1 / -1">
             <div class="stat-card">
               <div class="stat-label">${icon("receipt", 16)} Ventas de hoy</div>
               <div class="stat-value">${formatMoney(todayTotal, "USD")}</div>
@@ -350,49 +351,31 @@ export function mountDashboardView(container, navigate) {
           </div>
 
           ${sales.length > 0 ? `
-            <div class="grid md:grid-cols-2 gap-3 desktop-grid-2">
+            <div class="charts-row" style="grid-column: 1 / -1">
               <div class="card">
-                <div class="card-header"><h2 class="card-title">Ventas últimos 7 días</h2></div>
+                <div class="card-header"><h2 class="card-title">${icon("trendingUp", 14)} Ventas últimos 7 días</h2></div>
                 <div class="card-content">
-                  ${barChart(buildLast7DaysData(sales), { height: 180, formatValue: (v) => formatMoney(v, "USD") })}
+                  <div class="bar-chart-wrap">${barChart(buildLast7DaysData(sales), { height: 180, formatValue: (v) => formatMoney(v, "USD") })}</div>
                 </div>
               </div>
               <div class="card">
-                <div class="card-header"><h2 class="card-title">Ventas hoy por moneda</h2></div>
+                <div class="card-header"><h2 class="card-title">${icon("wallet", 14)} Hoy por moneda</h2></div>
                 <div class="card-content">
-                  <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
-                    ${buildCurrencyDonut(todaySales)}
-                  </div>
+                  <div class="donut-wrap">${buildCurrencyDonut(todaySales)}</div>
                 </div>
               </div>
             </div>
 
-            <div class="card">
-              <div class="card-header"><h2 class="card-title">Top 5 productos más vendidos (30 días)</h2></div>
+            <div class="card top-products-card" style="grid-column: 1 / -1">
+              <div class="card-header"><h2 class="card-title">${icon("tags", 14)} Top 5 productos más vendidos (30 días)</h2></div>
               <div class="card-content">
                 ${buildTopProducts(sales, 30)}
               </div>
             </div>
           ` : ''}
 
-          ${todaySales.length > 0 ? `
-            <div class="card">
-              <div class="card-header"><h2 class="card-title">Ventas de hoy por moneda</h2></div>
-              <div class="card-content">
-                <div class="desktop-grid-2 gap-2">
-                  ${Object.entries(byCurrency).filter(([_, v]) => v > 0).map(([curr, val]) => `
-                    <div class="rate-card rate-card-usd">
-                      <div class="text-xs text-muted">${curr}</div>
-                      <div class="rate-value">${formatMoney(val, curr)}</div>
-                    </div>
-                  `).join('')}
-                </div>
-              </div>
-            </div>
-          ` : ''}
-
-          <div class="card">
-            <div class="card-header"><h2 class="card-title">Ventas recientes</h2></div>
+          <div class="card" style="grid-column: 1 / -1">
+            <div class="card-header"><h2 class="card-title">${icon("receipt", 14)} Ventas recientes</h2></div>
             <div class="card-content">
               ${sales.length === 0 ? `
                 <div class="empty-state">
@@ -457,7 +440,7 @@ export function mountDashboardView(container, navigate) {
       if (total === 0) return `<p class="text-xs text-muted">Sin ventas hoy</p>`;
       return `
         <div style="flex-shrink:0">
-          ${donutChart(data, { size: 120, thickness: 14, centerLabel: formatMoney(total, "USD").replace('$', ''), centerSubLabel: "total" })}
+          ${donutChart(data, { size: 140, thickness: 16, centerLabel: formatMoney(total, "USD").replace('$', ''), centerSubLabel: "total" })}
         </div>
         <div style="flex:1;min-width:8rem">
           ${legend(data.map((d) => ({ label: d.label, value: formatMoney(d.value, d.label), color: d.color })))}

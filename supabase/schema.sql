@@ -147,6 +147,9 @@ create table if not exists public.products (
   vendor_commission_currency text not null default 'USD' check (vendor_commission_currency in ('USD','MN')),
   image_url text,
   active boolean not null default true,
+  -- Mayorista (Opción B)
+  units_per_box int,  -- pomos/botellas por caja. NULL = no mayorista
+  wholesale_tiers jsonb default '[]',  -- [{minBoxes, maxBoxes, pricePerUnit, vendorCommission, gestorCommission}]
   created_at timestamptz not null default now()
 );
 
@@ -214,6 +217,12 @@ create table if not exists public.sales (
   gestor_commission_mn numeric not null default 0,
   vendor_commission_usd numeric not null default 0,
   vendor_commission_mn numeric not null default 0,
+  -- Mayorista (Opción B)
+  sale_type text not null default 'RETAIL' check (sale_type in ('RETAIL','WHOLESALE')),
+  boxes int,  -- cajas vendidas (solo WHOLESALE)
+  price_per_box numeric,  -- precio negociado por caja (solo WHOLESALE)
+  vendor_commission_per_box numeric,  -- comisión vendedor por caja
+  gestor_commission_per_box numeric,  -- comisión gestor por caja
   created_at timestamptz not null default now(),
   synced_at timestamptz
 );

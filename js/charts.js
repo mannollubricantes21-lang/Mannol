@@ -33,7 +33,13 @@ export function barChart(data, opts = {}) {
   const barWidth = data.length > 0 ? (width / data.length) * 0.7 : 0;
   const gap = data.length > 0 ? (width / data.length) * 0.3 : 0;
   const padding = 4;
-  const chartHeight = height - 24; // leave space for labels
+  const chartHeight = height - 20; // leave space for labels (más compacto)
+
+  // Líneas guía horizontales (grid) a 25%, 50%, 75%, 100%
+  const gridLines = [0.25, 0.5, 0.75, 1].map((p) => {
+    const y = chartHeight - (chartHeight - padding * 2) * p;
+    return `<line x1="0" y1="${y}" x2="${width}" y2="${y}" stroke="var(--border)" stroke-width="0.15" stroke-dasharray="0.5 0.5" opacity="0.5"/>`;
+  }).join("");
 
   const bars = data.map((d, i) => {
     const barHeight = (d.value / maxVal) * (chartHeight - padding * 2);
@@ -41,14 +47,15 @@ export function barChart(data, opts = {}) {
     const y = chartHeight - barHeight;
     const color = d.color || COLORS.primary;
     return `
-      <rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" rx="1" fill="${color}" opacity="0.85">
+      <rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" rx="0.6" fill="${color}" opacity="0.88">
         <title>${d.label}: ${opts.formatValue ? opts.formatValue(d.value) : d.value}</title>
       </rect>
-      <text x="${x + barWidth / 2}" y="${chartHeight + 4}" text-anchor="middle" font-size="2.5" fill="${COLORS.textMuted}">${d.label}</text>
+      <text x="${x + barWidth / 2}" y="${chartHeight + 3}" text-anchor="middle" font-size="2.8" font-weight="600" fill="${COLORS.textMuted}">${d.label}</text>
     `;
   }).join("");
 
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" style="width:100%;height:${height}px;display:block">
+    ${gridLines}
     ${bars}
   </svg>`;
 }
@@ -137,8 +144,8 @@ export function donutChart(data, opts = {}) {
   return `<svg viewBox="0 0 ${size} ${size}" style="width:${size}px;height:${size}px;display:block">
     <circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="${COLORS.bgSoft}" stroke-width="${thickness}"/>
     ${segments}
-    <text x="${center}" y="${center - 2}" text-anchor="middle" font-size="6" font-weight="bold" fill="var(--text)">${opts.centerLabel || ""}</text>
-    <text x="${center}" y="${center + 6}" text-anchor="middle" font-size="3" fill="${COLORS.textMuted}">${opts.centerSubLabel || ""}</text>
+    <text x="${center}" y="${center + 1}" text-anchor="middle" font-size="${size < 140 ? 7 : 8}" font-weight="bold" fill="var(--text)">${opts.centerLabel || ""}</text>
+    <text x="${center}" y="${center + 7}" text-anchor="middle" font-size="${size < 140 ? 3.2 : 3.6}" fill="${COLORS.textMuted}">${opts.centerSubLabel || ""}</text>
   </svg>`;
 }
 

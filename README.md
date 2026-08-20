@@ -50,13 +50,16 @@ Archivos Firebase eliminados: `firebase.json`, `firestore.rules`, `storage.rules
 
 ### 2. Ejecutar el esquema SQL
 
-Entra a **SQL Editor → New query** y pega el contenido de:
+Entra a **SQL Editor → New query** y ejecuta **en este orden exacto**:
 
-1. `supabase/schema.sql` → crea tablas, índices, triggers y RPCs (ajusta_stock, update_sale_status, create_admin_user).
-2. `supabase/policies.sql` → activa RLS en todas las tablas + crea políticas + buckets de Storage.
-3. `supabase/seed.sql` → inserta datos demo (settings, rate_config, rates, warehouses, managers, cards, categories, products).
+1. **`supabase/schema.sql`** → crea 14 tablas + índices + 3 RPCs + campos mayorista
+2. **`supabase/policies.sql`** → activa RLS + buckets de Storage + grants
+3. **`supabase/seed.sql`** → datos demo + productos con tiers mayorista
 
-Ejecuta cada archivo en orden.
+> ⚠️ **IMPORTANTE**: Ejecuta los 3 scripts en orden. NO ejecutes `migration-v2.sql`
+> ni `migration-v3.sql` en una instalación nueva — esos son solo para actualizar
+> instalaciones existentes. Si los ejecutas sin tener las tablas creadas, dará
+> error "relation does not exist".
 
 ### 3. Crear el usuario admin inicial
 

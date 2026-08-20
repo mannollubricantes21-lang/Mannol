@@ -1214,6 +1214,183 @@ code, .code {
 }
 
 /* ===================================================== */
+/* Dashboard overview — layout limpio y consistente       */
+/* ===================================================== */
+
+/* Contenedor principal del overview: usa grid de 2 columnas en desktop */
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+@media (min-width: 768px) {
+  .overview-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Fila de KPIs: tarjetas siempre igual de altas */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+  align-items: stretch;
+}
+@media (min-width: 768px) {
+  .kpi-row {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* Las stat-cards tienen altura uniforme y padding consistente */
+.kpi-row .stat-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 1rem;
+}
+.kpi-row .stat-card .stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0.25rem 0;
+}
+.kpi-row .stat-card .stat-sub {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Sección de gráficos: ambos misma altura, alineados arriba */
+.charts-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+  align-items: stretch;
+}
+@media (min-width: 768px) {
+  .charts-row {
+    grid-template-columns: 1.4fr 1fr;
+  }
+}
+.charts-row .card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.charts-row .card-header {
+  flex-shrink: 0;
+}
+.charts-row .card-content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  min-height: 220px;
+}
+
+/* Top productos: lista compacta sin bordes extras */
+.top-products-card .card-content {
+  padding: 0.5rem 1rem;
+}
+
+/* Overview header: título + rol con menos margen */
+.overview-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+.overview-header h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0;
+}
+.overview-header .meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+.overview-header .meta strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Forzar que el overview-grid use display: grid (no flex del mobile-main) */
+.overview-grid {
+  display: grid !important;
+  grid-template-columns: 1fr;
+  gap: 0.875rem;
+  align-items: start;
+}
+@media (min-width: 768px) {
+  .overview-grid > .charts-row {
+    grid-template-columns: 1.4fr 1fr;
+  }
+}
+
+/* ===================================================== */
+/* Botón directo al panel admin en topbar del dashboard  */
+/* ===================================================== */
+
+.admin-quick-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--radius);
+  background: var(--primary-tint);
+  color: var(--primary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid color-mix(in oklab, var(--primary) 20%, transparent);
+  transition: background 0.15s;
+  cursor: pointer;
+}
+.admin-quick-btn:hover {
+  background: color-mix(in oklab, var(--primary) 20%, var(--bg-elevated));
+}
+
+/* ===================================================== */
+/* Mejoras de gráficos: labels legibles + centros visibles */
+/* ===================================================== */
+
+/* Gráfico de barras: aumentar contraste de labels */
+.bar-chart-wrap {
+  width: 100%;
+  height: 180px;
+}
+.bar-chart-wrap svg text {
+  fill: var(--text-muted);
+  font-weight: 500;
+}
+
+/* Donut chart: el centro con texto grande */
+.donut-wrap {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: 100%;
+}
+.donut-wrap svg text {
+  font-weight: 700;
+}
+
+/* ===================================================== */
+/* Vaciar el espacio excesivo: reducir margen del header   */
+/* ===================================================== */
+
+.mobile-main > * + * {
+  margin-top: 0;
+}
+
+/* ===================================================== */
 /* Offline badge — fixed top-right connection indicator  */
 /* ===================================================== */
 
