@@ -114,7 +114,7 @@ export function mountSalesHistoryView(container, navigate) {
                 ${filtered.length === 0 ? `<tr><td colspan="9"><div class="empty-state"><div class="empty-state-icon">${icon("receipt", 24)}</div><p class="empty-state-title">Sin ventas</p><p class="empty-state-desc">No hay ventas que coincidan con los filtros seleccionados.</p></div></td></tr>` :
                   filtered.slice(0, 100).map((s) => `
                     <tr>
-                      <td class="text-xs font-mono">${s.code}</td>
+                      <td class="text-xs font-mono">${s.code}${s.saleType === "WHOLESALE" ? ` <span class="badge badge-accent" style="font-size:0.5625rem">MAY</span>` : ''}</td>
                       <td class="text-xs">${formatDate(s.createdAt)}</td>
                       <td class="text-sm">${s.userName || 'Empleado PIN'}</td>
                       <td class="text-sm">${s.managerName || '—'}</td>

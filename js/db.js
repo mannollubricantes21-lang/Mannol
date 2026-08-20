@@ -1491,3 +1491,65 @@ export async function deleteCard(id) {
 // Re-export isSupabaseConfigured for app.js
 // =====================================================
 export { isSupabaseConfiguredAsync } from "./supabase.js";
+
+// =====================================================
+// Wholesale helpers — cálculo de tier aplicable
+// =====================================================
+
+/**
+ * Dado un producto con wholesaleTiers y una cantidad de cajas,
+ * devuelve el tier aplicable (o null si no hay tiers configurados).
+ */
+export function getWholesaleTier(product, boxes) {
+  if (!product?.wholesaleTiers || !Array.isArray(product.wholesaleTiers) || product.wholesaleTiers.length === 0) {
+    return null;
+  }
+  const tiers = [...product.wholesaleTiers].sort((a, b) => (a.minBoxes || 0) - (b.minBoxes || 0));
+  for (const tier of tiers) {
+    const min = tier.minBoxes || 0;
+    const max = tier.maxBoxes; // null = sin límite
+    if (boxes >= min && (max === null || max === undefined || boxes <= max)) {
+      return tier;
+    }
+  }
+  // Si ninguna tier encaja (ej: boxes < min del primer tier), usar la primera
+  return tiers[0];
+}
+
+/**
+ * Calcula el precio sugerido por caja para una cantidad dada.
+ * Retorna null si el producto no tiene unitsPerBox o no tiene tiers.
+ */
+export function getSuggestedPricePerBox(product, boxes) {
+  if (!product?.unitsPerBox) return null;
+  const tier = getWholesaleTier(product, boxes);
+  if (!tier) return null;
+  return (tier.pricePerUnit || 0) * product.unitsPerBox;
+}
+
+/**
+ * Calcula la comisión sugerida del vendedor por caja.
+ */
+export function getSuggestedVendorCommissionPerBox(product, boxes) {
+  if (!product?.unitsPerBox) return null;
+  const tier = getWholesaleTier(product, boxes);
+  if (!tier) return null;
+  return (tier.vendorCommission || 0) * product.unitsPerBox;
+}
+
+/**
+ * Calcula la comisión sugerida del gestor por caja.
+ */
+export function getSuggestedGestorCommissionPerBox(product, boxes) {
+  if (!product?.unitsPerBox) return null;
+  const tier = getWholesaleTier(product, boxes);
+  if (!tier) return null;
+  return (tier.gestorCommission || 0) * product.unitsPerBox;
+}
+
+/**
+ * Verifica si un producto puede venderse al por mayor.
+ */
+export function isWholesaleProduct(product) {
+  return !!(product?.unitsPerBox && product?.wholesaleTiers?.length > 0);
+}

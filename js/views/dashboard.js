@@ -23,14 +23,14 @@ import { createSyncBanner } from "../components/sync-banner.js";
 
 const NAV_ITEMS = [
   { id: "dashboard", label: "Inicio", icon: "home" },
-  { id: "sales", label: "Ventas", icon: "cart" },
+  { id: "sales", label: "Ventas", icon: "cart", hideForRoles: ["admin"] },
   { id: "stock", label: "Inventario", icon: "boxes" },
   { id: "more", label: "Más", icon: "more" },
 ];
 
 const DRAWER_ITEMS = [
   { id: "dashboard", label: "Inicio", icon: "home", roles: ["admin", "gestor", "vendedor", "warehouse", "empleado_pin"] },
-  { id: "sales", label: "Ventas", icon: "cart", roles: ["admin", "gestor", "vendedor", "warehouse", "empleado_pin"] },
+  { id: "sales", label: "Ventas", icon: "cart", roles: ["gestor", "vendedor", "warehouse", "empleado_pin"] },
   { id: "stock", label: "Inventario", icon: "boxes", roles: ["admin", "gestor", "warehouse", "empleado_pin"] },
   { id: "managers", label: "Gestores", icon: "users", roles: ["admin", "gestor", "vendedor", "warehouse"] },
   { id: "history", label: "Historial", icon: "receipt", roles: ["admin", "gestor", "vendedor", "warehouse"] },
@@ -100,13 +100,19 @@ export function mountDashboardView(container, navigate) {
 
         <nav class="bottom-nav" aria-label="Navegación principal">
           <div style="position:relative">
-            <button class="fab" id="fab-sell" aria-label="Registrar nueva venta" title="Registrar venta">${icon("cart", 24)}</button>
+            ${user.role !== "admin" ? `<button class="fab" id="fab-sell" aria-label="Registrar nueva venta" title="Registrar venta">${icon("cart", 24)}</button>` : ''}
             <div class="bottom-nav-bar">
-              ${NAV_ITEMS.slice(0, 2).map((item) => `
+              ${NAV_ITEMS
+                .filter((item) => !item.hideForRoles || !item.hideForRoles.includes(user.role))
+                .slice(0, 2)
+                .map((item) => `
                 <button class="nav-btn ${activeView === item.id ? 'active' : ''}" data-nav="${item.id}" aria-label="${item.label}" aria-current="${activeView === item.id ? 'page' : 'false'}">${icon(item.icon, 20)}<span class="nav-btn-label">${item.label}</span></button>
               `).join('')}
               <div class="flex items-center justify-center"></div>
-              ${NAV_ITEMS.slice(2).map((item) => `
+              ${NAV_ITEMS
+                .filter((item) => !item.hideForRoles || !item.hideForRoles.includes(user.role))
+                .slice(2)
+                .map((item) => `
                 <button class="nav-btn ${activeView === item.id ? 'active' : ''}" data-nav="${item.id}" aria-label="${item.label}" aria-current="${activeView === item.id ? 'page' : 'false'}">${icon(item.icon, 20)}<span class="nav-btn-label">${item.label}</span></button>
               `).join('')}
             </div>
@@ -125,7 +131,7 @@ export function mountDashboardView(container, navigate) {
       });
     });
 
-    container.querySelector("#fab-sell").addEventListener("click", () => { activeView = "sales"; renderActiveView(); updateNavActive(); });
+    container.querySelector("#fab-sell")?.addEventListener("click", () => { activeView = "sales"; renderActiveView(); updateNavActive(); });
     container.querySelector("#open-drawer-btn").addEventListener("click", openDrawer);
     container.querySelector("#refresh-btn").addEventListener("click", () => {
       const btn = container.querySelector("#refresh-btn");

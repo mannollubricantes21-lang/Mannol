@@ -433,6 +433,28 @@ export function mountAdminView(container, navigateOrUser) {
               </select>
             </div>
           </div>
+
+          <hr class="separator" />
+          <div style="background: color-mix(in oklab, var(--primary) 5%, transparent); padding: 0.5rem 0.75rem; border-radius: var(--radius); border: 1px dashed color-mix(in oklab, var(--primary) 30%, transparent);">
+            <p class="text-xs font-semibold" style="color: var(--primary); margin: 0 0 0.25rem">${icon("boxes", 12)} Venta mayorista (opcional)</p>
+            <p class="text-xs text-muted" style="margin: 0 0 0.5rem">Configura cajas y precios escalonados. Si dejas "pomos por caja" vacío, el producto no se vende al por mayor.</p>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="label label-xs">Pomos por caja</label>
+              <input class="input" type="number" min="1" id="p-unitsPerBox" value="${p.unitsPerBox ?? ''}" placeholder="Ej: 6 (vacío = no mayorista)" />
+            </div>
+            <div>
+              <label class="label label-xs">Costo USD (para cálculo de ganancia)</label>
+              <input class="input" type="number" step="0.01" id="p-costPrice" value="${p.costPrice ?? ''}" placeholder="0.00" />
+            </div>
+          </div>
+          <div>
+            <label class="label label-xs">Tiers de precio mayorista (JSON)</label>
+            <p class="text-xs text-muted" style="margin-bottom: 0.25rem">Formato: <code>[{"minBoxes":1,"maxBoxes":5,"pricePerUnit":22,"vendorCommission":0.5,"gestorCommission":0.3}]</code></p>
+            <textarea class="textarea" id="p-wholesaleTiers" style="min-height:5rem;font-family:ui-monospace,monospace;font-size:0.75rem" placeholder='[{"minBoxes":1,"maxBoxes":5,"pricePerUnit":22,"vendorCommission":0.5,"gestorCommission":0.3}]'>${p.wholesaleTiers ? JSON.stringify(p.wholesaleTiers, null, 2) : ''}</textarea>
+            <div id="p-wholesaleTiers-error" class="text-xs text-danger" style="margin-top:0.25rem;display:none"></div>
+          </div>
           <div>
             <label class="label label-xs">Imagen del producto</label>
             <div style="display:flex;gap:0.5rem;align-items:center">
@@ -490,6 +512,33 @@ export function mountAdminView(container, navigateOrUser) {
     }
 
     document.querySelector("#p-save").addEventListener("click", async () => {
+      // Parsear wholesaleTiers
+      const tiersText = document.querySelector("#p-wholesaleTiers").value.trim();
+      let wholesaleTiers = [];
+      if (tiersText) {
+        try {
+          wholesaleTiers = JSON.parse(tiersText);
+          if (!Array.isArray(wholesaleTiers)) {
+            throw new Error("Debe ser un array");
+          }
+          // Validar cada tier
+          for (const tier of wholesaleTiers) {
+            if (typeof tier.minBoxes !== "number") throw new Error("Cada tier debe tener minBoxes (número)");
+            if (typeof tier.pricePerUnit !== "number") throw new Error("Cada tier debe tener pricePerUnit (número)");
+          }
+        } catch (err) {
+          const errBox = document.querySelector("#p-wholesaleTiers-error");
+          if (errBox) {
+            errBox.textContent = "JSON inválido: " + err.message;
+            errBox.style.display = "block";
+          }
+          toast("Revisa el formato de los tiers", "error");
+          return;
+        }
+      }
+      const unitsPerBoxVal = document.querySelector("#p-unitsPerBox").value.trim();
+      const costPriceVal = document.querySelector("#p-costPrice").value.trim();
+
       const data = {
         ...(p.id ? { id: p.id } : {}),
         name: document.querySelector("#p-name").value.trim(),
@@ -499,6 +548,7 @@ export function mountAdminView(container, navigateOrUser) {
         categoryId: document.querySelector("#p-category").value || null,
         salePrice: parseFloat(document.querySelector("#p-price").value) || 0,
         minStock: parseInt(document.querySelector("#p-minStock").value) || 0,
+        costPrice: costPriceVal ? parseFloat(costPriceVal) : 0,
         // 2 comisiones separadas: gestor y vendedor
         gestorCommission: parseFloat(document.querySelector("#p-gestorCommission").value) || 0,
         gestorCommissionCurrency: document.querySelector("#p-gestorCommissionCurrency").value,
@@ -507,10 +557,18 @@ export function mountAdminView(container, navigateOrUser) {
         // Backwards compat (legacy single commission = gestor)
         commission: parseFloat(document.querySelector("#p-gestorCommission").value) || 0,
         commissionCurrency: document.querySelector("#p-gestorCommissionCurrency").value,
+        // Mayorista
+        unitsPerBox: unitsPerBoxVal ? parseInt(unitsPerBoxVal) : null,
+        wholesaleTiers: wholesaleTiers,
         imageUrl: document.querySelector("#p-image").value.trim() || null,
         active: true,
       };
       if (!data.name || !data.brand) { toast("Nombre y marca son obligatorios", "error"); return; }
+      // Validar coherencia: si hay tiers, debe haber unitsPerBox
+      if (wholesaleTiers.length > 0 && !data.unitsPerBox) {
+        toast("Para usar tiers mayorista, define 'pomos por caja'", "error");
+        return;
+      }
       await saveProduct(data);
       toast("Producto guardado", "success");
       close();

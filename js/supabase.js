@@ -118,14 +118,16 @@ loadConfig().then(() => {
 const CAMEL_TO_SNAKE_RE = /([A-Z])/g;
 const SNAKE_TO_CAMEL_RE = /_([a-z])/g;
 
-export function camelToSnake(obj) {
+export function camelToSnake(obj, isNestedJson = false) {
   if (obj === null || obj === undefined) return obj;
-  if (Array.isArray(obj)) return obj.map(camelToSnake);
+  if (Array.isArray(obj)) return obj.map((v) => camelToSnake(v, isNestedJson));
   if (typeof obj !== "object" || obj instanceof Date) return obj;
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
+    // wholesale_tiers es un JSONB: preservar claves camelCase dentro de sus items
+    const isJsonbField = (k === "wholesale_tiers" || k === "wholesaleTiers");
     const snakeKey = k.replace(CAMEL_TO_SNAKE_RE, "_$1").toLowerCase();
-    out[snakeKey] = camelToSnake(v);
+    out[snakeKey] = isJsonbField ? v : camelToSnake(v, isNestedJson);
   }
   return out;
 }
@@ -137,7 +139,12 @@ export function snakeToCamel(obj) {
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
     const camelKey = k.replace(SNAKE_TO_CAMEL_RE, (_, c) => c.toUpperCase());
-    out[camelKey] = snakeToCamel(v);
+    // wholesale_tiers es un JSONB: preservar estructura original (camelCase dentro)
+    if (k === "wholesale_tiers" || k === "wholesaleTiers") {
+      out[camelKey] = v;
+    } else {
+      out[camelKey] = snakeToCamel(v);
+    }
   }
   return out;
 }
