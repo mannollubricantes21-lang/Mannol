@@ -15,6 +15,7 @@ import {
   listStock, listSales,
   getRateConfig, saveRateConfig, syncRatesFromElToque,
   listStockMovements,
+  getSettings, saveSettings,
 } from "../db.js";
 import { logout } from "../auth.js";
 import { formatMoney, formatDate, formatDateShort } from "../currency.js";
@@ -48,6 +49,7 @@ const NAV_SECTIONS = [
   {
     label: "Sistema",
     items: [
+      { id: "weekend", label: "Fin de semana", icon: "calendar" },
       { id: "audit", label: "Auditoría", icon: "receipt" },
     ],
   },
@@ -224,6 +226,7 @@ export function mountAdminView(container, navigateOrUser) {
       case "managers": mountManagersPanel(content, myGen); break;
       case "cards": mountCardsPanel(content, myGen); break;
       case "warehouseCommissions": mountWarehouseCommissionsPanel(content, myGen); break;
+      case "weekend": mountWeekendPanel(content, myGen); break;
       case "rates": mountRatesPanel(content, myGen); break;
       case "profit": mountProfitPanel(content, myGen); break;
       case "audit": mountAuditPanel(content, myGen); break;
@@ -1172,18 +1175,27 @@ export function mountAdminView(container, navigateOrUser) {
           </div>
           <div class="overflow-x-auto">
             <table class="table">
-              <thead><tr><th>Nombre</th><th>Código</th><th>Teléfono</th><th class="text-right">Comisión</th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
+              <thead><tr><th>Nombre</th><th>Código</th><th>Tipo</th><th>Almacén</th><th class="text-right">Comisión</th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
               <tbody>
-                ${managers.map((m) => `
-                  <tr>
-                    <td class="font-medium">${esc(m.name)}</td>
-                    <td><span class="badge badge-outline">${esc(m.code)}</span></td>
-                    <td class="text-xs">${esc(m.phone || '—')}</td>
-                    <td class="text-right text-xs">${m.commission}%</td>
-                    <td class="text-center">${m.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
-                    <td class="text-right"><button class="btn btn-ghost btn-sm" data-edit-mg="${esc(m.id)}">Editar</button></td>
-                  </tr>
-                `).join('')}
+                ${managers.map((m) => {
+                  const typeLabel = m.managerType === "LOCAL" ? "Local" : "Referidor";
+                  const typeBadge = m.managerType === "LOCAL" ? "badge-accent" : "badge-outline";
+                  const whLabel = m.managerType === "LOCAL" ? (esc(m.warehouseName || '—') + (m.warehouseCode ? ` <span class="text-muted">(${esc(m.warehouseCode)})</span>` : '')) : '—';
+                  const commLabel = (m.commissionType || "PERCENT") === "PERCENT"
+                    ? `${m.commission}%`
+                    : `${formatMoney(m.commission, m.commissionCurrency || "USD")}`;
+                  return `
+                    <tr>
+                      <td class="font-medium">${esc(m.name)}</td>
+                      <td><span class="badge badge-outline">${esc(m.code)}</span></td>
+                      <td class="text-xs"><span class="badge ${typeBadge}">${typeLabel}</span></td>
+                      <td class="text-xs">${whLabel}</td>
+                      <td class="text-right text-xs">${commLabel}</td>
+                      <td class="text-center">${m.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
+                      <td class="text-right"><button class="btn btn-ghost btn-sm" data-edit-mg="${esc(m.id)}">Editar</button></td>
+                    </tr>
+                  `;
+                }).join('')}
               </tbody>
             </table>
           </div>
@@ -1202,39 +1214,274 @@ export function mountAdminView(container, navigateOrUser) {
   function showManagerDialog(manager, onSaved) {
     const isNew = !manager;
     const m = manager || {};
-    const close = showModal({
-      title: isNew ? "Nuevo gestor" : "Editar gestor",
-      body: `
-        <div style="display:flex;flex-direction:column;gap:0.75rem">
-          <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Nombre *</label><input class="input" id="m-name" value="${esc(m.name || '')}" /></div>
-            <div><label class="label label-xs">Código (sigla) *</label><input class="input" id="m-code" value="${esc(m.code || '')}" placeholder="CM" /></div>
+    // Cargar warehouses para el dropdown si el gestor es LOCAL
+    listWarehouses().then((warehouses) => {
+      // Si es nuevo, por defecto REFERRER (referidor que lleva clientes)
+      const managerType = m.managerType || "REFERRER";
+      const commissionType = m.commissionType || "PERCENT";
+      const commissionCurrency = m.commissionCurrency || "USD";
+      const close = showModal({
+        title: isNew ? "Nuevo gestor" : "Editar gestor",
+        body: `
+          <div style="display:flex;flex-direction:column;gap:0.75rem">
+            <div class="grid grid-cols-2 gap-2">
+              <div><label class="label label-xs">Nombre *</label><input class="input" id="m-name" value="${esc(m.name || '')}" /></div>
+              <div><label class="label label-xs">Código (sigla) *</label><input class="input" id="m-code" value="${esc(m.code || '')}" placeholder="CM" /></div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div><label class="label label-xs">Teléfono</label><input class="input" id="m-phone" value="${esc(m.phone || '')}" /></div>
+              <div><label class="label label-xs">Email</label><input class="input" type="email" id="m-email" value="${esc(m.email || '')}" /></div>
+            </div>
+
+            <div style="margin-top:0.25rem;padding-top:0.5rem;border-top:1px solid var(--border)">
+              <p class="text-xs font-semibold" style="margin:0 0 0.5rem;color:var(--text-soft)">Tipo de gestor</p>
+              <div class="grid grid-cols-2 gap-2">
+                <label class="flex items-start gap-2 p-2 rounded cursor-pointer" style="border:1px solid var(--border);background:var(--bg-soft)">
+                  <input type="radio" name="m-managerType" value="REFERRER" ${managerType === 'REFERRER' ? 'checked' : ''} style="margin-top:0.25rem" />
+                  <div>
+                    <div class="text-xs font-semibold">Referidor</div>
+                    <div class="text-xs text-muted">Lleva clientes a la tienda. Comisión por venta referida (en cualquier almacén).</div>
+                  </div>
+                </label>
+                <label class="flex items-start gap-2 p-2 rounded cursor-pointer" style="border:1px solid var(--border);background:var(--bg-soft)">
+                  <input type="radio" name="m-managerType" value="LOCAL" ${managerType === 'LOCAL' ? 'checked' : ''} style="margin-top:0.25rem" />
+                  <div>
+                    <div class="text-xs font-semibold">Local</div>
+                    <div class="text-xs text-muted">Trabaja en un almacén específico. Comisión sobre las ventas de ese local.</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div id="m-warehouse-group" style="${managerType === 'LOCAL' ? '' : 'display:none'}">
+              <label class="label label-xs">Almacén del gestor local</label>
+              <select class="select" id="m-warehouseId">
+                <option value="">— Seleccionar —</option>
+                ${warehouses.map((w) => `<option value="${w.id}" ${m.warehouseId === w.id ? 'selected' : ''}>${esc(w.name)} (${esc(w.code)})</option>`).join('')}
+              </select>
+              <p class="text-xs text-muted" style="margin-top:0.25rem">Solo las ventas de este almacén cuentan para la comisión de este gestor.</p>
+            </div>
+
+            <div style="margin-top:0.25rem;padding-top:0.5rem;border-top:1px solid var(--border)">
+              <p class="text-xs font-semibold" style="margin:0 0 0.5rem;color:var(--text-soft)">Comisión</p>
+              <div class="grid grid-cols-3 gap-2">
+                <div>
+                  <label class="label label-xs">Tipo</label>
+                  <select class="select" id="m-commissionType">
+                    <option value="PERCENT" ${commissionType === 'PERCENT' ? 'selected' : ''}>Porcentaje %</option>
+                    <option value="FIXED" ${commissionType === 'FIXED' ? 'selected' : ''}>Valor fijo</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="label label-xs" id="m-commission-label">Comisión ${commissionType === 'PERCENT' ? '%' : '$'}</label>
+                  <input class="input" type="number" step="0.01" id="m-commission" value="${m.commission ?? 5}" />
+                </div>
+                <div>
+                  <label class="label label-xs">Moneda</label>
+                  <select class="select" id="m-commissionCurrency">
+                    <option value="USD" ${commissionCurrency === 'USD' ? 'selected' : ''}>USD</option>
+                    <option value="MN" ${commissionCurrency === 'MN' ? 'selected' : ''}>MN</option>
+                  </select>
+                </div>
+              </div>
+              <p class="text-xs text-muted" style="margin-top:0.25rem" id="m-commission-hint">
+                ${commissionType === 'PERCENT'
+                  ? 'Porcentaje aplicado al total vendido (ej: 3 = 3% del total).'
+                  : 'Valor fijo pagado por cada venta completada (ej: 5 = $5 por venta).'}
+              </p>
+            </div>
+
+            <div>
+              <label class="label label-xs">Notas (opcional)</label>
+              <textarea class="textarea" id="m-notes" placeholder="Ej: Lleva clientes de la zona de La Lisa" rows="2">${esc(m.notes || '')}</textarea>
+            </div>
           </div>
-          <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Teléfono</label><input class="input" id="m-phone" value="${esc(m.phone || '')}" /></div>
-            <div><label class="label label-xs">Email</label><input class="input" type="email" id="m-email" value="${esc(m.email || '')}" /></div>
-          </div>
-          <div><label class="label label-xs">Comisión % (informativo)</label><input class="input" type="number" step="0.1" id="m-commission" value="${m.commission ?? 5}" /></div>
-        </div>
-      `,
-      footer: `<button class="btn btn-outline" id="m-cancel">Cancelar</button><button class="btn btn-primary" id="m-save">Guardar</button>`,
+        `,
+        footer: `<button class="btn btn-outline" id="m-cancel">Cancelar</button><button class="btn btn-primary" id="m-save">Guardar</button>`,
+      });
+
+      // Toggle de tipo de gestor: mostrar/ocultar el campo almacén
+      const radios = document.querySelectorAll('input[name="m-managerType"]');
+      radios.forEach((r) => {
+        r.addEventListener("change", () => {
+          const whGroup = document.getElementById("m-warehouse-group");
+          if (r.value === "LOCAL" && r.checked) {
+            whGroup.style.display = '';
+          } else if (r.value === "REFERRER" && r.checked) {
+            whGroup.style.display = 'none';
+            // Limpiar el warehouse seleccionado si era REFERRER
+            const whSel = document.getElementById("m-warehouseId");
+            if (whSel) whSel.value = '';
+          }
+        });
+      });
+
+      // Toggle de tipo de comisión: cambiar label y hint
+      const commTypeSel = document.getElementById("m-commissionType");
+      commTypeSel.addEventListener("change", () => {
+        const type = commTypeSel.value;
+        const label = document.getElementById("m-commission-label");
+        const hint = document.getElementById("m-commission-hint");
+        if (type === "PERCENT") {
+          label.textContent = "Comisión %";
+          hint.textContent = "Porcentaje aplicado al total vendido (ej: 3 = 3% del total).";
+        } else {
+          label.textContent = "Comisión $";
+          hint.textContent = "Valor fijo pagado por cada venta completada (ej: 5 = $5 por venta).";
+        }
+      });
+
+      document.querySelector("#m-cancel").addEventListener("click", close);
+      document.querySelector("#m-save").addEventListener("click", async () => {
+        const data = {
+          ...(m.id ? { id: m.id } : {}),
+          name: document.querySelector("#m-name").value.trim(),
+          code: document.querySelector("#m-code").value.trim().toUpperCase(),
+          phone: document.querySelector("#m-phone").value.trim() || null,
+          email: document.querySelector("#m-email").value.trim() || null,
+          // Nuevos campos
+          managerType: document.querySelector('input[name="m-managerType"]:checked')?.value || "REFERRER",
+          commissionType: document.querySelector("#m-commissionType").value,
+          commissionCurrency: document.querySelector("#m-commissionCurrency").value,
+          commission: parseFloat(document.querySelector("#m-commission").value) || 0,
+          warehouseId: document.querySelector("#m-warehouseId")?.value || null,
+          notes: document.querySelector("#m-notes").value.trim() || null,
+          active: true,
+        };
+        if (!data.name || !data.code) { toast("Nombre y código son obligatorios", "error"); return; }
+        if (data.managerType === "LOCAL" && !data.warehouseId) {
+          toast("Seleccioná el almacén del gestor local", "error");
+          return;
+        }
+        if (data.commissionType === "PERCENT" && (data.commission < 0 || data.commission > 100)) {
+          toast("El porcentaje debe estar entre 0 y 100", "error");
+          return;
+        }
+        await saveManager(data);
+        toast("Gestor guardado", "success");
+        close();
+        onSaved();
+      });
     });
-    document.querySelector("#m-cancel").addEventListener("click", close);
-    document.querySelector("#m-save").addEventListener("click", async () => {
-      const data = {
-        ...(m.id ? { id: m.id } : {}),
-        name: document.querySelector("#m-name").value.trim(),
-        code: document.querySelector("#m-code").value.trim().toUpperCase(),
-        phone: document.querySelector("#m-phone").value.trim() || null,
-        email: document.querySelector("#m-email").value.trim() || null,
-        commission: parseFloat(document.querySelector("#m-commission").value) || 0,
-        active: true,
-      };
-      if (!data.name || !data.code) { toast("Nombre y código son obligatorios", "error"); return; }
-      await saveManager(data);
-      toast("Gestor guardado", "success");
-      close();
-      onSaved();
+  }
+
+  // ===== WEEKEND (regla de fin de semana) =====
+  function mountWeekendPanel(content, gen) {
+    content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+    Promise.all([
+      getSettings(),
+      listWarehouses(),
+    ]).then(([settings, warehouses]) => {
+      if (gen !== tabGeneration) return;
+      const weekendEnabled = settings.weekendRedirectEnabled || false;
+      const weekendWhId = settings.weekendWarehouseId || "";
+      const today = new Date().getDay();
+      const isWeekendToday = (today === 0 || today === 6);
+      const dayName = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"][today];
+
+      content.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:1rem">
+          <div>
+            <h1 class="text-2xl font-bold flex items-center gap-2">${icon("calendar", 24)} Regla de fin de semana</h1>
+            <p class="text-sm text-muted">Configura qué almacén recibe las ventas de sábado y domingo.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-content" style="padding:1.5rem;display:flex;flex-direction:column;gap:1rem">
+
+              <div class="alert alert-info" style="background: color-mix(in oklab, var(--info) 8%, transparent); border: 1px solid color-mix(in oklab, var(--info) 30%, transparent); border-radius: var(--radius); padding: 0.875rem; font-size: 0.8125rem; line-height: 1.5">
+                <strong>¿Para qué sirve esto?</strong><br>
+                Si los sábados y domingos una vendedora distinta atiende un local específico (ej: Vedado),
+                activá esta regla. Todas las ventas registradas en fin de semana se asignarán automáticamente
+                a ese local — sin importar qué vendedor la registre. Las comisiones del vendedor original
+                se calculan sobre el almacén efectivo (Vedado), no el suyo.
+              </div>
+
+              <div style="padding: 0.875rem; background: ${isWeekendToday ? 'color-mix(in oklab, var(--warning) 8%, transparent)' : 'var(--bg-soft)'}; border-radius: var(--radius); border: 1px solid var(--border)">
+                <div class="flex items-center gap-2">
+                  ${icon(isWeekendToday ? "alertTriangle" : "clock", 16)}
+                  <div>
+                    <div class="text-sm font-semibold">Hoy es ${dayName}</div>
+                    <div class="text-xs text-muted">${isWeekendToday ? 'La regla está activa hoy (si la activás abajo)' : 'La regla no aplica hoy — solo sábado y domingo'}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label class="flex items-center gap-3 cursor-pointer">
+                  <input type="checkbox" id="wk-enabled" ${weekendEnabled ? 'checked' : ''} style="width:1.25rem;height:1.25rem" />
+                  <div>
+                    <div class="text-sm font-semibold">Activar redirección de ventas de fin de semana</div>
+                    <div class="text-xs text-muted">Si está activo, las ventas de sábado/domingo se asignan al almacén configurado abajo.</div>
+                  </div>
+                </label>
+              </div>
+
+              <div id="wk-wh-group" style="${weekendEnabled ? '' : 'opacity:0.5;pointer-events:none'}">
+                <label class="label label-xs">Almacén que recibe las ventas de fin de semana</label>
+                <select class="select" id="wk-warehouseId" style="width:100%">
+                  <option value="">— Seleccionar almacén —</option>
+                  ${warehouses.map((w) => `<option value="${w.id}" ${weekendWhId === w.id ? 'selected' : ''}>${esc(w.name)} (${esc(w.code)})</option>`).join('')}
+                </select>
+                <p class="text-xs text-muted" style="margin-top:0.5rem">
+                  Recomendado: seleccioná el local que opera los fines de semana (ej: "Vedado").
+                  Todas las ventas de sábado/domingo se asignarán a ese local y se descontará stock de ahí.
+                </p>
+              </div>
+
+              <div class="flex gap-2">
+                <button class="btn btn-primary" id="wk-save">${icon("save", 14)} Guardar configuración</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-content" style="padding:1.25rem">
+              <h3 class="text-sm font-semibold mb-2">Cómo funciona</h3>
+              <ol style="font-size:0.8125rem;line-height:1.7;padding-left:1.5rem">
+                <li>Vendedor A entra a su local (ej: Víbora) un sábado y registra una venta</li>
+                <li>El sistema detecta que hoy es sábado y la regla está activa</li>
+                <li>La venta se guarda con <code>warehouseId = Vedado</code> (no Víbora)</li>
+                <li>El stock se descuenta del Vedado</li>
+                <li>La comisión del vendedor A se calcula sobre el Vedado</li>
+                <li>La auditoría conserva <code>originalWarehouseId = Víbora</code> para trazabilidad</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Toggle de habilitación
+      const enabledCb = content.querySelector("#wk-enabled");
+      const whGroup = content.querySelector("#wk-wh-group");
+      enabledCb.addEventListener("change", () => {
+        whGroup.style = enabledCb.checked ? '' : 'opacity:0.5;pointer-events:none';
+      });
+
+      // Guardar
+      content.querySelector("#wk-save").addEventListener("click", async () => {
+        const newEnabled = content.querySelector("#wk-enabled").checked;
+        const newWhId = content.querySelector("#wk-warehouseId").value;
+        if (newEnabled && !newWhId) {
+          toast("Seleccioná un almacén para activar la regla", "error");
+          return;
+        }
+        await saveSettings({
+          ...settings,
+          weekendRedirectEnabled: newEnabled,
+          weekendWarehouseId: newEnabled ? newWhId : null,
+        });
+        toast("Configuración guardada", "success");
+        // Actualizar también el store para que sales.js lo vea en vivo
+        try {
+          const { getStore } = await import("../store.js");
+          getStore().setSettings({
+            ...settings,
+            weekendRedirectEnabled: newEnabled,
+            weekendWarehouseId: newEnabled ? newWhId : null,
+          });
+        } catch (e) { console.warn("store update failed:", e); }
+      });
     });
   }
 

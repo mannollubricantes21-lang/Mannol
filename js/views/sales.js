@@ -4,7 +4,7 @@
 // =====================================================
 
 import { getStore } from "../store.js";
-import { subscribeProducts, subscribeStock, listCards, listManagers, saveSale, adjustStock, getWholesaleTier, getSuggestedPricePerBox, getSuggestedVendorCommissionPerBox, getSuggestedGestorCommissionPerBox, isWholesaleProduct } from "../db.js";
+import { subscribeProducts, subscribeStock, listCards, listManagers, saveSale, adjustStock, getWholesaleTier, getSuggestedPricePerBox, getSuggestedVendorCommissionPerBox, getSuggestedGestorCommissionPerBox, isWholesaleProduct, listWarehouses, resolveEffectiveWarehouse } from "../db.js";
 import { formatMoney, generateSaleId, CURRENCIES, CURRENCY_LABELS, CARD_BRANDS, getRate } from "../currency.js";
 import { enqueueSale, generateClientRef } from "../offline-sync.js";
 import { toast, icon, showModal, closeModal, esc, confirmDialog } from "../ui.js";
@@ -817,13 +817,33 @@ export function mountSalesView(container, navigate) {
     const saleCode = `V-${String(Date.now()).slice(-5)}${Math.floor(Math.random() * 9)}`;
     const selectedCard = cards.find((c) => c.id === selectedCardId);
 
+    // === Regla de fin de semana ===
+    // Si hoy es sábado/domingo y el admin activó la redirección, la venta
+    // se asigna al almacén configurado (ej: Vedado) en lugar del almacén
+    // del vendedor. La auditoría se guarda en la venta (originalWarehouseId, etc.)
+    const allWarehouses = await listWarehouses();
+    const settings = store.getState().settings || {};
+    const createdAt = Date.now();
+    const {
+      effective: effectiveWh,
+      weekendRedirect,
+      originalWarehouseId,
+      weekendWarehouseId,
+    } = resolveEffectiveWarehouse(wh, allWarehouses, settings, createdAt);
+
+    if (weekendRedirect) {
+      toast(`Venta reasignada a ${effectiveWh.name} (fin de semana)`, "info", 2500);
+    }
+    // Usamos effectiveWh para el stock y la venta. Si no se reasignó, effectiveWh === wh.
+    const finalWh = effectiveWh;
+
     const sale = {
       id: generateSaleId(),
       code: saleCode,
       clientRef: null,
-      warehouseId: wh.id,
-      warehouseName: wh.name,
-      warehouseCode: wh.code,
+      warehouseId: finalWh.id,
+      warehouseName: finalWh.name,
+      warehouseCode: finalWh.code,
       userId: user.id,
       userName: user.displayName,
       managerId: selectedManager?.id || null,
@@ -855,8 +875,12 @@ export function mountSalesView(container, navigate) {
       pricePerBox: saleType === "WHOLESALE" ? wholesalePricePerBox : null,
       vendorCommissionPerBox: saleType === "WHOLESALE" ? wholesaleVendorCommissionPerBox : null,
       gestorCommissionPerBox: saleType === "WHOLESALE" ? wholesaleGestorCommissionPerBox : null,
-      createdAt: Date.now(),
-      completedAt: Date.now(),
+      // Campos de auditoría de fin de semana
+      weekendRedirect,
+      originalWarehouseId,
+      weekendWarehouseId,
+      createdAt,
+      completedAt: createdAt,
       syncedAt: navigator.onLine ? Date.now() : null,
     };
 
@@ -868,10 +892,11 @@ export function mountSalesView(container, navigate) {
         sale.clientRef = generateClientRef();
         await saveSale(sale);
         for (const adj of stockAdjustments) {
-          await adjustStock(wh.id, adj.productId, -adj.quantity, "VENTA", `Venta ${sale.code}`, user.id, user.displayName);
+          // Descuenta el stock del almacén efectivo (Vedado si fue reasignado, o el del vendedor si no)
+          await adjustStock(finalWh.id, adj.productId, -adj.quantity, "VENTA", `Venta ${sale.code}`, user.id, user.displayName);
         }
         sale.syncedAt = Date.now();
-        toast(`Venta ${sale.code} registrada${saleType === "WHOLESALE" ? " (mayorista)" : ""}`, "success");
+        toast(`Venta ${sale.code} registrada${saleType === "WHOLESALE" ? " (mayorista)" : ""}${weekendRedirect ? " · " + finalWh.name : ""}`, "success");
       }
       // Limpiar
       cart = [];

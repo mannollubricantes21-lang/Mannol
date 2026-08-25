@@ -230,6 +230,10 @@ const DEFAULT_SETTINGS = {
   elToqueMarkup: 5,
   businessName: "MANNOL",
   lastRateSync: null,
+  // Configuración de fin de semana
+  weekendRedirectEnabled: false,    // Si true, las ventas de sábados y domingos se reasignan
+  weekendWarehouseId: null,        // Almacén que recibe las ventas de fin de semana (ej: Vedado)
+  weekendWarehouseName: null,       // Cache denormalizado para mostrar en UI
 };
 
 // Helper: get Supabase instance (cached)
@@ -396,6 +400,89 @@ export async function saveSettings(settings) {
   } catch (err) {
     console.error("saveSettings failed:", err);
   }
+}
+
+// =====================================================
+// Weekend warehouse redirect helper
+// =====================================================
+// Regla: si hoy es sábado o domingo Y el admin activó la redirección
+// y configuró un almacén destino (weekendWarehouseId), todas las ventas
+// se asignan a ese almacén en lugar del almacén del vendedor.
+//
+// Ejemplo de uso: los sábados/domingos, una vendedora distinta atiende
+// el local de Vedado. Todas las ventas de fin de semana (sin importar
+// qué vendedor las registra) se contabilizan para Vedado, no para el
+// almacén original del vendedor.
+//
+// La venta conserva una auditoría: originalWarehouseId, weekendRedirect=true.
+
+/**
+ * Dado un timestamp (ms) y un almacén destino, decide si la venta debe
+ * reasignarse. Devuelve null si NO se reasigna, o el objeto con los
+ * campos de auditoría si se reasigna.
+ *
+ * @param {number} createdAtMs - timestamp de la venta (Date.now())
+ * @param {object} settings - settings del store (con weekendRedirectEnabled, weekendWarehouseId)
+ * @returns {null | { weekendRedirect: true, originalWarehouseId: string, weekendWarehouseId: string }}
+ */
+export function shouldRedirectWeekend(createdAtMs, settings) {
+  if (!settings || !settings.weekendRedirectEnabled || !settings.weekendWarehouseId) {
+    return null;
+  }
+  // getDay(): 0 = domingo, 6 = sábado
+  const day = new Date(createdAtMs).getDay();
+  if (day !== 0 && day !== 6) return null;
+  return {
+    weekendRedirect: true,
+    // El original se setea después, cuando se sabe el warehouse del vendedor
+    originalWarehouseId: null,
+    weekendWarehouseId: settings.weekendWarehouseId,
+  };
+}
+
+/**
+ * Devuelve el almacén efectivo para una venta, considerando la regla de fin de semana.
+ *
+ * @param {object} sellerWarehouse - el almacén del vendedor ({id, name, code})
+ * @param {object} allWarehouses - lista de todos los almacenes (para buscar por id)
+ * @param {object} settings - settings del store
+ * @param {number} createdAtMs - timestamp de la venta
+ * @returns {{
+ *   effective: object,        // el almacén a usar para la venta
+ *   weekendRedirect: boolean, // si se reasignó
+ *   originalWarehouseId: string|null,
+ *   weekendWarehouseId: string|null
+ * }}
+ */
+export function resolveEffectiveWarehouse(sellerWarehouse, allWarehouses, settings, createdAtMs) {
+  const redirect = shouldRedirectWeekend(createdAtMs, settings);
+  if (!redirect || !sellerWarehouse || sellerWarehouse.id === redirect.weekendWarehouseId) {
+    // No aplica la regla o el vendedor ya está en el almacén de fin de semana
+    return {
+      effective: sellerWarehouse,
+      weekendRedirect: false,
+      originalWarehouseId: null,
+      weekendWarehouseId: null,
+    };
+  }
+  // Buscar el warehouse destino en la lista
+  const weekendWh = allWarehouses.find((w) => w.id === redirect.weekendWarehouseId);
+  if (!weekendWh) {
+    // El almacén configurado no existe más — fallback al almacén del vendedor
+    console.warn("[Weekend] Configured weekend warehouse not found, falling back to seller warehouse");
+    return {
+      effective: sellerWarehouse,
+      weekendRedirect: false,
+      originalWarehouseId: null,
+      weekendWarehouseId: null,
+    };
+  }
+  return {
+    effective: weekendWh,
+    weekendRedirect: true,
+    originalWarehouseId: sellerWarehouse.id,
+    weekendWarehouseId: weekendWh.id,
+  };
 }
 
 // =====================================================
@@ -1407,7 +1494,14 @@ export async function listManagerCommissions(year, month) {
     const payouts = new Map((payoutsData || []).map((p) => [p.manager_id, p]));
 
     return managers.map((m) => {
-      const managerSales = completed.filter((s) => s.managerId === m.id);
+      // Para REFERRER: solo cuenta las ventas que él refirió (managerId === m.id)
+      // Para LOCAL: solo cuenta las ventas del almacén al que pertenece
+      let managerSales;
+      if (m.managerType === "LOCAL" && m.warehouseId) {
+        managerSales = completed.filter((s) => s.warehouseId === m.warehouseId);
+      } else {
+        managerSales = completed.filter((s) => s.managerId === m.id);
+      }
       const result = computeManagerCommission(m, managerSales, year, month, payouts);
       const payout = payouts.get(m.id);
       return {
@@ -1424,24 +1518,58 @@ function computeManagerCommission(m, sales, year, month, payouts) {
   let amountMN = 0;
   let totalUnits = 0;
   let totalSales = 0;
-  for (const s of sales) {
+
+  // Filtrar ventas según el tipo de gestor:
+  // - LOCAL: solo cuenta las ventas del almacén al que pertenece el gestor
+  // - REFERRER: cuenta las ventas que él refirió (managerId === m.id) en cualquier almacén
+  let managerSales = sales;
+  if (m.managerType === "LOCAL" && m.warehouseId) {
+    managerSales = sales.filter((s) => s.warehouseId === m.warehouseId);
+  }
+  // Si es REFERRER, el filtro ya se aplicó arriba (managerId === m.id)
+
+  const commissionType = m.commissionType || "PERCENT";
+  const commissionCurrency = m.commissionCurrency || "USD";
+  const commissionValue = Number(m.commission) || 0;
+
+  for (const s of managerSales) {
     totalSales += s.totalAmount;
+
+    // Calcular comisión según tipo
+    let commissionForThisSale = 0;
+    if (commissionType === "PERCENT") {
+      // Porcentaje del total de la venta
+      commissionForThisSale = (s.totalAmount * commissionValue) / 100;
+    } else {
+      // FIXED: valor fijo por venta
+      commissionForThisSale = commissionValue;
+    }
+    // Sumar unidades
     for (const item of s.items) {
       totalUnits += item.quantity;
-      const gCom = item.gestorCommission ?? item.commission ?? 0;
-      const gCurr = item.gestorCommissionCurrency ?? item.commissionCurrency ?? "USD";
-      if (gCurr === "USD") amountUSD += gCom * item.quantity;
-      else amountMN += gCom * item.quantity;
+    }
+    // Acumular en la moneda configurada
+    if (commissionCurrency === "USD") {
+      amountUSD += commissionForThisSale;
+    } else {
+      amountMN += commissionForThisSale;
     }
   }
+
   return {
     id: `${m.id}_${year}_${month}`,
     managerId: m.id,
     name: m.name,
     code: m.code,
     phone: m.phone,
-    commission: m.commission,
-    salesCount: sales.length,
+    commission: commissionValue,
+    commissionType,
+    commissionCurrency,
+    managerType: m.managerType || "REFERRER",
+    warehouseId: m.warehouseId || null,
+    warehouseName: m.warehouseName || null,
+    warehouseCode: m.warehouseCode || null,
+    salesCount: managerSales.length,
     totalUnits,
     totalSales,
     amountUSD,
@@ -1786,24 +1914,64 @@ export async function listManagers() {
       const pendientes = sales.filter((s) => s.status === "PENDIENTE");
       const canceladas = sales.filter((s) => s.status === "CANCELADA");
       const montoTotal = completadas.reduce((sum, s) => sum + s.totalAmount, 0);
+      // Defaults para demo (assume REFERRER + PERCENT)
+      const managerType = m.managerType || "REFERRER";
+      const commissionType = m.commissionType || "PERCENT";
+      const commissionCurrency = m.commissionCurrency || "USD";
+      let comisionEstimada = 0;
+      if (commissionType === "PERCENT") {
+        comisionEstimada = montoTotal * (m.commission || 0) / 100;
+      } else {
+        comisionEstimada = (m.commission || 0) * completadas.length;
+      }
       return {
         ...m,
+        managerType,
+        commissionType,
+        commissionCurrency,
+        warehouseId: m.warehouseId || null,
+        warehouseName: m.warehouseName || null,
+        warehouseCode: m.warehouseCode || null,
         totalReferidos: sales.length,
         completadas: completadas.length,
         pendientes: pendientes.length,
         canceladas: canceladas.length,
         montoTotal,
-        comisionEstimada: montoTotal * m.commission / 100,
+        comisionEstimada,
       };
     });
   }
   const s = await sb();
   if (!s) return [];
   try {
-    const { data, error } = await s.from("managers").select("*").order("created_at", { ascending: true });
+    // Select managers + join warehouses para LOCAL
+    const { data, error } = await s
+      .from("managers")
+      .select(`
+        *,
+        warehouse:warehouse_id ( id, name, code )
+      `)
+      .order("created_at", { ascending: true });
     if (error) throw error;
-    return rows(data);
-  } catch { return []; }
+    // Aplanar el join
+    return (data || []).map((row) => {
+      const r = rows([row])[0];
+      // El join retorna warehouse como objeto o null
+      const wh = row.warehouse;
+      return {
+        ...r,
+        managerType: r.managerType || "REFERRER",
+        commissionType: r.commissionType || "PERCENT",
+        commissionCurrency: r.commissionCurrency || "USD",
+        warehouseId: r.warehouseId || null,
+        warehouseName: wh?.name || null,
+        warehouseCode: wh?.code || null,
+      };
+    });
+  } catch (err) {
+    console.error("listManagers failed:", err);
+    return [];
+  }
 }
 
 export async function saveManager(m) {

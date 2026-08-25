@@ -72,19 +72,30 @@ export function mountCommissionsView(container, navigate) {
             ${loading ? `<table class="table"><thead><tr><th>Gestor</th><th class="text-center">Ventas</th><th class="text-right">Comisión USD</th><th class="text-center">Estado</th></tr></thead><tbody>${skeletonRow(4, 4)}</tbody></table>` :
               records.length === 0 ? `<div class="empty-state"><div class="empty-state-icon">${icon("wallet", 24)}</div><p class="empty-state-title">Sin comisiones</p><p class="empty-state-desc">No hay comisiones para este período.</p></div>` :
               `<table class="table">
-                <thead><tr><th>Gestor</th><th class="text-center">Ventas</th><th class="text-center">Unidades</th><th class="text-right">Total vendido</th><th class="text-right">Comisión USD</th><th class="text-right">Comisión MN</th><th class="text-center">Estado</th>${isAdmin ? '<th class="text-right">Acción</th>' : ''}</tr></thead>
+                <thead><tr><th>Gestor</th><th>Tipo</th><th class="text-center">Ventas</th><th class="text-center">Unidades</th><th class="text-right">Total vendido</th><th class="text-right">Comisión</th><th class="text-center">Estado</th>${isAdmin ? '<th class="text-right">Acción</th>' : ''}</tr></thead>
                 <tbody>
-                  ${records.map((r) => `
+                  ${records.map((r) => {
+                    const typeLabel = r.managerType === "LOCAL" ? `Local · ${esc(r.warehouseName || '—')}` : "Referidor";
+                    const commTypeLabel = (r.commissionType || "PERCENT") === "PERCENT"
+                      ? `${r.commission}% del total`
+                      : `${formatMoney(r.commission, r.commissionCurrency || "USD")} por venta`;
+                    const commissionAmountLabel = r.commissionCurrency === "MN"
+                      ? formatMoney(r.amountMN, "MN") + " (MN)"
+                      : formatMoney(r.amountUSD, "USD") + " (USD)";
+                    return `
                     <tr>
                       <td class="font-medium">
                         ${esc(r.name)}
                         <div class="text-xs text-muted">${esc(r.code)} · ${esc(r.phone || '')}</div>
                       </td>
+                      <td class="text-xs">
+                        <div>${typeLabel}</div>
+                        <div class="text-muted">${commTypeLabel}</div>
+                      </td>
                       <td class="text-center">${r.salesCount}</td>
                       <td class="text-center">${r.totalUnits}</td>
                       <td class="text-right">${formatMoney(r.totalSales, "USD")}</td>
-                      <td class="text-right font-bold">${formatMoney(r.amountUSD, "USD")}</td>
-                      <td class="text-right font-bold">${formatMoney(r.amountMN, "MN")}</td>
+                      <td class="text-right font-bold">${commissionAmountLabel}</td>
                       <td class="text-center">
                         ${r.paid ? `<span class="badge badge-accent">${icon("check", 12)} Pagada</span>` : `<span class="badge badge-warning">${icon("clock", 12)} Pendiente</span>`}
                       </td>
@@ -94,13 +105,14 @@ export function mountCommissionsView(container, navigate) {
                         </button>
                       </td>` : ''}
                     </tr>
-                  `).join('')}
+                  `}).join('')}
                 </tbody>
                 <tfoot>
                   <tr style="background:var(--bg-soft);font-weight:700">
-                    <td colspan="4">Totales</td>
-                    <td class="text-right">${formatMoney(totalUSD, "USD")}</td>
-                    <td class="text-right">${formatMoney(totalMN, "MN")}</td>
+                    <td colspan="5">Totales</td>
+                    <td class="text-right">
+                      ${formatMoney(totalUSD, "USD")} + ${formatMoney(totalMN, "MN")}
+                    </td>
                     <td colspan="${isAdmin ? '2' : '1'}"></td>
                   </tr>
                 </tfoot>
@@ -127,6 +139,11 @@ export function mountCommissionsView(container, navigate) {
           gestor: r.name,
           codigo: r.code,
           telefono: r.phone || '',
+          tipo: r.managerType === "LOCAL" ? "Local" : "Referidor",
+          almacen: r.warehouseName || '',
+          tipo_comision: (r.commissionType || "PERCENT") === "PERCENT" ? "Porcentaje" : "Fijo",
+          comision_valor: r.commission,
+          moneda_comision: r.commissionCurrency || "USD",
           ventas: r.salesCount,
           unidades: r.totalUnits,
           total_vendido_usd: r.totalSales,

@@ -85,8 +85,12 @@ export function mountManagersView(container, navigate) {
                       </div>
                     </div>
                     <div class="mt-3 p-2 rounded" style="background: var(--primary-tint)">
-                      <div class="text-xs text-muted">Comisión estimada (${m.commission}% informativo)</div>
-                      <div class="text-xl font-bold" style="color: var(--primary)">${formatMoney(m.comisionEstimada || 0, "USD")}</div>
+                      <div class="text-xs text-muted">
+                        Comisión ${m.commissionType === "FIXED" ? "fija" : "estimada"} (${m.commissionType === "FIXED" ? formatMoney(m.commission, m.commissionCurrency || "USD") + "/venta" : (m.commission || 0) + "%"})
+                        ${m.managerType === "LOCAL" && m.warehouseName ? ` · Local: ${esc(m.warehouseName)}` : ''}
+                        ${m.managerType === "LOCAL" ? ' · <span style="color:var(--primary)">Local</span>' : ' · <span style="color:var(--text-muted)">Referidor</span>'}
+                      </div>
+                      <div class="text-xl font-bold" style="color: var(--primary)">${formatMoney(m.comisionEstimada || 0, m.commissionCurrency || "USD")}</div>
                     </div>
 
                     ${isExpanded ? `
