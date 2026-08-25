@@ -7,6 +7,7 @@ import { getStore } from "../store.js";
 import { listWarehouses, subscribeRates, syncElToqueRates, getSettings } from "../db.js";
 import { formatMoney, formatDate } from "../currency.js";
 import { toast, icon, esc } from "../ui.js";
+import { isSupabaseConfiguredAsync } from "../supabase.js";
 
 export function renderHomeView(navigate) {
   const store = getStore();
@@ -19,6 +20,7 @@ export function renderHomeView(navigate) {
   const isOnline = navigator.onLine;
   const syncing = state._syncing;
   const user = state.currentUser;
+  const supabaseConfigured = state._supabaseConfigured;
 
   // Tasas en formato MANNOL: USD = X MN, EUR = Y MN
   const usdInMN = mnRate ? (1 / mnRate.rateUSD) : 320;
@@ -64,6 +66,35 @@ export function renderHomeView(navigate) {
 
       <!-- Main content -->
       <main class="mobile-main" style="display:flex;flex-direction:column;gap:1.25rem">
+        <!-- ===== Setup banner (cuando Supabase no está configurado) ===== -->
+        ${!supabaseConfigured ? `
+          <section class="card" style="background: linear-gradient(135deg, color-mix(in oklab, var(--primary) 8%, var(--bg-elevated)), var(--bg-elevated)); border: 1px solid color-mix(in oklab, var(--primary) 30%, transparent);">
+            <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
+              <div style="display:flex;align-items:flex-start;gap:0.625rem">
+                <div style="width:2.5rem;height:2.5rem;background:var(--primary);color:var(--primary-foreground);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                  ${icon("droplet", 20)}
+                </div>
+                <div style="flex:1;min-width:0">
+                  <h2 class="text-base font-bold" style="margin:0 0 0.25rem;color:var(--primary)">Conecta MANNOL con Supabase</h2>
+                  <p class="text-xs" style="margin:0;color:var(--text-soft);line-height:1.5">
+                    Estás en <strong>modo demo</strong>. Los datos no se guardan en la nube.
+                    Conecta tu base de datos Supabase con nuestro asistente paso a paso —
+                    sin tocar código, en 10 minutos.
+                  </p>
+                </div>
+              </div>
+              <a href="./setup.html" class="btn btn-primary btn-block" style="display:flex;align-items:center;justify-content:center;gap:0.5rem;text-decoration:none">
+                ${icon("zap", 16)}
+                Configurar Supabase ahora
+                ${icon("arrowRight", 16)}
+              </a>
+              <p class="text-xs text-muted" style="margin:0;text-align:center">
+                ¿Ya tienes Supabase? Solo necesitas tu URL y tu anon key.
+              </p>
+            </div>
+          </section>
+        ` : ''}
+
         <!-- ===== Tasas del día ===== -->
         <section class="card" style="background: var(--bg-elevated);">
           <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
@@ -188,11 +219,22 @@ export function renderHomeView(navigate) {
 export function mountHomeView(container, navigate) {
   const store = getStore();
 
-  // Load settings + warehouses + rates
+  // Load settings + warehouses + rates + supabase status
   // Track subscriptions/promises for cleanup to avoid memory leaks on re-mount
   let settingsPromise = null;
   let warehousesPromise = null;
   let mounted = true;
+
+  // Check Supabase config status (async) and re-render when known
+  isSupabaseConfiguredAsync().then((configured) => {
+    if (!mounted) return;
+    store.setState({ _supabaseConfigured: configured });
+    render();
+  }).catch(() => {
+    if (!mounted) return;
+    store.setState({ _supabaseConfigured: false });
+    render();
+  });
 
   settingsPromise = getSettings().then((s) => {
     if (!mounted) return;

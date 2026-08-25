@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#10b981" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f172a" />
+  <meta name="description" content="Asistente de configuración de Supabase para MANNOL POS — guía paso a paso." />
+  <title>MANNOL · Configurar Supabase</title>
+
+  <link rel="stylesheet" href="./css/styles.css" />
+  <link rel="stylesheet" href="./css/setup-wizard.css" />
+  <link rel="shortcut icon" href="./icons/favicon.png" />
+
+  <!-- Theme bootstrap (evita FOUC) -->
+  <script>
+    (function() {
+      try {
+        var stored = localStorage.getItem('almacen-pos-state-v1');
+        var theme = 'system';
+        if (stored) {
+          var parsed = JSON.parse(stored);
+          if (parsed.theme) theme = parsed.theme;
+        }
+        var systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var isDark = theme === 'dark' || (theme === 'system' && systemDark);
+        document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <!-- App container — wizard renders here -->
+  <div id="wizard-app">
+    <div class="wizard-loading">
+      <div class="spinner"></div>
+      <p>Cargando asistente…</p>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- Modal container -->
+  <div id="modal-container"></div>
+
+  <!-- Bootstrap wizard -->
+  <script type="module">
+    import('./js/setup-wizard.js')
+      .then(({ mountWizard }) => {
+        mountWizard(document.getElementById('wizard-app'));
+      })
+      .catch((err) => {
+        console.error('[Setup Wizard Bootstrap]', err);
+        document.getElementById('wizard-app').innerHTML = `
+          <div style="padding: 2rem; text-align: center; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; font-family: sans-serif;">
+            <h2 style="color: #ef4444;">⚠️ No se pudo cargar el asistente</h2>
+            <p style="color: #666; max-width: 400px;">${err.message || 'Error desconocido'}</p>
+            <a href="./index.html" style="padding: 0.5rem 1.5rem; background: #10b981; color: white; text-decoration: none; border-radius: 0.5rem; font-size: 1rem;">Volver al inicio</a>
+          </div>
+        `;
+      });
+  </script>
+
+  <noscript>
+    <div style="padding: 2rem; text-align: center; font-family: sans-serif; max-width: 500px; margin: 2rem auto;">
+      <h2 style="color: #ef4444;">JavaScript requerido</h2>
+      <p style="color: #666; line-height: 1.6;">El asistente de configuración necesita JavaScript. Por favor habilítalo en tu navegador.</p>
+    </div>
+  </noscript>
+</body>
+</html>

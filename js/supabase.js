@@ -13,6 +13,12 @@
 const SUPABASE_VERSION = "2.108.2";
 const ESM_CDN = `https://esm.sh/@supabase/supabase-js@${SUPABASE_VERSION}`;
 
+// localStorage key used by the in-app Setup Wizard (setup.html).
+// The wizard writes { url, anonKey } here so users don't need to
+// manually create js/supabase-config.js — they can configure the
+// app entirely from the UI.
+export const SUPABASE_CONFIG_STORAGE_KEY = "mannol-supabase-config-v1";
+
 // Default placeholder config (used when supabase-config.js is missing)
 const DEFAULT_CONFIG = {
   url: "",
@@ -25,18 +31,106 @@ let _configLoaded = false;
 let _cached = null;
 let _initPromise = null;
 
-// Lazy-load the config file (optional — falls back to demo mode)
+/**
+ * Read Supabase config from localStorage.
+ * Returns null if no config is stored.
+ * Used by setup.html wizard AND by loadConfig() as a fallback.
+ */
+export function getStoredSupabaseConfig() {
+  try {
+    const raw = localStorage.getItem(SUPABASE_CONFIG_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.url && parsed.anonKey) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Save Supabase config to localStorage.
+ * Used by setup.html wizard.
+ */
+export function saveStoredSupabaseConfig(url, anonKey) {
+  try {
+    localStorage.setItem(
+      SUPABASE_CONFIG_STORAGE_KEY,
+      JSON.stringify({ url, anonKey })
+    );
+    // Invalidate cached client so next getSupabase() re-initializes
+    _cached = null;
+    _initPromise = null;
+    _configLoaded = false;
+    return true;
+  } catch (err) {
+    console.error("[Supabase] Failed to save config to localStorage:", err);
+    return false;
+  }
+}
+
+/**
+ * Remove Supabase config from localStorage.
+ */
+export function clearStoredSupabaseConfig() {
+  try {
+    localStorage.removeItem(SUPABASE_CONFIG_STORAGE_KEY);
+    _cached = null;
+    _initPromise = null;
+    _configLoaded = false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check whether a config object looks "real" (not placeholders).
+ */
+function _isValidConfig(cfg) {
+  return (
+    !!cfg &&
+    typeof cfg.url === "string" &&
+    cfg.url.startsWith("https://") &&
+    !cfg.url.includes("TU-PROYECTO") &&
+    !cfg.url.includes("TU_PROYECTO") &&
+    !!cfg.anonKey &&
+    typeof cfg.anonKey === "string" &&
+    !cfg.anonKey.startsWith("TU-")
+  );
+}
+
+// Lazy-load the config file (optional — falls back to localStorage, then to demo mode)
 async function loadConfig() {
   if (_configLoaded) return;
   _configLoaded = true;
+
+  // 1) Try localStorage first (set by the in-app Setup Wizard).
+  //    This takes precedence over the file because if the user has
+  //    gone through the wizard, that's their most recent intent.
+  const stored = getStoredSupabaseConfig();
+  if (stored && _isValidConfig(stored)) {
+    _config = stored;
+    _configured = true;
+    return;
+  }
+
+  // 2) Fall back to js/supabase-config.js (manual file)
   try {
     const mod = await import("./supabase-config.js");
-    _config = mod.supabaseConfig || DEFAULT_CONFIG;
-    _configured = !!mod.isSupabaseConfigured;
+    const fileCfg = mod.supabaseConfig || DEFAULT_CONFIG;
+    if (_isValidConfig(fileCfg) || mod.isSupabaseConfigured === true) {
+      _config = fileCfg;
+      _configured = true;
+      return;
+    }
   } catch {
-    console.warn("[Supabase] supabase-config.js no encontrado. Modo demo activo.");
-    _configured = false;
+    // File doesn't exist — that's OK, fall through to demo mode.
   }
+
+  // 3) No config found — demo mode.
+  console.warn("[Supabase] No config found (localStorage or file). Modo demo activo.");
+  _configured = false;
 }
 
 /**
