@@ -37,11 +37,13 @@ const DRAWER_ITEMS = [
   { id: "catalog", label: "Catálogo", icon: "tags", roles: ["admin", "gestor"] },
 ];
 
+// El admin no debería ver este drawer (es redirigido a admin.html automáticamente).
+// Se mantiene la lista por compatibilidad con el type-check, pero en la práctica
+// DRAWER_ADMIN_ITEMS ya no incluye el botón "Panel admin" — el admin va a admin.html directo.
 const DRAWER_ADMIN_ITEMS = [
   { id: "commissions", label: "Comisiones", icon: "wallet", roles: ["admin"] },
   { id: "transfers", label: "Transferencias", icon: "creditCard", roles: ["admin", "warehouse"] },
   { id: "users", label: "Usuarios", icon: "userCog", roles: ["admin"] },
-  { id: "admin", label: "Panel admin", icon: "settings", roles: ["admin"] },
 ];
 
 export function mountDashboardView(container, navigate) {
@@ -86,7 +88,7 @@ export function mountDashboardView(container, navigate) {
               </div>
             </div>
             <div class="flex items-center gap-1">
-              ${user.role === "admin" ? `<a href="./admin.html" class="admin-quick-btn" aria-label="Panel admin" title="Panel admin">${icon("shield", 14)} Admin</a>` : ''}
+              ${false ? `<a href="./admin.html" class="admin-quick-btn" aria-label="Panel admin" title="Panel admin">${icon("shield", 14)} Admin</a>` : ''}
               <button class="btn btn-ghost btn-icon" id="search-trigger-btn" aria-label="Búsqueda global (Ctrl+K)" title="Buscar (Ctrl+K)">${icon("search", 18)}</button>
               <button class="btn btn-ghost btn-icon" id="refresh-btn" aria-label="Refrescar datos" title="Refrescar">${icon("refresh", 18)}</button>
               <button class="btn btn-ghost btn-icon" id="theme-btn" aria-label="Cambiar tema claro/oscuro" title="Tema">${state.theme === 'dark' ? icon("sun", 18) : icon("moon", 18)}</button>

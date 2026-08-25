@@ -115,6 +115,17 @@ function init() {
     renderView(container, view, navigate);
   };
 
+  // Si el usuario es admin, redirigir automáticamente al panel admin dedicado
+  // (admin.html) en lugar de mostrar la app de vendedores.
+  const currentUser = store.getState().currentUser;
+  if (currentUser && currentUser.role === "admin") {
+    // No redirigir si ya estamos en admin.html (evitar loop)
+    if (!window.location.pathname.endsWith("admin.html")) {
+      window.location.replace("./admin.html");
+      return;
+    }
+  }
+
   // Initial view
   let initialView = getViewFromUrl();
   if (!initialView) {
