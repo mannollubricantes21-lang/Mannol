@@ -44,18 +44,37 @@
   <!-- Modal container -->
   <div id="modal-container"></div>
 
-  <!-- Bootstrap wizard -->
+  <!-- Bootstrap wizard — tries versioned file first, falls back to canonical name -->
   <script type="module">
-    import('./js/setup-wizard.js')
-      .then(({ mountWizard }) => {
-        mountWizard(document.getElementById('wizard-app'));
-      })
+    const WIZARD_LOADERS = [
+      () => import('./js/setup-wizard-v5.0.2.js'),
+      () => import('./js/setup-wizard-v5.0.1.js'),
+      () => import('./js/setup-wizard.js'),
+    ];
+
+    async function loadWizard() {
+      let lastErr = null;
+      for (const load of WIZARD_LOADERS) {
+        try {
+          const mod = await load();
+          if (mod && typeof mod.mountWizard === 'function') return mod;
+        } catch (err) {
+          lastErr = err;
+          // Try next loader
+        }
+      }
+      throw lastErr || new Error('No se pudo cargar ninguna versión del wizard');
+    }
+
+    loadWizard()
+      .then((mod) => mod.mountWizard(document.getElementById('wizard-app')))
       .catch((err) => {
         console.error('[Setup Wizard Bootstrap]', err);
         document.getElementById('wizard-app').innerHTML = `
           <div style="padding: 2rem; text-align: center; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; font-family: sans-serif;">
             <h2 style="color: #ef4444;">⚠️ No se pudo cargar el asistente</h2>
             <p style="color: #666; max-width: 400px;">${err.message || 'Error desconocido'}</p>
+            <p style="color: #999; font-size: 0.75rem;">Verificá que <code>js/setup-wizard.js</code> exista en el repo.</p>
             <a href="./index.html" style="padding: 0.5rem 1.5rem; background: #10b981; color: white; text-decoration: none; border-radius: 0.5rem; font-size: 1rem;">Volver al inicio</a>
           </div>
         `;

@@ -1,6 +1,6 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
-## 🆕 Archivos nuevos añadidos
+## 🆕 Archivos nuevos añadidos (v5.0.0)
 
 | # | Archivo | Tamaño | Descripción |
 |---|---------|--------|-------------|
@@ -8,13 +8,23 @@
 | 2 | `js/setup-wizard.js` | 54 KB | Lógica del wizard: 7 pasos guiados, copiar SQL, test de conexión en vivo, generación dinámica del SQL del admin, validación de credenciales, descarga de `supabase-config.js` |
 | 3 | `css/setup-wizard.css` | 16 KB | Estilos del wizard (mismo sistema de diseño OKLCH esmeralda + dark mode, responsive móvil) |
 
-## ✏️ Archivos modificados
+## ✏️ Archivos modificados (v5.0.0)
 
 | # | Archivo | Líneas | Cambio |
 |---|---------|--------|--------|
 | 1 | `js/supabase.js` | +104 | Soporte de configuración desde `localStorage` (clave `mannol-supabase-config-v1`) además del archivo. Nuevas funciones exportadas: `getStoredSupabaseConfig()`, `saveStoredSupabaseConfig()`, `clearStoredSupabaseConfig()`, `SUPABASE_CONFIG_STORAGE_KEY`. localStorage toma **precedencia** sobre el archivo (intención más reciente del usuario). |
 | 2 | `js/views/home.js` | +44 | Importa `isSupabaseConfiguredAsync` y muestra banner verde "Conecta MANNOL con Supabase" cuando no está configurado, con botón directo al wizard. |
 | 3 | `index.html` | +6 | Enlace al wizard (`setup.html`) en la pantalla de error de bootstrap. |
+
+## 🐛 Fix en v5.0.1 — Aceptar nuevo formato de API key de Supabase
+
+Supabase cambió recientemente el formato de las API keys en proyectos nuevos. Antes todas las anon keys eran JWTs empezando con `eyJ...`, pero los proyectos creados después de ~2024 usan el nuevo formato `sb_publish_...`.
+
+| # | Archivo | Cambio |
+|---|---------|--------|
+| 1 | `js/setup-wizard.js` | `isValidAnonKey()` ahora acepta ambos formatos (`sb_publish_` y `eyJ`). Nueva función `isSecretKey()` detecta si alguien pega `sb_secret_` por error y muestra warning rojo. Actualizado el placeholder, hint y mensaje de error del paso 5. |
+
+**Causa:** El usuario con un proyecto nuevo de Supabase no podía pasar la validación porque su anon key empezaba con `sb_publish_` en lugar de `eyJ`.
 
 ## 🧹 Archivos no tocados
 
