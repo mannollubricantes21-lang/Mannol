@@ -4,7 +4,7 @@
 
 import { listManagers, listSales } from "../db.js";
 import { formatMoney, formatDate, skeletonCard } from "../currency.js";
-import { icon, toast } from "../ui.js";
+import { icon, toast, esc } from "../ui.js";
 import { exportToCSV } from "../csv-export.js";
 
 export function mountManagersView(container, navigate) {
@@ -45,11 +45,11 @@ export function mountManagersView(container, navigate) {
                         ${icon("users", 16)}
                       </div>
                       <div class="min-w-0">
-                        <h3 class="font-semibold">${m.name}</h3>
-                        <p class="text-xs text-muted">${m.code} · ${m.phone || m.email || ''}</p>
+                        <h3 class="font-semibold">${esc(m.name)}</h3>
+                        <p class="text-xs text-muted">${esc(m.code)} · ${esc(m.phone || m.email || '')}</p>
                       </div>
                     </div>
-                    <button class="btn btn-outline btn-sm" data-expand="${m.id}">
+                    <button class="btn btn-outline btn-sm" data-expand="${esc(m.id)}">
                       ${isExpanded ? 'Contraer' : 'Ver ventas'}
                       ${icon(isExpanded ? "chevronUp" : "chevronDown", 12)}
                     </button>
@@ -99,10 +99,10 @@ export function mountManagersView(container, navigate) {
                             ${managerSales.slice(0, 20).map((s) => `
                               <div class="border rounded p-2 text-xs" style="border-color:var(--border)">
                                 <div class="flex justify-between">
-                                  <span class="font-medium">${s.code}</span>
-                                  <span class="badge ${s.status === 'COMPLETADA' ? 'badge-accent' : s.status === 'CANCELADA' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.5625rem">${s.status}</span>
+                                  <span class="font-medium">${esc(s.code)}</span>
+                                  <span class="badge ${s.status === 'COMPLETADA' ? 'badge-accent' : s.status === 'CANCELADA' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.5625rem">${esc(s.status)}</span>
                                 </div>
-                                <div class="text-muted">${s.warehouseName} · ${formatDate(s.createdAt)}</div>
+                                <div class="text-muted">${esc(s.warehouseName || '—')} · ${formatDate(s.createdAt)}</div>
                                 <div class="flex justify-between mt-1">
                                   <span>${s.items.length} items</span>
                                   <span class="font-bold">${formatMoney(s.totalAmount, "USD")}</span>

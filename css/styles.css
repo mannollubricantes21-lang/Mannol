@@ -1533,3 +1533,21 @@ kbd {
 @media (max-width: 640px) {
   .search-trigger kbd { display: none; }
 }
+
+/* ===================================================== */
+/* Quick access cards (admin dashboard)                    */
+/* ===================================================== */
+
+.quick-access-card:hover {
+  border-color: var(--primary) !important;
+  background: var(--primary-tint) !important;
+}
+
+.quick-access-card:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.quick-access-card:active {
+  transform: translateY(0) !important;
+}

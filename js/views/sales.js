@@ -7,7 +7,7 @@ import { getStore } from "../store.js";
 import { subscribeProducts, subscribeStock, listCards, listManagers, saveSale, adjustStock, getWholesaleTier, getSuggestedPricePerBox, getSuggestedVendorCommissionPerBox, getSuggestedGestorCommissionPerBox, isWholesaleProduct } from "../db.js";
 import { formatMoney, generateSaleId, CURRENCIES, CURRENCY_LABELS, CARD_BRANDS, getRate } from "../currency.js";
 import { enqueueSale, generateClientRef } from "../offline-sync.js";
-import { toast, icon, showModal, closeModal } from "../ui.js";
+import { toast, icon, showModal, closeModal, esc, confirmDialog } from "../ui.js";
 
 const CURRENCY_META = {
   USD: { icon: "$", label: "Efectivo", sublabel: "Dólar", color: "var(--accent-usd)" },
@@ -43,11 +43,21 @@ export function mountSalesView(container, navigate) {
   let wholesaleGestorCommissionPerBox = 0; // comisión gestor por caja (editable)
 
   // Cargar datos
-  Promise.all([listCards(), listManagers()]).then(([c, m]) => {
-    cards = c;
-    managers = m;
-    render();
-  }).catch(() => {});
+  // Flag para evitar re-fetch si la vista se monta varias veces
+  let catalogsLoaded = false;
+  let catalogsLoading = false;
+  if (!catalogsLoaded && !catalogsLoading) {
+    catalogsLoading = true;
+    Promise.all([listCards(), listManagers()]).then(([c, m]) => {
+      cards = c;
+      managers = m;
+      catalogsLoaded = true;
+      catalogsLoading = false;
+      render();
+    }).catch(() => {
+      catalogsLoading = false;
+    });
+  }
 
   const unsubProducts = subscribeProducts((items) => {
     products = items.filter((p) => p.active !== false);
@@ -95,7 +105,7 @@ export function mountSalesView(container, navigate) {
       <div style="display:flex;flex-direction:column;gap:1rem">
         <div class="flex items-center justify-between">
           <div>
-            <h1 class="text-xl font-bold flex items-center gap-2">${icon("cart", 20)} Venta en ${wh.name} (${wh.code})</h1>
+            <h1 class="text-xl font-bold flex items-center gap-2">${icon("cart", 20)} Venta en ${esc(wh.name)} (${esc(wh.code)})</h1>
             <p class="text-xs text-muted">Solo productos, gestor y pago.</p>
           </div>
           <div class="flex items-center gap-2">
@@ -128,7 +138,7 @@ export function mountSalesView(container, navigate) {
         <div>
           <label class="label">Gestor que refirió (opcional)</label>
           <input class="input" id="manager-code" value="${selectedManagerCode}" placeholder="SIGLA: CM, AR, JP, MG... (dejar vacío si no hay)" autocomplete="off" />
-          ${selectedManager ? `<p class="text-xs text-muted mt-1">${selectedManager.name} · ${selectedManager.phone || ''}</p>` : ''}
+          ${selectedManager ? `<p class="text-xs text-muted mt-1">${esc(selectedManager.name)} · ${esc(selectedManager.phone || '')}</p>` : ''}
         </div>
 
         <!-- Productos de la venta -->
@@ -147,7 +157,7 @@ export function mountSalesView(container, navigate) {
                 return `
                   <div class="cart-item" style="display:flex;align-items:center;gap:0.5rem;padding:0.625rem">
                     <div style="flex:1;min-width:0">
-                      <div class="text-sm font-medium truncate">${item.name}</div>
+                      <div class="text-sm font-medium truncate">${esc(item.name)}</div>
                       <div class="text-xs text-muted">${formatMoney(item.unitPrice, "USD")} c/u · Stock: ${stockQty + item.quantity}</div>
                       <div class="text-xs text-muted">Comisión gestor: ${p?.gestorCommission ?? p?.commission ?? 0} ${p?.gestorCommissionCurrency ?? p?.commissionCurrency ?? "USD"} · Comisión vendedor: ${p?.vendorCommission ?? 0} ${p?.vendorCommissionCurrency ?? "MN"}</div>
                     </div>
@@ -214,7 +224,7 @@ export function mountSalesView(container, navigate) {
                 <label class="label label-xs">Tarjeta de transferencia</label>
                 <select class="select" id="card-select">
                   <option value="">— Selecciona tarjeta —</option>
-                  ${cards.map((c) => `<option value="${c.id}" ${selectedCardId === c.id ? 'selected' : ''}>${c.name} · ${c.bank} · ${c.number.slice(-4)}</option>`).join("")}
+                  ${cards.map((c) => `<option value="${esc(c.id)}" ${selectedCardId === c.id ? 'selected' : ''}>${esc(c.name)} · ${esc(c.bank || '')} · ${esc((c.number || '').slice(-4))}</option>`).join("")}
                 </select>
                 <label class="label label-xs mt-2">Monto transferido (USD)</label>
                 <input class="input" type="number" step="0.01" id="transfer-amount" value="${transferAmount || ''}" placeholder="0.00" />
@@ -280,8 +290,8 @@ export function mountSalesView(container, navigate) {
       <!-- Gestor -->
       <div>
         <label class="label">Gestor que refirió (opcional)</label>
-        <input class="input" id="manager-code" value="${selectedManagerCode}" placeholder="SIGLA: CM, AR, JP, MG... (dejar vacío si no hay)" autocomplete="off" />
-        ${selectedManager ? `<p class="text-xs text-muted mt-1">${selectedManager.name} · ${selectedManager.phone || ''}</p>` : ''}
+        <input class="input" id="manager-code" value="${esc(selectedManagerCode)}" placeholder="SIGLA: CM, AR, JP, MG... (dejar vacío si no hay)" autocomplete="off" />
+        ${selectedManager ? `<p class="text-xs text-muted mt-1">${esc(selectedManager.name)} · ${esc(selectedManager.phone || '')}</p>` : ''}
       </div>
 
       <!-- Producto mayorista -->
@@ -290,8 +300,8 @@ export function mountSalesView(container, navigate) {
         <select class="select" id="wholesale-product-select">
           <option value="">— Selecciona producto —</option>
           ${wholesaleProducts.map((p) => `
-            <option value="${p.id}" ${wholesaleProduct?.id === p.id ? 'selected' : ''}>
-              ${p.name} · ${p.unitsPerBox} pomos/caja · Stock: ${getStockQty(p.id)} (${Math.floor(getStockQty(p.id) / p.unitsPerBox)} cajas)
+            <option value="${esc(p.id)}" ${wholesaleProduct?.id === p.id ? 'selected' : ''}>
+              ${esc(p.name)} · ${p.unitsPerBox} pomos/caja · Stock: ${getStockQty(p.id)} (${Math.floor(getStockQty(p.id) / p.unitsPerBox)} cajas)
             </option>
           `).join("")}
         </select>
@@ -301,8 +311,8 @@ export function mountSalesView(container, navigate) {
         <div class="card" style="padding:1rem;display:flex;flex-direction:column;gap:0.75rem;background:var(--bg-elevated);border:2px solid var(--primary)">
           <div style="display:flex;justify-content:space-between;align-items:center">
             <div>
-              <div class="font-semibold">${wholesaleProduct.name}</div>
-              <div class="text-xs text-muted">${wholesaleProduct.brand} · ${wholesaleProduct.viscosity || ''} · ${wholesaleProduct.unitsPerBox} pomos por caja</div>
+              <div class="font-semibold">${esc(wholesaleProduct.name)}</div>
+              <div class="text-xs text-muted">${esc(wholesaleProduct.brand)} · ${esc(wholesaleProduct.viscosity || '')} · ${wholesaleProduct.unitsPerBox} pomos por caja</div>
             </div>
             <div class="text-right">
               <div class="text-xs text-muted">Stock disponible</div>
@@ -546,12 +556,27 @@ export function mountSalesView(container, navigate) {
     // Cancel
     const cancelBtn = container.querySelector("#cancel-sale-btn");
     if (cancelBtn) cancelBtn.addEventListener("click", () => {
-      cart = [];
-      note = "";
-      selectedManagerCode = "";
-      selectedManager = null;
-      multiPayments = { USD: 0, MN: 0, EUR: 0, TRANSFERENCIA: 0 };
-      render();
+      const hasContent = cart.length > 0 || note || selectedManagerCode || wholesaleProduct;
+      const doCancel = () => {
+        cart = [];
+        note = "";
+        selectedManagerCode = "";
+        selectedManager = null;
+        multiPayments = { USD: 0, MN: 0, EUR: 0, TRANSFERENCIA: 0 };
+        transferAmount = 0;
+        selectedCardId = "";
+        wholesaleProduct = null;
+        wholesaleBoxes = 1;
+        wholesalePricePerBox = 0;
+        wholesaleVendorCommissionPerBox = 0;
+        wholesaleGestorCommissionPerBox = 0;
+        render();
+      };
+      if (hasContent) {
+        confirmDialog("¿Cancelar la venta actual? Se perderán los productos y datos ingresados.", doCancel);
+      } else {
+        doCancel();
+      }
     });
   }
 
@@ -590,19 +615,24 @@ export function mountSalesView(container, navigate) {
         const qty = getStockQty(p.id);
         const inCart = cart.find((i) => i.productId === p.id)?.quantity || 0;
         const isOut = qty <= 0;
+        const minStock = p.minStock || 5;
+        const isLow = !isOut && qty <= minStock;
         return `
-          <div class="catalog-item ${isOut ? "opacity-50" : ""}" data-product-id="${p.id}" style="display:flex;align-items:center;gap:0.625rem;padding:0.625rem;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--bg-elevated)">
+          <div class="catalog-item ${isOut ? "opacity-50" : ""}" data-product-id="${esc(p.id)}" style="display:flex;align-items:center;gap:0.625rem;padding:0.625rem;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--bg-elevated)">
             <div style="width:3rem;height:3rem;border-radius:var(--radius);overflow:hidden;background:var(--bg-soft);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-              ${p.imageUrl ? `<img src="${p.imageUrl}" alt="${p.name}" style="width:100%;height:100%;object-fit:cover" />` : icon("boxes", 20)}
+              ${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="${esc(p.name)}" style="width:100%;height:100%;object-fit:cover" />` : icon("boxes", 20)}
             </div>
             <div style="flex:1;min-width:0">
-              <div class="text-sm font-semibold truncate">${p.name}</div>
-              <div class="text-xs" style="color:var(--primary)">${formatMoney(p.salePrice, "USD")} · Stock: ${qty}</div>
+              <div class="text-sm font-semibold truncate">${esc(p.name)}</div>
+              <div class="text-xs flex items-center gap-1" style="color:var(--primary)">
+                <span>${formatMoney(p.salePrice, "USD")} · Stock: ${qty}</span>
+                ${isOut ? `<span class="badge badge-danger" style="font-size:0.5rem;padding:0 0.25rem">Agotado</span>` : isLow ? `<span class="badge badge-warning" style="font-size:0.5rem;padding:0 0.25rem">${icon("alertTriangle", 10)} Bajo</span>` : ''}
+              </div>
             </div>
             <div class="flex items-center gap-1" style="flex-shrink:0">
-              <button class="btn btn-outline btn-icon btn-sm" data-qty-dec="${p.id}" ${inCart <= 0 ? 'disabled' : ''}>${icon("minus", 12)}</button>
-              <span style="width:2rem;text-align:center;font-weight:700;font-size:0.875rem" data-qty-display="${p.id}">${inCart}</span>
-              <button class="btn btn-outline btn-icon btn-sm" data-qty-inc="${p.id}" ${isOut || inCart >= qty ? 'disabled' : ''}>${icon("plus", 12)}</button>
+              <button class="btn btn-outline btn-icon btn-sm" data-qty-dec="${esc(p.id)}" ${inCart <= 0 ? 'disabled' : ''}>${icon("minus", 12)}</button>
+              <span style="width:2rem;text-align:center;font-weight:700;font-size:0.875rem" data-qty-display="${esc(p.id)}">${inCart}</span>
+              <button class="btn btn-outline btn-icon btn-sm" data-qty-inc="${esc(p.id)}" ${isOut || inCart >= qty ? 'disabled' : ''}>${icon("plus", 12)}</button>
             </div>
           </div>
         `;

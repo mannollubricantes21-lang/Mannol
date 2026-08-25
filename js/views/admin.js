@@ -17,16 +17,18 @@ import {
   listStockMovements,
 } from "../db.js";
 import { logout } from "../auth.js";
-import { formatMoney, formatDate } from "../currency.js";
-import { toast, icon, showModal, closeModal, confirmDialog } from "../ui.js";
+import { formatMoney, formatDate, formatDateShort } from "../currency.js";
+import { toast, icon, showModal, closeModal, confirmDialog, esc } from "../ui.js";
 import { CURRENCIES, CATEGORY_COLORS, STOCK_REASONS, STOCK_REASON_LABELS } from "../types.js";
 import { uploadImageAsWebP, pickImageFile } from "../image-upload.js";
+import { lineChart, barChart, COLORS } from "../charts.js";
 
 // Secciones agrupadas por categoría para mejor organización
 const NAV_SECTIONS = [
   {
     label: "Gestión",
     items: [
+      { id: "dashboard", label: "Dashboard", icon: "home" },
       { id: "users", label: "Usuarios", icon: "userCog" },
       { id: "products", label: "Productos", icon: "tags" },
       { id: "categories", label: "Categorías", icon: "tags" },
@@ -75,7 +77,7 @@ export function mountAdminView(container, navigateOrUser) {
   }
 
   const store = getStore();
-  let activeTab = "users";
+  let activeTab = "dashboard"; // Por defecto: dashboard con todas las opciones de gestión visibles
   let tabGeneration = 0;
   let sidebarOpen = false;
 
@@ -214,6 +216,7 @@ export function mountAdminView(container, navigateOrUser) {
     content.innerHTML = `<div class="empty-state"><div class="spinner spinner-lg"></div><p class="text-sm text-muted mt-2">Cargando…</p></div>`;
 
     switch (activeTab) {
+      case "dashboard": mountAnalyticsDashboard(content, myGen); break;
       case "users": mountUsersPanel(content, myGen); break;
       case "products": mountProductsPanel(content, myGen); break;
       case "categories": mountCategoriesPanel(content, myGen); break;
@@ -225,6 +228,364 @@ export function mountAdminView(container, navigateOrUser) {
       case "profit": mountProfitPanel(content, myGen); break;
       case "audit": mountAuditPanel(content, myGen); break;
     }
+  }
+
+  // ===== DASHBOARD ANALÍTICO (admin) =====
+  // Vista por defecto al entrar al admin: muestra analíticas + acceso
+  // rápido a TODAS las opciones de gestión (usuarios, productos, etc.)
+  function mountAnalyticsDashboard(content, gen) {
+    content.innerHTML = `<div class="empty-state"><div class="spinner spinner-lg"></div><p class="text-sm text-muted mt-2">Cargando panel…</p></div>`;
+    let range = 30; // días
+    let dataCache = null;
+
+    async function load() {
+      if (gen !== tabGeneration) return;
+      // Renderizar primero el shell con acceso rápido, luego cargar datos
+      content.innerHTML = renderShell();
+      wireQuickAccess();
+      try {
+        const allSales = await listSales({});
+        if (gen !== tabGeneration) return;
+        const now = Date.now();
+        const from = now - range * 86400000;
+        dataCache = { allSales, filtered: allSales.filter((s) => s.createdAt >= from) };
+        renderDashboard();
+      } catch (err) {
+        console.error("Dashboard load failed:", err);
+        if (gen !== tabGeneration) return;
+        // Mostrar acceso rápido aunque falle la carga de datos
+        const inner = content.querySelector("#dashboard-content");
+        if (inner) inner.innerHTML = `<div class="card" style="background: var(--bg-soft); padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.875rem">No se pudieron cargar las analíticas. Usa las opciones de gestión abajo para empezar.</div>`;
+      }
+    }
+
+    /**
+     * Shell con título + botones de rango + grid de acceso rápido
+     * (todos los paneles de gestión visibles de un vistazo).
+     */
+    function renderShell() {
+      return `<div style="display:flex;flex-direction:column;gap:1rem">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h2 class="text-lg font-bold flex items-center gap-2">${icon("home", 20)} Panel de administración</h2>
+            <p class="text-xs text-muted">Resumen del negocio y acceso rápido a todas las secciones</p>
+          </div>
+          <div class="flex gap-1">
+            <button class="btn ${range === 7 ? 'btn-primary' : 'btn-outline'} btn-sm" data-range="7">7d</button>
+            <button class="btn ${range === 30 ? 'btn-primary' : 'btn-outline'} btn-sm" data-range="30">30d</button>
+            <button class="btn ${range === 90 ? 'btn-primary' : 'btn-outline'} btn-sm" data-range="90">90d</button>
+            <button class="btn ${range === 365 ? 'btn-primary' : 'btn-outline'} btn-sm" data-range="365">1 año</button>
+          </div>
+        </div>
+
+        <!-- ACCESO RÁPIDO: todas las opciones de gestión visibles al entrar -->
+        <div>
+          <p class="text-xs font-semibold text-muted" style="text-transform:uppercase;letter-spacing:0.05em;margin:0 0 0.5rem">Acceso rápido · Gestión</p>
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+            <button class="quick-access-card" data-jump="users" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
+              <div style="display:flex;align-items:center;gap:0.75rem">
+                <div style="width:2.5rem;height:2.5rem;background:var(--primary-tint);color:var(--primary);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("userCog", 18)}</div>
+                <div style="min-width:0">
+                  <div class="font-semibold text-sm">Usuarios</div>
+                  <div class="text-xs text-muted">Admin, gestores, vendedores</div>
+                </div>
+              </div>
+            </button>
+            <button class="quick-access-card" data-jump="products" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
+              <div style="display:flex;align-items:center;gap:0.75rem">
+                <div style="width:2.5rem;height:2.5rem;background:var(--primary-tint);color:var(--primary);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("tags", 18)}</div>
+                <div style="min-width:0">
+                  <div class="font-semibold text-sm">Productos</div>
+                  <div class="text-xs text-muted">Catálogo e imágenes</div>
+                </div>
+              </div>
+            </button>
+            <button class="quick-access-card" data-jump="categories" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
+              <div style="display:flex;align-items:center;gap:0.75rem">
+                <div style="width:2.5rem;height:2.5rem;background:var(--primary-tint);color:var(--primary);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("tags", 18)}</div>
+                <div style="min-width:0">
+                  <div class="font-semibold text-sm">Categorías</div>
+                  <div class="text-xs text-muted">Organizar catálogo</div>
+                </div>
+              </div>
+            </button>
+            <button class="quick-access-card" data-jump="warehouses" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
+              <div style="display:flex;align-items:center;gap:0.75rem">
+                <div style="width:2.5rem;height:2.5rem;background:var(--primary-tint);color:var(--primary);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("store", 18)}</div>
+                <div style="min-width:0">
+                  <div class="font-semibold text-sm">Almacenes</div>
+                  <div class="text-xs text-muted">Sucursales y comisiones</div>
+                </div>
+              </div>
+            </button>
+            <button class="quick-access-card" data-jump="managers" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
+              <div style="display:flex;align-items:center;gap:0.75rem">
+                <div style="width:2.5rem;height:2.5rem;background:var(--primary-tint);color:var(--primary);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("users", 18)}</div>
+                <div style="min-width:0">
+                  <div class="font-semibold text-sm">Gestores</div>
+                  <div class="text-xs text-muted">Referidores y comisiones</div>
+                </div>
+              </div>
+            </button>
+            <button class="quick-access-card" data-jump="cards" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
+              <div style="display:flex;align-items:center;gap:0.75rem">
+                <div style="width:2.5rem;height:2.5rem;background:var(--primary-tint);color:var(--primary);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("creditCard", 18)}</div>
+                <div style="min-width:0">
+                  <div class="font-semibold text-sm">Tarjetas</div>
+                  <div class="text-xs text-muted">Cuentas para transferencias</div>
+                </div>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- ACCESO RÁPIDO: finanzas -->
+        <div>
+          <p class="text-xs font-semibold text-muted" style="text-transform:uppercase;letter-spacing:0.05em;margin:0 0 0.5rem">Acceso rápido · Finanzas</p>
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+            <button class="quick-access-card" data-jump="warehouseCommissions" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
+              <div style="display:flex;align-items:center;gap:0.75rem">
+                <div style="width:2.5rem;height:2.5rem;background:color-mix(in oklab, var(--accent-usd) 15%, transparent);color:var(--accent-usd);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("wallet", 18)}</div>
+                <div style="min-width:0">
+                  <div class="font-semibold text-sm">Comisiones locales</div>
+                  <div class="text-xs text-muted">Pagos a vendedores</div>
+                </div>
+              </div>
+            </button>
+            <button class="quick-access-card" data-jump="profit" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
+              <div style="display:flex;align-items:center;gap:0.75rem">
+                <div style="width:2.5rem;height:2.5rem;background:color-mix(in oklab, var(--accent-usd) 15%, transparent);color:var(--accent-usd);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("trendingUp", 18)}</div>
+                <div style="min-width:0">
+                  <div class="font-semibold text-sm">Ganancia/Inversión</div>
+                  <div class="text-xs text-muted">Margen y retorno</div>
+                </div>
+              </div>
+            </button>
+            <button class="quick-access-card" data-jump="rates" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
+              <div style="display:flex;align-items:center;gap:0.75rem">
+                <div style="width:2.5rem;height:2.5rem;background:color-mix(in oklab, var(--accent-usd) 15%, transparent);color:var(--accent-usd);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("trendingUp", 18)}</div>
+                <div style="min-width:0">
+                  <div class="font-semibold text-sm">Tasas elToque</div>
+                  <div class="text-xs text-muted">Conversión de moneda</div>
+                </div>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- ACCESO RÁPIDO: sistema -->
+        <div>
+          <p class="text-xs font-semibold text-muted" style="text-transform:uppercase;letter-spacing:0.05em;margin:0 0 0.5rem">Acceso rápido · Sistema</p>
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+            <button class="quick-access-card" data-jump="audit" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
+              <div style="display:flex;align-items:center;gap:0.75rem">
+                <div style="width:2.5rem;height:2.5rem;background:color-mix(in oklab, var(--info) 15%, transparent);color:var(--info);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("receipt", 18)}</div>
+                <div style="min-width:0">
+                  <div class="font-semibold text-sm">Auditoría</div>
+                  <div class="text-xs text-muted">Movimientos de stock</div>
+                </div>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Sección analítica: se carga después de las tarjetas -->
+        <div id="dashboard-content">
+          <div class="empty-state"><div class="spinner"></div><p class="text-sm text-muted mt-2">Cargando analíticas…</p></div>
+        </div>
+      </div>`;
+    }
+
+    /**
+     * Conecta los handlers de las tarjetas de acceso rápido para
+     * saltar a la sección correspondiente.
+     */
+    function wireQuickAccess() {
+      content.querySelectorAll("[data-jump]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const target = btn.dataset.jump;
+          // Cambiar tab activo en el sidebar y re-renderizar contenido
+          activeTab = target;
+          // Actualizar sidebar highlight
+          const sidebarItems = container.querySelectorAll("[data-tab]");
+          sidebarItems.forEach((b) => b.classList.toggle("active", b.dataset.tab === target));
+          // Actualizar título
+          const titleEl = container.querySelector("#admin-page-title");
+          if (titleEl) titleEl.textContent = getActiveTabLabel();
+          // Cerrar sidebar en mobile
+          closeSidebar();
+          // Renderizar el panel correspondiente
+          renderTabContent();
+          // Hacer scroll al top
+          const main = container.querySelector(".admin-main");
+          if (main) main.scrollTop = 0;
+        });
+
+        // Efecto hover
+        btn.addEventListener("mouseenter", () => {
+          btn.style.transform = "translateY(-2px)";
+          btn.style.boxShadow = "var(--shadow-md)";
+        });
+        btn.addEventListener("mouseleave", () => {
+          btn.style.transform = "";
+          btn.style.boxShadow = "";
+        });
+      });
+
+      // Botones de rango temporal
+      content.querySelectorAll("[data-range]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          range = parseInt(btn.dataset.range) || 30;
+          content.querySelectorAll("[data-range]").forEach((b) => b.classList.toggle("btn-primary", parseInt(b.dataset.range) === range));
+          content.querySelectorAll("[data-range]").forEach((b) => { if (parseInt(b.dataset.range) !== range) b.classList.add("btn-outline"); });
+          load();
+        });
+      });
+    }
+
+    function renderDashboard() {
+      if (!dataCache) return;
+      const { filtered } = dataCache;
+      const completed = filtered.filter((s) => s.status === "COMPLETADA");
+      const cancelled = filtered.filter((s) => s.status === "CANCELADA");
+      const pending = filtered.filter((s) => s.status === "PENDIENTE");
+
+      const totalRevenue = completed.reduce((s, x) => s + x.totalAmount, 0);
+      const totalUnits = completed.reduce((s, x) => s + x.items.reduce((a, i) => a + i.quantity, 0), 0);
+      const avgTicket = completed.length > 0 ? totalRevenue / completed.length : 0;
+      const cancelRate = filtered.length > 0 ? Math.round((cancelled.length / filtered.length) * 100) : 0;
+
+      // Comparativa con período anterior
+      const now = Date.now();
+      const prevFrom = now - range * 2 * 86400000;
+      const prevTo = now - range * 86400000;
+      const prevSales = dataCache.allSales.filter((s) => s.createdAt >= prevFrom && s.createdAt < prevTo && s.status === "COMPLETADA");
+      const prevRevenue = prevSales.reduce((s, x) => s + x.totalAmount, 0);
+      const revenueChange = prevRevenue > 0 ? Math.round(((totalRevenue - prevRevenue) / prevRevenue) * 100) : 0;
+      const prevCount = prevSales.length;
+      const countChange = prevCount > 0 ? Math.round(((completed.length - prevCount) / prevCount) * 100) : 0;
+
+      // Ventas por día
+      const days = [];
+      const nowDate = new Date();
+      nowDate.setHours(0, 0, 0, 0);
+      for (let i = range - 1; i >= 0; i--) {
+        const day = new Date(nowDate);
+        day.setDate(day.getDate() - i);
+        const next = new Date(day);
+        next.setDate(next.getDate() + 1);
+        const total = completed
+          .filter((s) => s.createdAt >= day.getTime() && s.createdAt < next.getTime())
+          .reduce((sum, s) => sum + s.totalAmount, 0);
+        const label = day.toLocaleDateString("es-ES", { day: "numeric", month: "short" });
+        days.push({ label, value: total });
+      }
+
+      // Top productos (últimos N días)
+      const productStats = {};
+      for (const s of completed) {
+        for (const item of s.items) {
+          if (!productStats[item.productId]) {
+            productStats[item.productId] = { name: item.name || item.productName, units: 0, revenue: 0 };
+          }
+          productStats[item.productId].units += item.quantity;
+          productStats[item.productId].revenue += item.subtotal || (item.unitPrice * item.quantity);
+        }
+      }
+      const topProducts = Object.values(productStats).sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+
+      // Por moneda
+      const byCurrency = { USD: 0, MN: 0, EUR: 0, TRANSFERENCIA: 0 };
+      for (const s of completed) {
+        if (s.currency && byCurrency[s.currency] !== undefined) {
+          byCurrency[s.currency] += s.totalAmount;
+        }
+      }
+
+      const inner = content.querySelector("#dashboard-content");
+      if (!inner) return;
+      inner.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:1rem;padding-top:0.5rem;border-top:1px solid var(--border);margin-top:0.5rem">
+          <p class="text-xs font-semibold text-muted" style="text-transform:uppercase;letter-spacing:0.05em;margin:0">Analíticas · ${range} días</p>
+
+          <!-- KPIs principales -->
+          <div class="grid grid-cols-2 gap-2">
+            <div class="stat-card">
+              <div class="stat-label">${icon("dollar", 14)} Ingresos (${range}d)</div>
+              <div class="stat-value" style="color:var(--accent-usd)">${formatMoney(totalRevenue, "USD")}</div>
+              <div class="stat-sub ${revenueChange > 0 ? 'text-accent' : revenueChange < 0 ? 'text-danger' : ''}">
+                ${revenueChange > 0 ? '▲' : revenueChange < 0 ? '▼' : '–'} ${Math.abs(revenueChange)}% vs período anterior
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">${icon("cart", 14)} Ventas completadas</div>
+              <div class="stat-value">${completed.length}</div>
+              <div class="stat-sub ${countChange > 0 ? 'text-accent' : countChange < 0 ? 'text-danger' : ''}">
+                ${countChange > 0 ? '▲' : countChange < 0 ? '▼' : '–'} ${Math.abs(countChange)}% · ${formatMoney(avgTicket, "USD")} promedio
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">${icon("boxes", 14)} Unidades vendidas</div>
+              <div class="stat-value">${totalUnits}</div>
+              <div class="stat-sub">${completed.length} transacciones</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label" style="color:var(--danger)">${icon("ban", 14)} Canceladas</div>
+              <div class="stat-value text-danger">${cancelled.length}</div>
+              <div class="stat-sub">${cancelRate}% tasa cancelación · ${pending.length} pendientes</div>
+            </div>
+          </div>
+
+          <!-- Gráfico de línea de ventas por día -->
+          <div class="card">
+            <div class="card-header"><h3 class="card-title">${icon("trendingUp", 14)} Ventas por día (últimos ${range} días)</h3></div>
+            <div class="card-content">
+              <div style="background: var(--bg-soft); padding: 1rem; border-radius: var(--radius)">
+                ${lineChart(days, { height: 200, color: COLORS.primary, formatValue: (v) => formatMoney(v, "USD") })}
+              </div>
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-3">
+            <!-- Top productos -->
+            <div class="card">
+              <div class="card-header"><h3 class="card-title">${icon("tags", 14)} Top 5 productos (por ingresos)</h3></div>
+              <div class="card-content" style="display:flex;flex-direction:column;gap:0.5rem">
+                ${topProducts.length === 0 ? '<p class="text-xs text-muted">Sin ventas en este período</p>' :
+                  topProducts.map((p, i) => `
+                    <div class="flex items-center justify-between" style="padding:0.5rem;border:1px solid var(--border);border-radius:var(--radius)">
+                      <div class="flex items-center gap-2" style="flex:1;min-width:0">
+                        <span class="badge ${i === 0 ? 'badge-accent' : 'badge-outline'}" style="font-size:0.6875rem;width:1.5rem;justify-content:center">${i + 1}</span>
+                        <div style="min-width:0">
+                          <div class="text-sm font-medium truncate">${esc(p.name)}</div>
+                          <div class="text-xs text-muted">${p.units} unidades</div>
+                        </div>
+                      </div>
+                      <div class="text-sm font-bold">${formatMoney(p.revenue, "USD")}</div>
+                    </div>
+                  `).join('')
+                }
+              </div>
+            </div>
+
+            <!-- Por moneda -->
+            <div class="card">
+              <div class="card-header"><h3 class="card-title">${icon("wallet", 14)} Por moneda</h3></div>
+              <div class="card-content" style="display:flex;flex-direction:column;gap:0.5rem">
+                ${Object.entries(byCurrency).filter(([_, v]) => v > 0).map(([curr, amount]) => `
+                  <div class="flex items-center justify-between" style="padding:0.5rem;border:1px solid var(--border);border-radius:var(--radius)">
+                    <span class="badge ${curr === 'USD' ? 'badge-accent' : ''}" style="font-size:0.6875rem">${esc(curr)}</span>
+                    <span class="font-bold">${formatMoney(amount, curr)}</span>
+                  </div>
+                `).join('') || '<p class="text-xs text-muted">Sin ventas en este período</p>'}
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    load();
   }
 
   // ===== USERS =====
@@ -244,13 +605,14 @@ export function mountAdminView(container, navigateOrUser) {
               <tbody>
                 ${users.map((u) => `
                   <tr>
-                    <td class="font-medium">${u.displayName}</td>
-                    <td class="text-xs text-muted">${u.username}</td>
-                    <td><span class="badge badge-outline">${u.role}</span></td>
-                    <td class="text-xs">${u.warehouseName || u.warehouseCode || '—'}</td>
+                    <td class="font-medium">${esc(u.displayName)}</td>
+                    <td class="text-xs text-muted">${esc(u.username)}</td>
+                    <td><span class="badge badge-outline">${esc(u.role)}</span></td>
+                    <td class="text-xs">${esc(u.warehouseName || u.warehouseCode || '—')}</td>
                     <td class="text-center">${u.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
                     <td class="text-right">
-                      <button class="btn btn-ghost btn-sm" data-edit-user="${u.id}">Editar</button>
+                      <button class="btn btn-ghost btn-sm" data-edit-user="${esc(u.id)}">Editar</button>
+                      <button class="btn btn-ghost btn-sm text-danger" data-delete-user="${esc(u.id)}" title="Desactivar">${icon("trash", 12)}</button>
                     </td>
                   </tr>
                 `).join('')}
@@ -266,6 +628,21 @@ export function mountAdminView(container, navigateOrUser) {
           if (u) showUserDialog(u, () => mountUsersPanel(content));
         });
       });
+      content.querySelectorAll("[data-delete-user]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const u = users.find((x) => x.id === btn.dataset.deleteUser);
+          if (!u) return;
+          confirmDialog(`¿Desactivar a ${esc(u.displayName)}? No podrá iniciar sesión.`, async () => {
+            try {
+              await deleteUser(u.id);
+              toast("Usuario desactivado", "success");
+              mountUsersPanel(content, tabGeneration);
+            } catch (err) {
+              toast(err.message || "Error al desactivar", "error");
+            }
+          });
+        });
+      });
     });
   }
 
@@ -278,11 +655,11 @@ export function mountAdminView(container, navigateOrUser) {
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Nombre *</label><input class="input" id="u-name" value="${u.displayName || ''}" /></div>
-            <div><label class="label label-xs">Usuario *</label><input class="input" id="u-username" value="${u.username || ''}" /></div>
+            <div><label class="label label-xs">Nombre *</label><input class="input" id="u-name" value="${esc(u.displayName || '')}" /></div>
+            <div><label class="label label-xs">Usuario *</label><input class="input" id="u-username" value="${esc(u.username || '')}" /></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Email</label><input class="input" type="email" id="u-email" value="${u.email || ''}" /></div>
+            <div><label class="label label-xs">Email</label><input class="input" type="email" id="u-email" value="${esc(u.email || '')}" /></div>
             <div><label class="label label-xs">${isNew ? 'Contraseña *' : 'Nueva contraseña (vacío = no cambiar)'}</label><input class="input" type="password" id="u-password" placeholder="••••••" /></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
@@ -341,9 +718,9 @@ export function mountAdminView(container, navigateOrUser) {
               <tbody>
                 ${products.map((p) => `
                   <tr>
-                    <td class="font-medium">${p.name}</td>
-                    <td class="text-xs">${p.brand}</td>
-                    <td class="text-xs text-muted">${p.categoryName || '—'}</td>
+                    <td class="font-medium">${esc(p.name)}</td>
+                    <td class="text-xs">${esc(p.brand)}</td>
+                    <td class="text-xs text-muted">${esc(p.categoryName || '—')}</td>
                     <td class="text-right">${formatMoney(p.salePrice, "USD")}</td>
                     <td class="text-right text-xs">
                       <div>G: ${p.gestorCommission ?? p.commission ?? 0} ${p.gestorCommissionCurrency ?? p.commissionCurrency ?? "USD"}</div>
@@ -351,8 +728,8 @@ export function mountAdminView(container, navigateOrUser) {
                     </td>
                     <td class="text-center">${p.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
                     <td class="text-right">
-                      <button class="btn btn-ghost btn-sm" data-edit-product="${p.id}">Editar</button>
-                      <button class="btn btn-ghost btn-sm text-danger" data-delete-product="${p.id}">${icon("trash", 12)}</button>
+                      <button class="btn btn-ghost btn-sm" data-edit-product="${esc(p.id)}">Editar</button>
+                      <button class="btn btn-ghost btn-sm text-danger" data-delete-product="${esc(p.id)}" title="Eliminar producto y su imagen">${icon("trash", 12)}</button>
                     </td>
                   </tr>
                 `).join('')}
@@ -391,18 +768,18 @@ export function mountAdminView(container, navigateOrUser) {
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Nombre *</label><input class="input" id="p-name" value="${p.name || ''}" /></div>
-            <div><label class="label label-xs">Marca *</label><input class="input" id="p-brand" value="${p.brand || ''}" /></div>
+            <div><label class="label label-xs">Nombre *</label><input class="input" id="p-name" value="${esc(p.name || '')}" /></div>
+            <div><label class="label label-xs">Marca *</label><input class="input" id="p-brand" value="${esc(p.brand || '')}" /></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">SKU</label><input class="input" id="p-sku" value="${p.sku || ''}" /></div>
-            <div><label class="label label-xs">Viscosidad</label><input class="input" id="p-viscosity" value="${p.viscosity || ''}" placeholder="5W-30" /></div>
+            <div><label class="label label-xs">SKU</label><input class="input" id="p-sku" value="${esc(p.sku || '')}" /></div>
+            <div><label class="label label-xs">Viscosidad</label><input class="input" id="p-viscosity" value="${esc(p.viscosity || '')}" placeholder="5W-30" /></div>
           </div>
           <div><label class="label label-xs">Categoría</label>
             <select class="select" id="p-category">
               <option value="">(sin categoría)</option>
               ${categories.filter(c => !c.parentId).map((c) => `
-                <option value="${c.id}" ${p.categoryId === c.id ? 'selected' : ''}>${c.name}</option>
+                <option value="${esc(c.id)}" ${p.categoryId === c.id ? 'selected' : ''}>${esc(c.name)}</option>
               `).join('')}
             </select>
           </div>
@@ -459,7 +836,7 @@ export function mountAdminView(container, navigateOrUser) {
             <label class="label label-xs">Imagen del producto</label>
             <div style="display:flex;gap:0.5rem;align-items:center">
               <div id="p-image-preview" style="width:3rem;height:3rem;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--bg-soft);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-                ${p.imageUrl ? `<img src="${p.imageUrl}" style="width:100%;height:100%;object-fit:cover" />` : icon("tags", 20)}
+                ${p.imageUrl ? `<img src="${esc(p.imageUrl)}" style="width:100%;height:100%;object-fit:cover" />` : icon("tags", 20)}
               </div>
               <div style="flex:1;display:flex;flex-direction:column;gap:0.25rem">
                 <button type="button" class="btn btn-outline btn-sm" id="p-upload-btn">
@@ -596,21 +973,21 @@ export function mountAdminView(container, navigateOrUser) {
                 <div class="border rounded p-3" style="border-color:var(--border)">
                   <div class="flex items-center justify-between mb-2">
                     <div class="flex items-center gap-2">
-                      <span style="font-size:1.25rem">${c.icon || '📁'}</span>
-                      <span class="font-semibold">${c.name}</span>
-                      <span class="badge badge-outline" style="font-size:0.5625rem">${c.color || 'slate'}</span>
+                      <span style="font-size:1.25rem">${esc(c.icon || '📁')}</span>
+                      <span class="font-semibold">${esc(c.name)}</span>
+                      <span class="badge badge-outline" style="font-size:0.5625rem">${esc(c.color || 'slate')}</span>
                     </div>
                     <div class="flex gap-1">
-                      <button class="btn btn-ghost btn-sm" data-edit-cat="${c.id}">Editar</button>
-                      <button class="btn btn-ghost btn-sm text-danger" data-delete-cat="${c.id}">${icon("trash", 12)}</button>
+                      <button class="btn btn-ghost btn-sm" data-edit-cat="${esc(c.id)}">Editar</button>
+                      <button class="btn btn-ghost btn-sm text-danger" data-delete-cat="${esc(c.id)}">${icon("trash", 12)}</button>
                     </div>
                   </div>
                   ${subs.length > 0 ? `
                     <div style="display:flex;flex-direction:column;gap:0.25rem;padding-left:1.5rem">
                       ${subs.map((s) => `
                         <div class="flex items-center justify-between text-xs">
-                          <span>${s.name}</span>
-                          <button class="btn btn-ghost btn-icon btn-sm text-danger" data-delete-sub="${s.id}">${icon("trash", 12)}</button>
+                          <span>${esc(s.name)}</span>
+                          <button class="btn btn-ghost btn-icon btn-sm text-danger" data-delete-sub="${esc(s.id)}">${icon("trash", 12)}</button>
                         </div>
                       `).join('')}
                     </div>
@@ -654,12 +1031,12 @@ export function mountAdminView(container, navigateOrUser) {
       title: isNew ? "Nueva categoría" : "Editar categoría",
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
-          <div><label class="label label-xs">Nombre *</label><input class="input" id="c-name" value="${c.name || ''}" /></div>
+          <div><label class="label label-xs">Nombre *</label><input class="input" id="c-name" value="${esc(c.name || '')}" /></div>
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Ícono (emoji)</label><input class="input" id="c-icon" value="${c.icon || ''}" placeholder="🛢️" /></div>
+            <div><label class="label label-xs">Ícono (emoji)</label><input class="input" id="c-icon" value="${esc(c.icon || '')}" placeholder="🛢️" /></div>
             <div><label class="label label-xs">Color</label>
               <select class="select" id="c-color">
-                ${CATEGORY_COLORS.map((col) => `<option value="${col}" ${c.color === col ? 'selected' : ''}>${col}</option>`).join('')}
+                ${CATEGORY_COLORS.map((col) => `<option value="${esc(col)}" ${c.color === col ? 'selected' : ''}>${esc(col)}</option>`).join('')}
               </select>
             </div>
           </div>
@@ -705,12 +1082,12 @@ export function mountAdminView(container, navigateOrUser) {
               <tbody>
                 ${warehouses.map((w) => `
                   <tr>
-                    <td class="font-medium">${w.name}</td>
-                    <td><span class="badge badge-outline">${w.code}</span></td>
-                    <td class="text-xs text-muted">${w.address || '—'}</td>
-                    <td class="text-right text-xs">${w.sellerCommissionPercent}% ${w.sellerCommissionCurrency}</td>
+                    <td class="font-medium">${esc(w.name)}</td>
+                    <td><span class="badge badge-outline">${esc(w.code)}</span></td>
+                    <td class="text-xs text-muted">${esc(w.address || '—')}</td>
+                    <td class="text-right text-xs">${w.sellerCommissionPercent}% ${esc(w.sellerCommissionCurrency || 'USD')}</td>
                     <td class="text-center">${w.pin ? `<span class="badge badge-accent">Sí</span>` : `<span class="badge">No</span>`}</td>
-                    <td class="text-right"><button class="btn btn-ghost btn-sm" data-edit-wh="${w.id}">Editar</button></td>
+                    <td class="text-right"><button class="btn btn-ghost btn-sm" data-edit-wh="${esc(w.id)}">Editar</button></td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -737,11 +1114,11 @@ export function mountAdminView(container, navigateOrUser) {
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Nombre *</label><input class="input" id="w-name" value="${w.name || ''}" /></div>
-            <div><label class="label label-xs">Código *</label><input class="input" id="w-code" value="${w.code || ''}" placeholder="VIB" /></div>
+            <div><label class="label label-xs">Nombre *</label><input class="input" id="w-name" value="${esc(w.name || '')}" /></div>
+            <div><label class="label label-xs">Código *</label><input class="input" id="w-code" value="${esc(w.code || '')}" placeholder="VIB" /></div>
           </div>
-          <div><label class="label label-xs">Dirección</label><input class="input" id="w-address" value="${w.address || ''}" /></div>
-          <div><label class="label label-xs">Teléfono</label><input class="input" id="w-phone" value="${w.phone || ''}" /></div>
+          <div><label class="label label-xs">Dirección</label><input class="input" id="w-address" value="${esc(w.address || '')}" /></div>
+          <div><label class="label label-xs">Teléfono</label><input class="input" id="w-phone" value="${esc(w.phone || '')}" /></div>
           <div class="grid grid-cols-2 gap-2">
             <div><label class="label label-xs">Comisión vendedor (%)</label><input class="input" type="number" step="0.1" id="w-commission" value="${w.sellerCommissionPercent ?? 3}" /></div>
             <div><label class="label label-xs">Moneda comisión</label>
@@ -751,13 +1128,14 @@ export function mountAdminView(container, navigateOrUser) {
               </select>
             </div>
           </div>
-          <div><label class="label label-xs">PIN (vacío = acceso libre)</label><input class="input" id="w-pin" value="${w.pin || ''}" placeholder="2025" /></div>
+          <div><label class="label label-xs">PIN (vacío = acceso libre, mínimo 4 dígitos)</label><input class="input" id="w-pin" value="${esc(w.pin || '')}" placeholder="2025" minlength="4" maxlength="8" pattern="[0-9]{4,8}" inputmode="numeric" /></div>
         </div>
       `,
       footer: `<button class="btn btn-outline" id="w-cancel">Cancelar</button><button class="btn btn-primary" id="w-save">Guardar</button>`,
     });
     document.querySelector("#w-cancel").addEventListener("click", close);
     document.querySelector("#w-save").addEventListener("click", async () => {
+      const pin = document.querySelector("#w-pin").value.trim();
       const data = {
         ...(w.id ? { id: w.id } : {}),
         name: document.querySelector("#w-name").value.trim(),
@@ -766,10 +1144,14 @@ export function mountAdminView(container, navigateOrUser) {
         phone: document.querySelector("#w-phone").value.trim() || null,
         sellerCommissionPercent: parseFloat(document.querySelector("#w-commission").value) || 0,
         sellerCommissionCurrency: document.querySelector("#w-currency").value,
-        pin: document.querySelector("#w-pin").value.trim() || null,
+        pin: pin || null,
         active: true,
       };
       if (!data.name || !data.code) { toast("Nombre y código son obligatorios", "error"); return; }
+      if (data.pin && !/^\d{4,8}$/.test(data.pin)) {
+        toast("El PIN debe tener entre 4 y 8 dígitos numéricos", "error");
+        return;
+      }
       await saveWarehouse(data);
       toast("Almacén guardado", "success");
       close();
@@ -794,12 +1176,12 @@ export function mountAdminView(container, navigateOrUser) {
               <tbody>
                 ${managers.map((m) => `
                   <tr>
-                    <td class="font-medium">${m.name}</td>
-                    <td><span class="badge badge-outline">${m.code}</span></td>
-                    <td class="text-xs">${m.phone || '—'}</td>
+                    <td class="font-medium">${esc(m.name)}</td>
+                    <td><span class="badge badge-outline">${esc(m.code)}</span></td>
+                    <td class="text-xs">${esc(m.phone || '—')}</td>
                     <td class="text-right text-xs">${m.commission}%</td>
                     <td class="text-center">${m.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
-                    <td class="text-right"><button class="btn btn-ghost btn-sm" data-edit-mg="${m.id}">Editar</button></td>
+                    <td class="text-right"><button class="btn btn-ghost btn-sm" data-edit-mg="${esc(m.id)}">Editar</button></td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -825,12 +1207,12 @@ export function mountAdminView(container, navigateOrUser) {
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Nombre *</label><input class="input" id="m-name" value="${m.name || ''}" /></div>
-            <div><label class="label label-xs">Código (sigla) *</label><input class="input" id="m-code" value="${m.code || ''}" placeholder="CM" /></div>
+            <div><label class="label label-xs">Nombre *</label><input class="input" id="m-name" value="${esc(m.name || '')}" /></div>
+            <div><label class="label label-xs">Código (sigla) *</label><input class="input" id="m-code" value="${esc(m.code || '')}" placeholder="CM" /></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Teléfono</label><input class="input" id="m-phone" value="${m.phone || ''}" /></div>
-            <div><label class="label label-xs">Email</label><input class="input" type="email" id="m-email" value="${m.email || ''}" /></div>
+            <div><label class="label label-xs">Teléfono</label><input class="input" id="m-phone" value="${esc(m.phone || '')}" /></div>
+            <div><label class="label label-xs">Email</label><input class="input" type="email" id="m-email" value="${esc(m.email || '')}" /></div>
           </div>
           <div><label class="label label-xs">Comisión % (informativo)</label><input class="input" type="number" step="0.1" id="m-commission" value="${m.commission ?? 5}" /></div>
         </div>
@@ -873,13 +1255,13 @@ export function mountAdminView(container, navigateOrUser) {
               <tbody>
                 ${cards.map((c) => `
                   <tr>
-                    <td class="font-medium">${c.name}</td>
-                    <td class="text-xs font-mono">${c.number}</td>
-                    <td><span class="badge badge-outline">${c.bank || '—'}</span></td>
+                    <td class="font-medium">${esc(c.name)}</td>
+                    <td class="text-xs font-mono">${esc(c.number)}</td>
+                    <td><span class="badge badge-outline">${esc(c.bank || '—')}</span></td>
                     <td class="text-center">${c.active ? `<span class="badge badge-accent">Activa</span>` : `<span class="badge">Inactiva</span>`}</td>
                     <td class="text-right">
-                      <button class="btn btn-ghost btn-sm" data-edit-card="${c.id}">Editar</button>
-                      <button class="btn btn-ghost btn-sm text-danger" data-delete-card="${c.id}">${icon("trash", 12)}</button>
+                      <button class="btn btn-ghost btn-sm" data-edit-card="${esc(c.id)}">Editar</button>
+                      <button class="btn btn-ghost btn-sm text-danger" data-delete-card="${esc(c.id)}">${icon("trash", 12)}</button>
                     </td>
                   </tr>
                 `).join('')}
@@ -914,8 +1296,8 @@ export function mountAdminView(container, navigateOrUser) {
       title: isNew ? "Nueva tarjeta" : "Editar tarjeta",
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
-          <div><label class="label label-xs">Nombre *</label><input class="input" id="c-name" value="${c.name || ''}" placeholder="BPA Principal" /></div>
-          <div><label class="label label-xs">Número *</label><input class="input" id="c-number" value="${c.number || ''}" placeholder="9225-6789-0123-4567" /></div>
+          <div><label class="label label-xs">Nombre *</label><input class="input" id="c-name" value="${esc(c.name || '')}" placeholder="BPA Principal" /></div>
+          <div><label class="label label-xs">Número *</label><input class="input" id="c-number" value="${esc(c.number || '')}" placeholder="9225-6789-0123-4567" /></div>
           <div><label class="label label-xs">Banco</label>
             <select class="select" id="c-bank">
               <option value="">(selecciona)</option>
@@ -982,7 +1364,7 @@ export function mountAdminView(container, navigateOrUser) {
                   <tbody>
                     ${commissions.map((c) => `
                       <tr>
-                        <td class="font-medium">${c.warehouseName} <span class="badge badge-outline">${c.warehouseCode}</span></td>
+                        <td class="font-medium">${esc(c.warehouseName)} <span class="badge badge-outline">${esc(c.warehouseCode)}</span></td>
                         <td class="text-center">${c.salesCount}</td>
                         <td class="text-right">${formatMoney(c.totalSales, "USD")}</td>
                         <td class="text-right">${c.commissionPercent}%</td>
@@ -1155,10 +1537,10 @@ export function mountAdminView(container, navigateOrUser) {
                     ${movements.map((m) => `
                       <tr>
                         <td class="text-xs">${formatDate(m.createdAt)}</td>
-                        <td><span class="badge badge-outline">${STOCK_REASON_LABELS[m.reason] || m.reason}</span></td>
-                        <td class="text-xs">${m.productName || m.productId}</td>
+                        <td><span class="badge badge-outline">${STOCK_REASON_LABELS[m.reason] || esc(m.reason)}</span></td>
+                        <td class="text-xs">${esc(m.productName || m.productId)}</td>
                         <td class="text-right font-mono ${m.delta > 0 ? 'text-accent' : 'text-danger'}">${m.delta > 0 ? '+' : ''}${m.delta}</td>
-                        <td class="text-xs text-muted">${m.note || '—'}</td>
+                        <td class="text-xs text-muted">${esc(m.note || '—')}</td>
                       </tr>
                     `).join('')}
                   </tbody>
@@ -1284,7 +1666,7 @@ export function mountAdminView(container, navigateOrUser) {
                   const costPrice = ps.product.costPrice || (ps.product.salePrice * 0.7);
                   return `
                     <tr>
-                      <td class="font-medium text-xs">${ps.product.name}</td>
+                      <td class="font-medium text-xs">${esc(ps.product.name)}</td>
                       <td class="text-center">${ps.totalQty}</td>
                       <td class="text-right text-xs">${formatMoney(costPrice, "USD")}</td>
                       <td class="text-right text-xs">${formatMoney(ps.product.salePrice, "USD")}</td>

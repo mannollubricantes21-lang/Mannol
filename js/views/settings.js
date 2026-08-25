@@ -5,7 +5,7 @@
 import { getStore } from "../store.js";
 import { getSettings, saveSettings, syncElToqueRates, subscribeRates, listWarehouses, saveWarehouse } from "../db.js";
 import { formatDate } from "../currency.js";
-import { toast, icon, showModal } from "../ui.js";
+import { toast, icon, showModal, esc } from "../ui.js";
 
 export function mountSettingsView(container, navigate) {
   const store = getStore();
@@ -34,7 +34,7 @@ export function mountSettingsView(container, navigate) {
         <div class="card">
           <div class="card-header"><h2 class="card-title flex items-center gap-2">${icon("store", 16)} Negocio</h2></div>
           <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
-            <div><label class="label">Nombre del negocio</label><input class="input" id="s-businessName" value="${form.businessName || ""}" /></div>
+            <div><label class="label">Nombre del negocio</label><input class="input" id="s-businessName" value="${esc(form.businessName || "")}" /></div>
           </div>
         </div>
 
@@ -72,9 +72,9 @@ export function mountSettingsView(container, navigate) {
               <div class="grid grid-cols-4 gap-2 mt-2">
                 ${rates.map((r) => `
                   <div class="border rounded p-2 text-center">
-                    <div class="text-xs text-muted">${r.currency}</div>
+                    <div class="text-xs text-muted">${esc(r.currency)}</div>
                     <div class="font-bold">${r.rateUSD.toFixed(4)}</div>
-                    <span class="badge" style="font-size:0.625rem">${r.source}</span>
+                    <span class="badge" style="font-size:0.625rem">${esc(r.source)}</span>
                   </div>
                 `).join("")}
               </div>
@@ -88,10 +88,10 @@ export function mountSettingsView(container, navigate) {
             ${warehouses.map((w) => `
               <div class="flex items-center justify-between border rounded p-2">
                 <div>
-                  <div class="font-medium text-sm">${w.name} <span class="badge">${w.code}</span></div>
-                  <div class="text-xs text-muted">Comisión vendedor: ${w.sellerCommissionPercent || 0}% · ${w.sellerCommissionCurrency || "USD"}</div>
+                  <div class="font-medium text-sm">${esc(w.name)} <span class="badge">${esc(w.code)}</span></div>
+                  <div class="text-xs text-muted">Comisión vendedor: ${w.sellerCommissionPercent || 0}% · ${esc(w.sellerCommissionCurrency || "USD")}</div>
                 </div>
-                <button class="btn btn-outline btn-sm" data-edit-wh="${w.id}">Editar</button>
+                <button class="btn btn-outline btn-sm" data-edit-wh="${esc(w.id)}">Editar</button>
               </div>
             `).join("")}
             <button class="btn btn-outline btn-sm btn-block" id="new-wh">+ Nuevo almacén</button>
@@ -169,8 +169,8 @@ export function mountSettingsView(container, navigate) {
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Nombre *</label><input class="input" id="wh-name" value="${f.name}" /></div>
-            <div><label class="label label-xs">Código *</label><input class="input" id="wh-code" value="${f.code}" placeholder="ALM-01" /></div>
+            <div><label class="label label-xs">Nombre *</label><input class="input" id="wh-name" value="${esc(f.name)}" /></div>
+            <div><label class="label label-xs">Código *</label><input class="input" id="wh-code" value="${esc(f.code)}" placeholder="ALM-01" /></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
             <div><label class="label label-xs">Comisión vendedor (%)</label><input class="input" type="number" step="0.1" id="wh-vendor" value="${f.sellerCommissionPercent}" /></div>
@@ -181,9 +181,9 @@ export function mountSettingsView(container, navigate) {
               </select>
             </div>
           </div>
-          <div><label class="label label-xs">Dirección</label><input class="input" id="wh-address" value="${f.address}" /></div>
-          <div><label class="label label-xs">Teléfono</label><input class="input" id="wh-phone" value="${f.phone}" /></div>
-          <div><label class="label label-xs">PIN (vacío = acceso libre)</label><input class="input" id="wh-pin" value="${f.pin}" placeholder="2025" /></div>
+          <div><label class="label label-xs">Dirección</label><input class="input" id="wh-address" value="${esc(f.address)}" /></div>
+          <div><label class="label label-xs">Teléfono</label><input class="input" id="wh-phone" value="${esc(f.phone)}" /></div>
+          <div><label class="label label-xs">PIN (vacío = acceso libre, 4-8 dígitos)</label><input class="input" id="wh-pin" value="${esc(f.pin)}" placeholder="2025" minlength="4" maxlength="8" pattern="[0-9]{4,8}" inputmode="numeric" /></div>
         </div>
       `,
       footer: `<button class="btn btn-outline" id="wh-cancel">Cancelar</button><button class="btn btn-primary" id="wh-save">Guardar</button>`,
@@ -192,7 +192,12 @@ export function mountSettingsView(container, navigate) {
     document.querySelector("#wh-save").addEventListener("click", async () => {
       const name = document.querySelector("#wh-name").value.trim();
       const code = document.querySelector("#wh-code").value.trim();
+      const pin = document.querySelector("#wh-pin").value.trim();
       if (!name || !code) { toast("Nombre y código son obligatorios", "error"); return; }
+      if (pin && !/^\d{4,8}$/.test(pin)) {
+        toast("El PIN debe tener entre 4 y 8 dígitos numéricos", "error");
+        return;
+      }
       await saveWarehouse({
         ...(w.id ? { id: w.id } : {}),
         name, code,
@@ -200,7 +205,7 @@ export function mountSettingsView(container, navigate) {
         phone: document.querySelector("#wh-phone").value,
         sellerCommissionPercent: parseFloat(document.querySelector("#wh-vendor").value) || 0,
         sellerCommissionCurrency: document.querySelector("#wh-currency").value,
-        pin: document.querySelector("#wh-pin").value || null,
+        pin: pin || null,
         active: f.active,
       });
       toast("Almacén guardado", "success");

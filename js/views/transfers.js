@@ -5,7 +5,7 @@
 import { getStore } from "../store.js";
 import { listTransfers, listCards } from "../db.js";
 import { formatMoney, formatDate, maskCard, CARD_BRANDS, skeletonStatCard, skeletonRow } from "../currency.js";
-import { icon, toast } from "../ui.js";
+import { icon, toast, esc } from "../ui.js";
 import { exportToCSV } from "../csv-export.js";
 
 export function mountTransfersView(container, navigate) {
@@ -56,12 +56,12 @@ export function mountTransfersView(container, navigate) {
         <div class="flex gap-2 flex-wrap">
           <select class="select" id="filter-card" style="width:14rem" aria-label="Filtrar por tarjeta">
             <option value="all">Todas las tarjetas</option>
-            ${Object.entries(byCard).map(([key, c]) => `<option value="${key}" ${filterCard === key ? 'selected' : ''}>${c.name} (${c.count})</option>`).join('')}
+            ${Object.entries(byCard).map(([key, c]) => `<option value="${esc(key)}" ${filterCard === key ? 'selected' : ''}>${esc(c.name)} (${c.count})</option>`).join('')}
           </select>
           ${user?.role === "admin" ? `
             <select class="select" id="filter-warehouse" style="width:12rem" aria-label="Filtrar por almacén">
               <option value="all">Todos los almacenes</option>
-              ${(store.getState()._warehouses || []).map((w) => `<option value="${w.id}" ${filterWarehouse === w.id ? 'selected' : ''}>${w.name}</option>`).join('')}
+              ${(store.getState()._warehouses || []).map((w) => `<option value="${esc(w.id)}" ${filterWarehouse === w.id ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}
             </select>
           ` : ''}
           <button class="btn btn-outline btn-sm" id="export-csv-btn" title="Exportar transferencias a CSV" aria-label="Exportar a CSV">${icon("download", 14)} CSV</button>
@@ -89,7 +89,7 @@ export function mountTransfersView(container, navigate) {
               <div class="grid grid-cols-2 gap-2">
                 ${Object.entries(byCard).map(([key, c]) => `
                   <div class="border rounded p-2" style="border-color:var(--border)">
-                    <div class="text-xs text-muted">${c.name}</div>
+                    <div class="text-xs text-muted">${esc(c.name)}</div>
                     <div class="text-xs font-mono">${maskCard(c.number)}</div>
                     <div class="flex justify-between mt-1">
                       <span class="text-xs">${c.count} ventas</span>
@@ -112,17 +112,17 @@ export function mountTransfersView(container, navigate) {
                 <tbody>
                   ${filtered.slice(0, 100).map((t) => `
                     <tr>
-                      <td class="text-xs font-mono">${t.code}</td>
+                      <td class="text-xs font-mono">${esc(t.code)}</td>
                       <td class="text-xs">${formatDate(t.createdAt)}</td>
                       <td class="text-xs">
-                        <div>${t.cardName}</div>
+                        <div>${esc(t.cardName || '—')}</div>
                         <div class="font-mono text-muted">${maskCard(t.cardNumber)}</div>
                       </td>
-                      <td class="text-xs">${t.warehouseName || '—'}</td>
-                      <td class="text-xs">${t.managerName || '—'}</td>
-                      <td class="text-xs text-muted truncate" style="max-width:200px">${t.productsSummary || ''}</td>
+                      <td class="text-xs">${esc(t.warehouseName || '—')}</td>
+                      <td class="text-xs">${esc(t.managerName || '—')}</td>
+                      <td class="text-xs text-muted truncate" style="max-width:200px">${esc(t.productsSummary || '')}</td>
                       <td class="text-right font-bold">${formatMoney(t.transferAmount || t.totalAmount, "USD")}</td>
-                      <td class="text-center"><span class="badge ${t.status === 'COMPLETADA' ? 'badge-accent' : t.status === 'CANCELADA' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.5625rem">${t.status}</span></td>
+                      <td class="text-center"><span class="badge ${t.status === 'COMPLETADA' ? 'badge-accent' : t.status === 'CANCELADA' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.5625rem">${esc(t.status)}</span></td>
                     </tr>
                   `).join('')}
                 </tbody>

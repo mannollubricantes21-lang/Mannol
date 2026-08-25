@@ -5,7 +5,7 @@
 import { loginWithEmail } from "../auth.js";
 import { listWarehouses } from "../db.js";
 import { getStore } from "../store.js";
-import { toast, icon } from "../ui.js";
+import { toast, icon, esc } from "../ui.js";
 
 export function renderUserLoginView() {
   return `

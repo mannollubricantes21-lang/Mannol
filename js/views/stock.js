@@ -3,9 +3,9 @@
 // =====================================================
 
 import { getStore } from "../store.js";
-import { subscribeProducts, subscribeStock, adjustStock, listStock, listProducts } from "../db.js";
+import { subscribeProducts, subscribeStock, adjustStock, listStock, listProducts, listCategories } from "../db.js";
 import { formatMoney, skeletonStatCard, skeletonRow } from "../currency.js";
-import { toast, icon, showModal } from "../ui.js";
+import { toast, icon, showModal, esc } from "../ui.js";
 import { STOCK_REASONS, STOCK_REASON_LABELS } from "../types.js";
 import { exportToCSV } from "../csv-export.js";
 
@@ -13,7 +13,11 @@ export function mountStockView(container, navigate) {
   const store = getStore();
   let products = [];
   let stock = [];
+  let categories = [];
   let search = "";
+  let filterCategory = "";
+  let filterBrand = "";
+  let filterStatus = "all"; // all | low | out | ok
   let isLoading = true;
 
   function render() {
@@ -37,7 +41,7 @@ export function mountStockView(container, navigate) {
           <div class="grid md:grid-cols-3 gap-3">${skeletonStatCard(3)}</div>
           <div class="card">
             <div class="overflow-x-auto">
-              <table class="table"><thead><tr><th>Producto</th><th>Marca</th><th class=\"text-center\">Cantidad</th><th class=\"text-center\">Mínimo</th><th class=\"text-center\">Estado</th></tr></thead>
+              <table class="table"><thead><tr><th>Producto</th><th>Marca</th><th class="text-center">Cantidad</th><th class="text-center">Mínimo</th><th class="text-center">Estado</th></tr></thead>
               <tbody>${skeletonRow(5, 5)}</tbody></table>
             </div>
           </div>
@@ -49,12 +53,34 @@ export function mountStockView(container, navigate) {
     const stockMap = {};
     stock.forEach((s) => (stockMap[s.productId] = s));
 
-    const filtered = products.filter((p) =>
-      !search ||
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      (p.brand || "").toLowerCase().includes(search.toLowerCase()) ||
-      (p.sku || "").toLowerCase().includes(search.toLowerCase())
-    );
+    // Filtros combinados
+    const filtered = products.filter((p) => {
+      // Búsqueda por texto
+      if (search) {
+        const q = search.toLowerCase();
+        if (!p.name.toLowerCase().includes(q) &&
+            !(p.brand || "").toLowerCase().includes(q) &&
+            !(p.sku || "").toLowerCase().includes(q) &&
+            !(p.viscosity || "").toLowerCase().includes(q)) return false;
+      }
+      // Filtro por categoría
+      if (filterCategory && p.categoryId !== filterCategory) return false;
+      // Filtro por marca
+      if (filterBrand && p.brand !== filterBrand) return false;
+      // Filtro por estado
+      if (filterStatus !== "all") {
+        const s = stockMap[p.id];
+        const qty = s?.quantity ?? 0;
+        const min = s?.minStock || p.minStock || 5;
+        if (filterStatus === "out" && qty > 0) return false;
+        if (filterStatus === "low" && !(qty > 0 && qty <= min)) return false;
+        if (filterStatus === "ok" && qty <= min) return false;
+      }
+      return true;
+    });
+
+    // Marcas únicas
+    const uniqueBrands = Array.from(new Set(products.map((p) => p.brand).filter(Boolean))).sort();
 
     const totalUnits = stock.reduce((s, x) => s + x.quantity, 0);
     const totalValue = isAdmin ? stock.reduce((s, x) => {
@@ -69,7 +95,7 @@ export function mountStockView(container, navigate) {
         <div>
           <h1 class="text-2xl font-bold flex items-center gap-2">${icon("boxes", 24)} Inventario</h1>
           <p class="text-sm text-muted">
-            Almacén: <span class="badge badge-accent">${warehouse.name}</span> ·
+            Almacén: <span class="badge badge-accent">${esc(warehouse.name)}</span> ·
             ${products.length} productos · ${totalUnits} unidades${isAdmin ? ' · ' + formatMoney(totalValue, "USD") : ''}
           </p>
         </div>
@@ -92,11 +118,26 @@ export function mountStockView(container, navigate) {
           </div>
         </div>
 
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem">
-          <div style="position:relative;flex:1">
+        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
+          <div style="position:relative;flex:1;min-width:12rem">
             <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)" aria-hidden="true">${icon("search", 16)}</span>
-            <input class="input" placeholder="Buscar producto..." id="search-input" value="${search}" style="padding-left:2.25rem" aria-label="Buscar producto por nombre, marca o SKU" />
+            <input class="input" placeholder="Buscar por nombre, marca, SKU o viscosidad..." id="search-input" value="${esc(search)}" style="padding-left:2.25rem" aria-label="Buscar producto" />
           </div>
+          <select class="select" id="cat-filter" style="min-width:10rem" aria-label="Filtrar por categoría">
+            <option value="">Todas las categorías</option>
+            ${categories.filter(c => !c.parentId).map((c) => `<option value="${esc(c.id)}" ${filterCategory === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+          </select>
+          <select class="select" id="brand-filter" style="min-width:8rem" aria-label="Filtrar por marca">
+            <option value="">Todas las marcas</option>
+            ${uniqueBrands.map((b) => `<option value="${esc(b)}" ${filterBrand === b ? 'selected' : ''}>${esc(b)}</option>`).join('')}
+          </select>
+          <select class="select" id="status-filter" style="min-width:8rem" aria-label="Filtrar por estado">
+            <option value="all" ${filterStatus === "all" ? 'selected' : ''}>Todos los estados</option>
+            <option value="ok" ${filterStatus === "ok" ? 'selected' : ''}>Stock OK</option>
+            <option value="low" ${filterStatus === "low" ? 'selected' : ''}>Stock bajo</option>
+            <option value="out" ${filterStatus === "out" ? 'selected' : ''}>Agotados</option>
+          </select>
+          <button class="btn btn-outline btn-sm" id="clear-filters" title="Limpiar filtros" aria-label="Limpiar filtros">${icon("x", 14)}</button>
           <button class="btn btn-outline btn-sm" id="export-csv-btn" title="Exportar inventario a CSV" aria-label="Exportar inventario a CSV">${icon("download", 14)} CSV</button>
         </div>
 
@@ -105,7 +146,7 @@ export function mountStockView(container, navigate) {
             <table class="table">
               <thead><tr><th>Producto</th><th>Marca</th>${isAdmin ? '<th class="text-right">Precio</th>' : ''}<th class="text-center">Cantidad</th><th class="text-center">Mínimo</th><th class="text-center">Estado</th>${canEdit ? '<th class="text-right">Acciones</th>' : ''}</tr></thead>
               <tbody>
-                ${filtered.length === 0 ? `<tr><td colspan="${canEdit ? 7 : 6}"><div class="empty-state"><div class="empty-state-icon">${icon("boxes", 24)}</div><p class="empty-state-title">Sin productos</p><p class="empty-state-desc">No hay productos que coincidan con tu búsqueda.</p></div></td></tr>` :
+                ${filtered.length === 0 ? `<tr><td colspan="${canEdit ? 7 : 6}"><div class="empty-state"><div class="empty-state-icon">${icon("boxes", 24)}</div><p class="empty-state-title">Sin productos</p><p class="empty-state-desc">No hay productos que coincidan con los filtros.</p></div></td></tr>` :
                   filtered.map((p) => {
                     const s = stockMap[p.id];
                     const qty = s?.quantity ?? 0;
@@ -114,8 +155,8 @@ export function mountStockView(container, navigate) {
                     const isOut = qty === 0;
                     return `
                       <tr>
-                        <td class="font-medium">${p.name}<div class="text-xs text-muted">${p.sku || ''} ${p.viscosity ? '· ' + p.viscosity : ''}</div></td>
-                        <td class="text-xs">${p.brand}</td>
+                        <td class="font-medium">${esc(p.name)}<div class="text-xs text-muted">${esc(p.sku || '')} ${p.viscosity ? '· ' + esc(p.viscosity) : ''}</div></td>
+                        <td class="text-xs">${esc(p.brand)}</td>
                         ${isAdmin ? `<td class="text-right">${formatMoney(s?.localPrice || p.salePrice, "USD")}</td>` : ''}
                         <td class="text-center font-bold ${isOut ? 'text-danger' : isLow ? 'text-warning' : ''}">${qty}</td>
                         <td class="text-center text-muted">${min}</td>
@@ -124,7 +165,7 @@ export function mountStockView(container, navigate) {
                             isLow ? `<span class="badge badge-warning">${icon("alertTriangle", 12)} Bajo</span>` :
                             `<span class="badge badge-accent">OK</span>`}
                         </td>
-                        ${canEdit ? `<td class="text-right"><button class="btn btn-outline btn-sm" data-adjust="${p.id}">Ajustar</button></td>` : ''}
+                        ${canEdit ? `<td class="text-right"><button class="btn btn-outline btn-sm" data-adjust="${esc(p.id)}">Ajustar</button></td>` : ''}
                       </tr>
                     `;
                   }).join('')
@@ -132,6 +173,7 @@ export function mountStockView(container, navigate) {
               </tbody>
             </table>
           </div>
+          ${filtered.length > 0 ? `<div class="text-xs text-muted text-center" style="padding:0.5rem">Mostrando ${filtered.length} de ${products.length} productos</div>` : ''}
         </div>
 
         ${!canEdit ? `
@@ -157,6 +199,7 @@ export function mountStockView(container, navigate) {
             codigo: p.sku || '',
             nombre: p.name,
             marca: p.brand,
+            categoria: p.categoryName || '',
             viscosidad: p.viscosity || '',
             cantidad: qty,
             minimo: min,
@@ -164,7 +207,7 @@ export function mountStockView(container, navigate) {
             estado: isOut ? 'Agotado' : isLow ? 'Bajo' : 'OK',
           };
         });
-        exportToCSV(`inventario-${warehouse.code}`, rows);
+        exportToCSV(`inventario-${warehouse.code}-${new Date().toISOString().slice(0, 10)}`, rows);
         toast(`${rows.length} productos exportados`, "success");
       });
     }
@@ -176,6 +219,25 @@ export function mountStockView(container, navigate) {
         render();
         const newInput = container.querySelector("#search-input");
         if (newInput) { newInput.focus(); newInput.setSelectionRange(search.length, search.length); }
+      });
+    }
+
+    const catFilter = container.querySelector("#cat-filter");
+    if (catFilter) catFilter.addEventListener("change", (e) => { filterCategory = e.target.value; render(); });
+    const brandFilter = container.querySelector("#brand-filter");
+    if (brandFilter) brandFilter.addEventListener("change", (e) => { filterBrand = e.target.value; render(); });
+    const statusFilterEl = container.querySelector("#status-filter");
+    if (statusFilterEl) statusFilterEl.addEventListener("change", (e) => { filterStatus = e.target.value; render(); });
+    const clearBtn = container.querySelector("#clear-filters");
+    if (clearBtn) {
+      clearBtn.addEventListener("click", () => {
+        search = "";
+        filterCategory = "";
+        filterBrand = "";
+        filterStatus = "all";
+        render();
+        const newInput = container.querySelector("#search-input");
+        if (newInput) newInput.focus();
       });
     }
 
@@ -195,7 +257,7 @@ export function mountStockView(container, navigate) {
     const user = store.getState().currentUser;
 
     const close = showModal({
-      title: `Ajustar stock · ${product.name}`,
+      title: `Ajustar stock · ${esc(product.name)}`,
       size: "lg",
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
@@ -220,7 +282,7 @@ export function mountStockView(container, navigate) {
           <div><label class="label label-xs">Nuevo precio local (USD)</label><input class="input" type="number" step="0.01" id="adj-price" value="${localPrice}" /></div>
           <div><label class="label label-xs">Motivo del ajuste *</label>
             <select class="select" id="adj-reason">
-              ${STOCK_REASONS.map((r) => `<option value="${r}">${STOCK_REASON_LABELS[r]}</option>`).join('')}
+              ${STOCK_REASONS.map((r) => `<option value="${esc(r)}">${STOCK_REASON_LABELS[r]}</option>`).join('')}
             </select>
           </div>
           <div><label class="label label-xs">Nota (opcional)</label><input class="input" id="adj-note" placeholder="Ej: Conteo físico de inventario" /></div>
@@ -258,13 +320,11 @@ export function mountStockView(container, navigate) {
           await adjustStock(warehouse.id, product.id, delta, reason, note, user?.id, user?.displayName);
         }
         if (newPrice !== localPrice) {
-          // Update local price separately
           const { setStock } = await import("../db.js");
           await setStock(warehouse.id, product.id, newQty, minStock);
         }
         toast(`Stock ajustado: ${delta > 0 ? '+' : ''}${delta} unidades`, "success");
         close();
-        // Refresh local state
         stock = stock.map((s) => s.productId === product.id ? { ...s, quantity: newQty, localPrice: newPrice } : s);
         render();
       } catch (err) {
@@ -277,11 +337,11 @@ export function mountStockView(container, navigate) {
   const warehouse = store.getState().currentWarehouse;
   const unsubStock = warehouse ? subscribeStock(warehouse.id, (items) => { stock = items; isLoading = false; render(); }) : () => {};
 
-  // Also load directly for demo mode (subscribe returns immediately in demo)
   if (warehouse) {
-    Promise.all([listProducts(), listStock(warehouse.id)]).then(([prods, stk]) => {
+    Promise.all([listProducts(), listStock(warehouse.id), listCategories()]).then(([prods, stk, cats]) => {
       products = prods;
       stock = stk;
+      categories = cats;
       isLoading = false;
       render();
     });

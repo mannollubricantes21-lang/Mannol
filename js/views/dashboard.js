@@ -7,7 +7,7 @@ import { getStore } from "../store.js";
 import { subscribeSales, listWarehouses, listManagers, listCards, listCategories } from "../db.js";
 import { logout } from "../auth.js";
 import { formatMoney, formatDate, formatDateShort, skeletonCard, skeletonStatCard } from "../currency.js";
-import { toast, icon } from "../ui.js";
+import { toast, icon, esc } from "../ui.js";
 import { barChart, donutChart, legend, COLORS } from "../charts.js";
 import { mountSalesView } from "./sales.js";
 import { mountStockView } from "./stock.js";
@@ -388,12 +388,12 @@ export function mountDashboardView(container, navigate) {
                   ${sales.slice(0, 10).map((s) => `
                     <div class="flex items-center justify-between border rounded p-2 text-sm" style="border-color:var(--border)">
                       <div>
-                        <div class="font-medium">${s.code} · ${s.managerName || s.userName || '—'}</div>
+                        <div class="font-medium">${esc(s.code)} · ${esc(s.managerName || s.userName || '—')}</div>
                         <div class="text-xs text-muted">${s.items.length} items · ${formatDate(s.createdAt)}</div>
                       </div>
                       <div class="text-right">
                         <div class="font-bold">${formatMoney(s.totalAmount, "USD")}</div>
-                        <span class="badge ${s.status === "COMPLETADA" ? "badge-accent" : s.status === "CANCELADA" ? "badge-danger" : "badge-warning"}" style="font-size:0.625rem">${s.status}</span>
+                        <span class="badge ${s.status === "COMPLETADA" ? "badge-accent" : s.status === "CANCELADA" ? "badge-danger" : "badge-warning"}" style="font-size:0.625rem">${esc(s.status)}</span>
                       </div>
                     </div>
                   `).join('')}
