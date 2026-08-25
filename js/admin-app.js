@@ -32,15 +32,12 @@ async function init() {
   console.info("[Admin] Supabase configured:", configured);
 
   if (!configured) {
-    // Modo demo: verificar si hay un usuario admin en el store
-    const user = store.getState().currentUser;
-    if (!user || user.role !== "admin") {
-      renderDemoNotice(container);
-      return;
-    }
-    // Si hay admin demo, montar el panel
-    mountAdminPanel(container, user);
-    setupAdminShell(container, user);
+    // Modo demo: el panel admin NO debe ser accesible sin Supabase configurado.
+    // Antes se aceptaba el usuario demo guardado en localStorage, pero eso era
+    // un backdoor: cualquier persona que entrara a /admin.html y tuviera el
+    // usuario demo persistido podría ver el panel. Como medida de seguridad,
+    // el panel admin REQUIERE Supabase configurado + sesión real autenticada.
+    renderDemoNotice(container);
     return;
   }
 
@@ -109,17 +106,20 @@ function renderDemoNotice(container) {
         </div>
         <div class="admin-content">
           <div class="empty-state" style="padding: 4rem 1.5rem">
-            <div class="empty-state-icon">${icon("shield", 32)}</div>
-            <p class="empty-state-title">Acceso restringido</p>
-            <p class="empty-state-desc">Este panel es solo para administradores.</p>
-            <div style="margin-top: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem; max-width: 24rem; margin-left: auto; margin-right: auto;">
-              <p class="text-xs text-muted text-center">Para entrar en modo demo:</p>
+            <div class="empty-state-icon" style="color: var(--warning)">${icon("lock", 32)}</div>
+            <p class="empty-state-title">Panel admin bloqueado</p>
+            <p class="empty-state-desc">El panel admin requiere conexión a Supabase.</p>
+            <div style="margin-top: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem; max-width: 28rem; margin-left: auto; margin-right: auto;">
+              <p class="text-xs text-muted text-center">Para habilitar el acceso de administrador:</p>
               <ol style="font-size: 0.875rem; text-align: left; padding-left: 1.5rem; line-height: 1.8;">
-                <li>Ve a la <a href="./index.html" style="color: var(--primary)">app principal</a></li>
-                <li>Dale <strong>3 toques al logo MANNOL</strong></li>
-                <li>Inicia sesión con <code style="background: var(--bg-soft); padding: 0.125rem 0.375rem; border-radius: 0.25rem; font-size: 0.75rem">admin / admin123</code></li>
-                <li>Vuelve aquí y recarga esta página</li>
+                <li>Abrí el <a href="./setup.html" style="color: var(--primary); font-weight: 600">asistente de configuración</a> y conectá Supabase</li>
+                <li>Creá un usuario admin en Supabase (Authentication → Users)</li>
+                <li>Volvé a esta página e iniciá sesión con tu email y contraseña</li>
               </ol>
+              <div style="background: color-mix(in oklab, var(--warning) 8%, transparent); border: 1px solid color-mix(in oklab, var(--warning) 30%, transparent); border-radius: var(--radius); padding: 0.75rem; font-size: 0.75rem; color: var(--text-soft); line-height: 1.5; text-align: left;">
+                <strong style="color: var(--warning)">⚠ Seguridad:</strong> El panel admin solo es accesible para usuarios con rol <code>admin</code> autenticados en Supabase. Los gestores y vendedores NO pueden acceder a este panel.
+              </div>
+              <a href="./setup.html" class="btn btn-primary" style="margin-top: 0.5rem">${icon("zap", 14)} Configurar Supabase</a>
             </div>
           </div>
         </div>

@@ -35,7 +35,14 @@ function getTabFromUrl() {
 function setUrlView(view) {
   try {
     const url = new URL(window.location.href);
-    url.searchParams.set("view", view);
+    if (view === "home") {
+      // Limpiar el parámetro view en la home para que la próxima vez
+      // no se reabra en una vista previa (ej: ?view=login pegado del pasado)
+      url.searchParams.delete("view");
+      url.searchParams.delete("tab");
+    } else {
+      url.searchParams.set("view", view);
+    }
     window.history.replaceState({}, "", url.toString());
   } catch {}
 }

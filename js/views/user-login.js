@@ -140,6 +140,23 @@ export function mountUserLoginView(container, navigate) {
         store.setWarehouse(accessible.find((w) => w.active) || null);
       } catch {}
       toast(`Bienvenido, ${profile.displayName}`, "success");
+      // Si el usuario es admin, redirigir al panel admin dedicado (admin.html).
+      // Para todos los demás, ir al dashboard de vendedor.
+      if (profile.role === "admin") {
+        // Limpiar la URL antes de redirigir para que no quede ?view=login pegado
+        try {
+          const cleanUrl = new URL("./admin.html", window.location.href);
+          window.history.replaceState({}, "", cleanUrl.toString());
+        } catch {}
+        window.location.replace("./admin.html");
+        return;
+      }
+      // Limpiar el ?view=login de la URL para que no se reabra acá en recargas
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("view");
+        window.history.replaceState({}, "", url.toString());
+      } catch {}
       navigate("dashboard");
     } catch (err) {
       toast(err.message || "Error al iniciar sesión", "error");
