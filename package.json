@@ -1,0 +1,33 @@
+{
+  "name": "mannol-pos",
+  "version": "4.0.0",
+  "description": "MANNOL POS — Sistema de control de ventas y stock multi-almacén con Supabase",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint js/",
+    "format": "prettier --write \"js/**/*.{js,css}\"",
+    "format:check": "prettier --check \"js/**/*.{js,css}\"",
+    "validate": "node -c js/app.js && node -c js/admin-app.js && node -c sw.js"
+  },
+  "keywords": [
+    "pos",
+    "supabase",
+    "pwa",
+    "inventory",
+    "sales",
+    "mannol"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "vitest": "^1.6.0",
+    "@vitest/ui": "^1.6.0",
+    "@vitest/coverage-v8": "^1.6.0",
+    "jsdom": "^24.0.0",
+    "eslint": "^9.6.0",
+    "prettier": "^3.3.2"
+  }
+}

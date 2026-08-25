@@ -9,6 +9,205 @@
 // API surface is identical to the old firestore.js so views
 // don't need changes.
 // =====================================================
+//
+// JSDoc typedefs for the data model
+/**
+ * @typedef {Object} Warehouse
+ * @property {string} id - UUID
+ * @property {string} name
+ * @property {string} code
+ * @property {string} [address]
+ * @property {string} [phone]
+ * @property {boolean} active
+ * @property {string} [pin] - 4-8 digit numeric
+ * @property {number} sellerCommissionPercent
+ * @property {"USD"|"MN"} sellerCommissionCurrency
+ * @property {number} createdAt
+ */
+
+/**
+ * @typedef {Object} User
+ * @property {string} id
+ * @property {string} authUid
+ * @property {string} username
+ * @property {string} displayName
+ * @property {string} email
+ * @property {"admin"|"gestor"|"vendedor"|"warehouse"|"empleado_pin"} role
+ * @property {boolean} active
+ * @property {string} [warehouseId]
+ * @property {string[]} [warehouseIds]
+ * @property {string} [warehouseName]
+ * @property {string} [warehouseCode]
+ * @property {number} [commissionRate]
+ */
+
+/**
+ * @typedef {Object} Product
+ * @property {string} id
+ * @property {string} name
+ * @property {string} brand
+ * @property {string} [sku]
+ * @property {string} [viscosity]
+ * @property {number} [volumeLiters]
+ * @property {string} [categoryId]
+ * @property {string} [categoryName]
+ * @property {string} [subcategoryId]
+ * @property {string} [description]
+ * @property {number} costPrice
+ * @property {number} salePrice
+ * @property {number} minStock
+ * @property {number} gestorCommission
+ * @property {"USD"|"MN"} gestorCommissionCurrency
+ * @property {number} vendorCommission
+ * @property {"USD"|"MN"} vendorCommissionCurrency
+ * @property {string} [imageUrl]
+ * @property {boolean} active
+ * @property {number} [unitsPerBox]
+ * @property {Array<{minBoxes:number,maxBoxes:?number,pricePerUnit:number,vendorCommission:number,gestorCommission:number}>} [wholesaleTiers]
+ */
+
+/**
+ * @typedef {Object} SaleItem
+ * @property {string} productId
+ * @property {string} [name]
+ * @property {string} [productName]
+ * @property {string} [brand]
+ * @property {number} quantity
+ * @property {number} unitPrice
+ * @property {number} subtotal
+ * @property {boolean} [isWholesale]
+ * @property {number} [boxes]
+ * @property {number} [pricePerBox]
+ * @property {number} [vendorCommissionPerBox]
+ * @property {number} [gestorCommissionPerBox]
+ * @property {number} [gestorCommission]
+ * @property {"USD"|"MN"} [gestorCommissionCurrency]
+ * @property {number} [vendorCommission]
+ * @property {"USD"|"MN"} [vendorCommissionCurrency]
+ */
+
+/**
+ * @typedef {Object} Sale
+ * @property {string} id
+ * @property {string} code
+ * @property {string} [clientRef] - UUID for idempotency
+ * @property {string} warehouseId
+ * @property {string} warehouseName
+ * @property {string} warehouseCode
+ * @property {string} userId
+ * @property {string} userName
+ * @property {string} [managerId]
+ * @property {string} [managerName]
+ * @property {string} [managerCode]
+ * @property {string} [customerName]
+ * @property {SaleItem[]} items
+ * @property {number} totalAmount
+ * @property {number} totalUsd
+ * @property {Array<{currency:string,amount:number,amountUSD:number,exchangeRate:number}>} payments
+ * @property {boolean} isMultiCurrency
+ * @property {"SINGLE"|"MULTI"} paymentMode
+ * @property {"USD"|"MN"|"EUR"|"TRANSFERENCIA"} currency
+ * @property {number} paidUsd
+ * @property {number} paidMn
+ * @property {number} paidEur
+ * @property {number} paidTransfer
+ * @property {"EFECTIVO"|"TRANSFERENCIA"} [paymentMethod]
+ * @property {string} [cardId]
+ * @property {string} [cardNumber]
+ * @property {string} [cardName]
+ * @property {number} [transferAmount]
+ * @property {string} [note]
+ * @property {"PENDIENTE"|"COMPLETADA"|"CANCELADA"} status
+ * @property {number} [completedAt]
+ * @property {number} [cancelledAt]
+ * @property {string} [cancelReason]
+ * @property {number} gestorCommissionUsd
+ * @property {number} gestorCommissionMn
+ * @property {number} vendorCommissionUsd
+ * @property {number} vendorCommissionMn
+ * @property {"RETAIL"|"WHOLESALE"} saleType
+ * @property {number} [boxes]
+ * @property {number} [pricePerBox]
+ * @property {number} [vendorCommissionPerBox]
+ * @property {number} [gestorCommissionPerBox]
+ * @property {number} createdAt
+ * @property {number} [syncedAt]
+ */
+
+/**
+ * @typedef {Object} StockMovement
+ * @property {string} id
+ * @property {string} warehouseId
+ * @property {string} productId
+ * @property {string} [productName]
+ * @property {number} delta
+ * @property {"AJUSTE_MANUAL"|"INVENTARIO"|"MERMA"|"DEVOLUCION"|"VENTA"|"CANCELACION"|"REABRIR"} reason
+ * @property {string} [note]
+ * @property {string} [userId]
+ * @property {string} [userName]
+ * @property {number} createdAt
+ */
+
+/**
+ * @typedef {Object} Stock
+ * @property {string} id - composite: `${warehouseId}_${productId}`
+ * @property {string} warehouseId
+ * @property {string} productId
+ * @property {number} quantity
+ * @property {number} [localPrice]
+ * @property {number} minStock
+ * @property {number} updatedAt
+ */
+
+/**
+ * @typedef {Object} Card
+ * @property {string} id
+ * @property {string} name
+ * @property {string} number
+ * @property {"BPA"|"BANDEC"|"BANMET"} [bank]
+ * @property {boolean} active
+ */
+
+/**
+ * @typedef {Object} Manager
+ * @property {string} id
+ * @property {string} name
+ * @property {string} code - 2-3 char sigla
+ * @property {string} [phone]
+ * @property {string} [email]
+ * @property {number} commission
+ * @property {boolean} active
+ */
+
+/**
+ * @typedef {Object} Category
+ * @property {string} id
+ * @property {string} name
+ * @property {string} slug
+ * @property {string} color
+ * @property {string} [icon]
+ * @property {string} [parentId]
+ * @property {number} sortOrder
+ * @property {boolean} active
+ */
+
+/**
+ * @typedef {Object} Rate
+ * @property {string} id - currency code
+ * @property {"USD"|"MN"|"EUR"|"TRANSFERENCIA"} currency
+ * @property {number} rateUSD
+ * @property {"manual"|"api"} source
+ * @property {number} updatedAt
+ */
+
+/**
+ * @typedef {Object} Settings
+ * @property {string} pinCode - 4-6 digit numeric
+ * @property {boolean} elToqueEnabled
+ * @property {number} elToqueMarkup
+ * @property {string} businessName
+ * @property {number} [lastRateSync]
+ */
 
 import {
   getSupabase,
@@ -155,6 +354,10 @@ function subscribeTable({ channelName, table, filter, order, fn, demoData, isDem
 // ============ Settings ============
 // =====================================================
 
+/**
+ * Get the singleton settings row.
+ * @returns {Promise<Settings>}
+ */
 export async function getSettings() {
   const demo = await isDemo();
   if (demo) return { ...DEFAULT_SETTINGS };
@@ -178,6 +381,11 @@ export async function getSettings() {
   }
 }
 
+/**
+ * Save settings (singleton, id='global').
+ * @param {Partial<Settings>} settings
+ * @returns {Promise<void>}
+ */
 export async function saveSettings(settings) {
   const s = await sb();
   if (!s) return;
@@ -194,6 +402,9 @@ export async function saveSettings(settings) {
 // ============ Warehouses ============
 // =====================================================
 
+/**
+ * @returns {Promise<Warehouse[]>}
+ */
 export async function listWarehouses() {
   const demo = await isDemo();
   if (demo) return DEMO_WAREHOUSES;
@@ -209,6 +420,11 @@ export async function listWarehouses() {
   }
 }
 
+/**
+ * Subscribe to warehouse changes (realtime).
+ * @param {(warehouses: Warehouse[]) => void} cb
+ * @returns {() => void} unsubscribe
+ */
 export function subscribeWarehouses(cb) {
   return subscribeTable({
     channelName: "warehouses-ch",
@@ -220,6 +436,10 @@ export function subscribeWarehouses(cb) {
   });
 }
 
+/**
+ * @param {Partial<Warehouse>} w
+ * @returns {Promise<string>} warehouse id
+ */
 export async function saveWarehouse(w) {
   const s = await sb();
   if (!s) return "demo-id";
@@ -239,6 +459,10 @@ export async function saveWarehouse(w) {
   }
 }
 
+/**
+ * @param {string} id - warehouse id
+ * @returns {Promise<void>}
+ */
 export async function deleteWarehouse(id) {
   const s = await sb();
   if (!s) return;
@@ -254,6 +478,9 @@ export async function deleteWarehouse(id) {
 // ============ Users ============
 // =====================================================
 
+/**
+ * @returns {Promise<User[]>}
+ */
 export async function listUsers() {
   const demo = await isDemo();
   if (demo) {
@@ -275,6 +502,10 @@ export async function listUsers() {
   }
 }
 
+/**
+ * @param {string} email
+ * @returns {Promise<User|null>}
+ */
 export async function getUserByEmail(email) {
   const s = await sb();
   if (!s) return null;
@@ -288,6 +519,12 @@ export async function getUserByEmail(email) {
   }
 }
 
+/**
+ * Save a user. If `u.id` is set, updates; otherwise creates.
+ * If `u.password` is set, creates auth.users via RPC.
+ * @param {Partial<User> & {password?: string}} u
+ * @returns {Promise<string>} user id
+ */
 export async function saveUser(u) {
   const s = await sb();
   if (!s) return "demo-id";
@@ -335,6 +572,11 @@ export async function saveUser(u) {
   }
 }
 
+/**
+ * Soft-delete a user (deactivates profile + bans auth user).
+ * @param {string} id - user id
+ * @returns {Promise<void>}
+ */
 export async function deleteUser(id) {
   const s = await sb();
   if (!s) return;
@@ -448,6 +690,11 @@ export async function deleteSubcategory(id) {
 // ============ Products ============
 // =====================================================
 
+/**
+ * Subscribe to product changes.
+ * @param {(products: Product[]) => void} cb
+ * @returns {() => void} unsubscribe
+ */
 export function subscribeProducts(cb) {
   let unsub = noopUnsub;
   (async () => {
@@ -479,10 +726,27 @@ export function subscribeProducts(cb) {
   return () => unsub();
 }
 
+/**
+ * Save a product. Replaces old image in storage if URL changes.
+ * @param {Partial<Product>} p
+ * @returns {Promise<string>} product id
+ */
 export async function saveProduct(p) {
   const s = await sb();
   if (!s) return "demo-id";
   try {
+    // Detectar imagen reemplazada para borrar la huérfana
+    if (p.id && p.imageUrl) {
+      try {
+        const { data: existing } = await s.from("products").select("image_url").eq("id", p.id).maybeSingle();
+        if (existing?.image_url && existing.image_url !== p.imageUrl) {
+          await deleteStorageImageByUrl(s, existing.image_url);
+        }
+      } catch (cleanupErr) {
+        console.warn("[saveProduct] image cleanup check failed:", cleanupErr);
+      }
+    }
+
     const r = toRow({ ...p, createdAt: p.createdAt || Date.now() });
     if (p.id) {
       const { error } = await s.from("products").update(r).eq("id", p.id);
@@ -498,10 +762,26 @@ export async function saveProduct(p) {
   }
 }
 
+/**
+ * Delete a product and its image in storage.
+ * @param {string} id - product id
+ * @returns {Promise<void>}
+ */
 export async function deleteProduct(id) {
   const s = await sb();
   if (!s) return;
   try {
+    // 1. Obtener la imagen antes de borrar el producto, para limpiar storage
+    try {
+      const { data: existing } = await s.from("products").select("image_url").eq("id", id).maybeSingle();
+      if (existing?.image_url) {
+        await deleteStorageImageByUrl(s, existing.image_url);
+      }
+    } catch (cleanupErr) {
+      console.warn("[deleteProduct] image cleanup check failed:", cleanupErr);
+    }
+
+    // 2. Borrar el producto (cascada borra stock, sales, etc.)
     const { error } = await s.from("products").delete().eq("id", id);
     if (error) throw error;
   } catch (err) {
@@ -509,6 +789,42 @@ export async function deleteProduct(id) {
   }
 }
 
+/**
+ * Borra una imagen del bucket `products` de Supabase Storage a partir de su URL pública.
+ * Solo borra URLs del propio Supabase (no URLs externas).
+ * Si la RLS bloquea (no admin), ignora silenciosamente.
+ */
+async function deleteStorageImageByUrl(s, imageUrl) {
+  if (!imageUrl || typeof imageUrl !== "string") return;
+  if (!imageUrl.includes("/storage/v1/object/")) return; // URL externa, ignorar
+  if (!imageUrl.includes("/products/")) return; // no es del bucket products, ignorar
+
+  try {
+    // Extraer el path del archivo (después de "/products/")
+    const marker = "/products/";
+    const idx = imageUrl.indexOf(marker);
+    if (idx === -1) return;
+    const filePath = imageUrl.substring(idx + marker.length).split("?")[0]; // quitar query string
+    if (!filePath) return;
+
+    const { error } = await s.storage.from("products").remove([filePath]);
+    if (error) {
+      // Si la RLS bloquea (no admin), no es fatal
+      if (error.message?.includes("permission") || error.statusCode === "403") {
+        console.warn("[deleteStorageImage] RLS blocked — admin needs to delete manually:", filePath);
+        return;
+      }
+      throw error;
+    }
+    console.info(`[deleteStorageImage] Removed ${filePath}`);
+  } catch (err) {
+    console.warn(`[deleteStorageImage] Failed to remove image: ${err.message}`);
+  }
+}
+
+/**
+ * @returns {Promise<Product[]>}
+ */
 export async function listProducts() {
   const demo = await isDemo();
   if (demo) return DEMO_PRODUCTS;
@@ -523,6 +839,9 @@ export async function listProducts() {
   }
 }
 
+/**
+ * @returns {Promise<Category[]>}
+ */
 export async function listCategories() {
   const demo = await isDemo();
   if (demo) return DEMO_CATEGORIES;
@@ -542,10 +861,22 @@ export async function listCategories() {
 // ============ Stock ============
 // =====================================================
 
+/**
+ * Build composite stock doc id.
+ * @param {string} warehouseId
+ * @param {string} productId
+ * @returns {string} `${warehouseId}_${productId}`
+ */
 export function stockDocId(warehouseId, productId) {
   return `${warehouseId}_${productId}`;
 }
 
+/**
+ * Subscribe to stock changes for a warehouse.
+ * @param {string} warehouseId
+ * @param {(stock: Stock[]) => void} cb
+ * @returns {() => void} unsubscribe
+ */
 export function subscribeStock(warehouseId, cb) {
   let unsub = noopUnsub;
   (async () => {
@@ -580,6 +911,14 @@ export function subscribeStock(warehouseId, cb) {
   return () => unsub();
 }
 
+/**
+ * Set stock directly (upsert).
+ * @param {string} warehouseId
+ * @param {string} productId
+ * @param {number} quantity
+ * @param {number} [minStock=0]
+ * @returns {Promise<void>}
+ */
 export async function setStock(warehouseId, productId, quantity, minStock = 0) {
   const s = await sb();
   if (!s) return;
@@ -593,6 +932,17 @@ export async function setStock(warehouseId, productId, quantity, minStock = 0) {
   }
 }
 
+/**
+ * Adjust stock atomically via RPC (with audit trail).
+ * @param {string} warehouseId
+ * @param {string} productId
+ * @param {number} delta - can be positive or negative
+ * @param {"AJUSTE_MANUAL"|"INVENTARIO"|"MERMA"|"DEVOLUCION"|"VENTA"|"CANCELACION"|"REABRIR"} reason
+ * @param {string} [note]
+ * @param {string} [userId]
+ * @param {string} [userName]
+ * @returns {Promise<void>}
+ */
 export async function adjustStock(warehouseId, productId, delta, reason = "AJUSTE_MANUAL", note = null, userId = null, userName = null) {
   const s = await sb();
   if (!s) return;
@@ -613,6 +963,10 @@ export async function adjustStock(warehouseId, productId, delta, reason = "AJUST
   }
 }
 
+/**
+ * @param {string} [warehouseId] - optional filter
+ * @returns {Promise<Stock[]>}
+ */
 export async function listStock(warehouseId) {
   const demo = await isDemo();
   if (demo) return warehouseId ? DEMO_STOCK.filter((s) => s.warehouseId === warehouseId) : DEMO_STOCK;
@@ -629,6 +983,10 @@ export async function listStock(warehouseId) {
   }
 }
 
+/**
+ * @param {{warehouseId?: string, productId?: string, limit?: number}} [filters]
+ * @returns {Promise<StockMovement[]>}
+ */
 export async function listStockMovements(filters = {}) {
   const demo = await isDemo();
   if (demo) return [];
@@ -652,6 +1010,12 @@ export async function listStockMovements(filters = {}) {
 // ============ Sales ============
 // =====================================================
 
+/**
+ * Subscribe to sales changes.
+ * @param {(sales: Sale[]) => void} cb
+ * @param {{warehouseId?: string, userId?: string, managerId?: string, from?: number, to?: number, status?: string}} [filters]
+ * @returns {() => void} unsubscribe
+ */
 export function subscribeSales(cb, filters = {}) {
   let unsub = noopUnsub;
   (async () => {
@@ -701,6 +1065,10 @@ export function subscribeSales(cb, filters = {}) {
   return () => unsub();
 }
 
+/**
+ * @param {{warehouseId?: string, userId?: string, managerId?: string, from?: number, to?: number, status?: string}} [filters]
+ * @returns {Promise<Sale[]>}
+ */
 export async function listSales(filters = {}) {
   const demo = await isDemo();
   if (demo) {
@@ -734,6 +1102,11 @@ export async function listSales(filters = {}) {
   }
 }
 
+/**
+ * Save a sale (idempotent via clientRef unique constraint).
+ * @param {Sale} sale
+ * @returns {Promise<void>}
+ */
 export async function saveSale(sale) {
   const s = await sb();
   if (!s) return;
@@ -755,6 +1128,15 @@ export async function saveSale(sale) {
   }
 }
 
+/**
+ * Change sale status atomically (handles stock deduction/restoration via RPC).
+ * @param {string} saleId
+ * @param {"PENDIENTE"|"COMPLETADA"|"CANCELADA"} newStatus
+ * @param {string} [reason] - required for CANCELADA
+ * @param {string} [userId]
+ * @param {string} [userName]
+ * @returns {Promise<void>}
+ */
 export async function updateSaleStatus(saleId, newStatus, reason = null, userId = null, userName = null) {
   const s = await sb();
   if (!s) return;
@@ -774,6 +1156,11 @@ export async function updateSaleStatus(saleId, newStatus, reason = null, userId 
   }
 }
 
+/**
+ * @param {string} saleId
+ * @param {string} reason
+ * @returns {Promise<void>}
+ */
 export async function cancelSale(saleId, reason) {
   return await updateSaleStatus(saleId, "CANCELADA", reason);
 }
@@ -782,6 +1169,11 @@ export async function cancelSale(saleId, reason) {
 // ============ Rates ============
 // =====================================================
 
+/**
+ * Subscribe to exchange rate changes.
+ * @param {(rates: Rate[]) => void} cb
+ * @returns {() => void} unsubscribe
+ */
 export function subscribeRates(cb) {
   let unsub = noopUnsub;
   (async () => {
@@ -821,6 +1213,10 @@ export function subscribeRates(cb) {
   return () => unsub();
 }
 
+/**
+ * @param {Partial<Rate>} rate
+ * @returns {Promise<void>}
+ */
 export async function saveRate(rate) {
   const s = await sb();
   if (!s) return;

@@ -6,7 +6,7 @@
 import { getStore } from "../store.js";
 import { subscribeSales, subscribeStock, listProducts } from "../db.js";
 import { formatMoney, formatDate } from "../currency.js";
-import { icon } from "../ui.js";
+import { icon, esc } from "../ui.js";
 
 export function mountWarehouseInterior(container, navigate) {
   const store = getStore();
@@ -81,15 +81,15 @@ export function mountWarehouseInterior(container, navigate) {
         <!-- Header del almacén -->
         <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem">
           <div style="display:flex;align-items:center;gap:0.5rem;min-width:0">
-            <span class="badge badge-outline" style="font-size:0.75rem;font-weight:700">${warehouse.code}</span>
-            <h2 class="text-lg font-bold" style="margin:0">${warehouse.name}</h2>
+            <span class="badge badge-outline" style="font-size:0.75rem;font-weight:700">${esc(warehouse.code)}</span>
+            <h2 class="text-lg font-bold" style="margin:0">${esc(warehouse.name)}</h2>
           </div>
           <button class="btn btn-ghost btn-sm" data-nav-back>${icon("arrowLeft", 14)} Volver</button>
         </div>
         ${warehouse.address || warehouse.phone ? `
           <div class="text-xs text-muted" style="display:flex;flex-direction:column;gap:0.125rem">
-            ${warehouse.address ? `<div>${icon("mapPin", 12)} ${warehouse.address}</div>` : ''}
-            ${warehouse.phone ? `<div>${icon("phone", 12)} ${warehouse.phone}</div>` : ''}
+            ${warehouse.address ? `<div>${icon("mapPin", 12)} ${esc(warehouse.address)}</div>` : ''}
+            ${warehouse.phone ? `<div>${icon("phone", 12)} ${esc(warehouse.phone)}</div>` : ''}
           </div>
         ` : ''}
 
@@ -146,7 +146,7 @@ export function mountWarehouseInterior(container, navigate) {
             <div class="grid grid-cols-2 gap-2">
               ${Object.entries(stats.byCurrency).filter(([_, v]) => v.count > 0).map(([curr, data]) => `
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0.5rem;background:var(--bg-dark);border-radius:var(--radius-sm);border:1px solid var(--border-on-dark)">
-                  <span class="text-xs text-muted-on-dark"><strong class="text-on-dark">${curr}</strong> · ${data.count} venta(s)</span>
+                  <span class="text-xs text-muted-on-dark"><strong class="text-on-dark">${esc(curr)}</strong> · ${data.count} venta(s)</span>
                   <span class="text-xs font-bold text-on-dark">${formatMoney(data.amount, curr)}</span>
                 </div>
               `).join("")}
@@ -183,8 +183,8 @@ export function mountWarehouseInterior(container, navigate) {
                 return `
                   <div style="display:flex;align-items:center;gap:0.5rem;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius)">
                     <div style="flex:1;min-width:0">
-                      <div class="text-xs font-medium truncate">${p.name}</div>
-                      <div class="text-xs text-muted">${p.brand} ${isAdmin ? '· ' + formatMoney(s?.localPrice || p.salePrice, "USD") : ''}</div>
+                      <div class="text-xs font-medium truncate">${esc(p.name)}</div>
+                      <div class="text-xs text-muted">${esc(p.brand)} ${isAdmin ? '· ' + formatMoney(s?.localPrice || p.salePrice, "USD") : ''}</div>
                     </div>
                     <span class="text-sm font-bold ${isOut ? 'text-danger' : isLow ? 'text-warning' : ''}">${qty}</span>
                     ${isOut ? '<span class="badge badge-danger" style="font-size:0.5rem">Agotado</span>' : isLow ? '<span class="badge badge-warning" style="font-size:0.5rem">Bajo</span>' : ''}
@@ -205,12 +205,12 @@ export function mountWarehouseInterior(container, navigate) {
                 ${periodSales.slice(0, 10).map((s) => `
                   <div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius)">
                     <div>
-                      <div class="text-xs font-medium">${s.code} · ${s.managerName || s.userName || '—'}</div>
+                      <div class="text-xs font-medium">${esc(s.code)} · ${esc(s.managerName || s.userName || '—')}</div>
                       <div class="text-xs text-muted">${s.items.length} items · ${formatDate(s.createdAt)}</div>
                     </div>
                     <div style="text-align:right">
                       <div class="text-sm font-bold">${formatMoney(s.totalAmount, "USD")}</div>
-                      <span class="badge ${s.currency === 'TRANSFERENCIA' ? 'badge-warning' : 'badge-accent'}" style="font-size:0.5rem">${s.currency}</span>
+                      <span class="badge ${s.currency === 'TRANSFERENCIA' ? 'badge-warning' : 'badge-accent'}" style="font-size:0.5rem">${esc(s.currency || 'USD')}</span>
                     </div>
                   </div>
                 `).join("")}

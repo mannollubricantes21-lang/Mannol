@@ -337,6 +337,15 @@ create policy "products_images_update_authed" on storage.objects
     bucket_id in ('products','images')
   );
 
+-- Solo el admin puede borrar imágenes (evita que un usuario autenticado
+-- borre imágenes de otros productos, y permite limpieza de huérfanos desde el panel).
+drop policy if exists "products_images_delete_admin" on storage.objects;
+create policy "products_images_delete_admin" on storage.objects
+  for delete to authenticated using (
+    bucket_id in ('products','images')
+    and public.is_admin()
+  );
+
 -- =====================================================
 -- Grant execute en funciones RPC públicas
 -- =====================================================

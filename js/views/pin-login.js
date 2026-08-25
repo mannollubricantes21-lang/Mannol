@@ -6,6 +6,7 @@ import { getStore } from "../store.js";
 import { getSettings, listWarehouses } from "../db.js";
 import { isSupabaseConfigured } from "../supabase.js";
 import { toast, icon } from "../ui.js";
+import { canAttemptPin, recordPinAttempt, clearPinAttempts, getPinBlockRemainingSec } from "../pin-rate-limit.js";
 
 export function renderPinLoginView() {
   const store = getStore();
@@ -109,6 +110,20 @@ export function mountPinLoginView(container, navigate) {
       return;
     }
 
+    // Rate limit: bloquear si hay muchos intentos
+    if (!canAttemptPin(warehouse.id)) {
+      const remaining = getPinBlockRemainingSec(warehouse.id);
+      const min = Math.ceil(remaining / 60);
+      errorBox.textContent = `Demasiados intentos. Intenta de nuevo en ~${min} minuto(s).`;
+      errorBox.classList.remove("hidden");
+      input.disabled = true;
+      submit.disabled = true;
+      return;
+    }
+
+    // Guard local además de disabled, para evitar race en double-click
+    if (submit._submitting) return;
+    submit._submitting = true;
     submit.disabled = true;
     submit.innerHTML = `<div class="spinner spinner-sm"></div> Entrando...`;
     errorBox.classList.add("hidden");
@@ -119,15 +134,25 @@ export function mountPinLoginView(container, navigate) {
       // BUG FIX: el campo del almacén es 'pin' (no 'pinCode' que es del settings global)
       const expectedPin = warehouse.pin || settings.pinCode;
       if (pin !== expectedPin) {
-        errorBox.textContent = "PIN incorrecto. Inténtalo de nuevo.";
+        // Registrar intento fallido
+        recordPinAttempt(warehouse.id);
+        const remaining = getPinBlockRemainingSec(warehouse.id);
+        if (remaining > 0) {
+          const min = Math.ceil(remaining / 60);
+          errorBox.textContent = `PIN incorrecto. Bloqueado por ${min} minuto(s) tras demasiados intentos.`;
+        } else {
+          errorBox.textContent = "PIN incorrecto. Inténtalo de nuevo.";
+        }
         errorBox.classList.remove("hidden");
         submit.disabled = false;
+        submit._submitting = false;
         submit.innerHTML = `${icon("lock", 14)} Entrar`;
         input.value = "";
         input.focus();
         return;
       }
-      // PIN correcto: crear sesión empleado_pin
+      // PIN correcto: limpiar historial y crear sesión
+      clearPinAttempts(warehouse.id);
       const empleado = {
         id: `pin-${Date.now()}`,
         email: "",
@@ -143,10 +168,12 @@ export function mountPinLoginView(container, navigate) {
       store.setWarehouse(warehouse);
       toast(`Bienvenido a ${warehouse.name}`, "success");
       navigate("dashboard");
+      // No resetear _submitting aquí porque la vista se desmonta
     } catch (err) {
       errorBox.textContent = "Error de conexión";
       errorBox.classList.remove("hidden");
       submit.disabled = false;
+      submit._submitting = false;
       submit.innerHTML = `${icon("lock", 14)} Entrar`;
     }
   });
