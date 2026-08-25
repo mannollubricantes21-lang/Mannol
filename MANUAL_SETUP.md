@@ -64,7 +64,12 @@ Una vez creado el proyecto en Supabase:
    
    **📄 `supabase/seed.sql`** — Inserta datos demo (4 almacenes, 12 productos, 4 gestores, 4 tarjetas).
 
-4. **Orden importante:** Si ejecutas `migration-v2.sql` o `migration-v3.sql` ANTES de `schema.sql`, dará error "relation does not exist".
+4. **Orden importante:** Ejecuta los 3 scripts en este orden estricto:
+   1. `schema.sql` (crea tablas)
+   2. `policies.sql` (crea políticas RLS + funciones de seguridad)
+   3. `seed.sql` (inserta datos demo)
+   
+   NO ejecutes ningún archivo `migration-*.sql` — ya no existen. Todo está consolidado en `policies.sql`.
 
 **Archivos a descargar:** los 3 archivos de `/supabase/` (ya están en tu repo).
 

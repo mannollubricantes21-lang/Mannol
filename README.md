@@ -55,13 +55,10 @@ Archivos Firebase eliminados: `firebase.json`, `firestore.rules`, `storage.rules
 Entra a **SQL Editor → New query** y ejecuta **en este orden exacto**:
 
 1. **`supabase/schema.sql`** → crea 14 tablas + índices + 3 RPCs + campos mayorista
-2. **`supabase/policies.sql`** → activa RLS + buckets de Storage + grants
+2. **`supabase/policies.sql`** → activa RLS + buckets de Storage + grants + funciones de seguridad (filtrado por almacén, cambio de contraseña, desactivación de usuarios)
 3. **`supabase/seed.sql`** → datos demo + productos con tiers mayorista
 
-> ⚠️ **IMPORTANTE**: Ejecuta los 3 scripts en orden. NO ejecutes `migration-v2.sql`
-> ni `migration-v3.sql` en una instalación nueva — esos son solo para actualizar
-> instalaciones existentes. Si los ejecutas sin tener las tablas creadas, dará
-> error "relation does not exist".
+> ⚠️ **IMPORTANTE**: Ejecuta los 3 scripts en orden. NO ejecutes ningún archivo `migration-*.sql` en una instalación nueva — todo está consolidado en `policies.sql`. Si los ejecutas sin tener las tablas creadas, dará error "relation does not exist".
 
 ### 3. Crear el usuario admin inicial
 
@@ -168,12 +165,11 @@ Mannol/
 │   │   └── sync-banner.js  ← Banner de estado de sync
 │   └── views/              ← 14 vistas (home, dashboard, sales, ...)
 ├── supabase/
-│   ├── schema.sql          ← 14 tablas + índices + 3 RPCs
-│   ├── policies.sql        ← RLS + buckets Storage + grants
+│   ├── schema.sql          ← 14 tablas + índices + 3 RPCs + campos mayorista
+│   ├── policies.sql        ← RLS + buckets Storage + grants + funciones seguridad
 │   ├── seed.sql            ← Datos demo iniciales
-│   ├── migration-v2.sql    ← RLS por warehouseIds + RPCs seguridad
-│   ├── migration-v3.sql    ← Campos de ventas mayoristas
-│   └── lifecycle-cleanup.sql  ← Mantenimiento mensual (manual)
+│   ├── supabase-README.md  ← Guía detallada del backend
+│   └── lifecycle-cleanup.sql  ← Mantenimiento (manual o pg_cron)
 ├── tests/                   ← Tests con Vitest
 │   ├── pin-rate-limit.test.js
 │   ├── escape-html.test.js
@@ -339,15 +335,20 @@ que usa la RPC `create_admin_user`.
 
 ### Error: "relation public.products does not exist"
 
-Estás ejecutando `migration-v3.sql` sin haber ejecutado `schema.sql` primero.
+Ejecutaste `policies.sql` o `seed.sql` antes de `schema.sql`.
 **Solución**: ejecuta `schema.sql` → `policies.sql` → `seed.sql` (en ese orden).
 
 ### Error: "column units_per_box does not exist"
 
-Tu `schema.sql` es de una versión anterior (pre-v9) que no incluye los campos mayoristas.
-**Solución**: ejecuta `migration-v3.sql` (que añade los campos con `IF NOT EXISTS`).
+Tu `schema.sql` es de una versión muy antigua (pre-v9).
+**Solución**: descarga la última versión del repo y vuelve a ejecutar `schema.sql` (incluye todos los campos mayoristas).
 
-### Las subscripciones realtime no funcionan
+### Error: "function user_can_access_warehouse does not exist"
+
+Tu `policies.sql` es de una versión muy antigua.
+**Solución**: descarga la última versión del repo y vuelve a ejecutar `policies.sql`.
+
+### Las suscripciones realtime no funcionan
 
 Verifica que las tablas estén en la publicación `supabase_realtime` (ver sección Realtime arriba).
 
@@ -355,6 +356,12 @@ Verifica que las tablas estén en la publicación `supabase_realtime` (ver secci
 
 La RPC `create_admin_user` requiere que el caller esté autenticado como admin.
 Verifica que tu usuario tenga `role = 'admin'` en la tabla `public.users`.
+
+### Un vendedor ve ventas de otros almacenes
+
+Las políticas RLS de `stock`, `stock_movements` y `sales` usan `user_can_access_warehouse()`.
+Si no usas el filtrado por almacén, asigna todos los `warehouse_ids[]` correctamente al usuario,
+o cambia las políticas para usar `is_active_user()` directamente (menos seguro).
 
 ### Error "Cannot read property of undefined" al cargar el admin
 

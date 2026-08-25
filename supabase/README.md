@@ -9,18 +9,20 @@ el backend de MANNOL POS en Supabase.
 
 Si estás empezando desde cero, ejecuta en orden en **Supabase Dashboard → SQL Editor**:
 
-1. **`schema.sql`** — Crea las 14 tablas + índices + 3 RPCs atómicas
-2. **`policies.sql`** — Activa RLS + buckets de Storage + grants
+1. **`schema.sql`** — Crea las 14 tablas + índices + 3 RPCs atómicas + campos mayoristas
+2. **`policies.sql`** — Activa RLS + buckets de Storage + grants + funciones de seguridad (filtrado por almacén, cambio de contraseña, desactivación de usuarios)
 3. **`seed.sql`** — Inserta datos demo (almacenes, productos con tiers mayorista, etc.)
 
-> ✅ Desde la versión v9, `schema.sql` ya incluye los campos de ventas mayoristas
-> (`units_per_box`, `wholesale_tiers`, `sale_type`, `boxes`, etc.). No necesitas
-> ejecutar `migration-v2.sql` ni `migration-v3.sql` en una instalación nueva.
+> ✅ **Todo está consolidado**. No hay archivos `migration-*.sql` separados.
+> `schema.sql` ya incluye los campos mayoristas (`units_per_box`, `wholesale_tiers`, `sale_type`).
+> `policies.sql` ya incluye el filtrado por almacén (`user_can_access_warehouse`) y las RPCs de seguridad (`change_user_password`, `deactivate_user`).
 
 Después de ejecutar los 3 scripts, crea el primer usuario admin:
-1. **Authentication → Users → Add user** → email + contraseña → marcar "Auto Confirm"
+
+1. **Authentication → Users → "Add user"** → email + contraseña → marcar "Auto Confirm"
 2. Copia el UUID del usuario
 3. Ejecuta este SQL (reemplaza `<ADMIN_AUTH_UID>`):
+
 ```sql
 insert into public.users (auth_uid, username, display_name, email, role, active)
 values ('<ADMIN_AUTH_UID>'::uuid, 'admin', 'Administrador', 'admin@mannol.cu', 'admin', true);
@@ -28,18 +30,18 @@ values ('<ADMIN_AUTH_UID>'::uuid, 'admin', 'Administrador', 'admin@mannol.cu', '
 
 ---
 
-## 📦 Actualizar instalación existente
+## 🧹 Mantenimiento
 
-Si ya tienes la app funcionando y quieres añadir features nuevas:
+### `lifecycle-cleanup.sql`
 
-| Quieres añadir... | Ejecuta... |
-|--------------------|------------|
-| RLS por warehouseIds + RPCs change_password/deactivate | `migration-v2.sql` |
-| Ventas mayoristas (campos wholesale) | `migration-v3.sql` |
+Script de mantenimiento manual/ejecutable vía `pg_cron` (plan Pro):
 
-> ⚠️ **IMPORTANTE**: Los scripts `migration-*.sql` verifican que las tablas existan
-> antes de ejecutarse. Si no las encuentras, te mostrarán un mensaje claro
-> indicando que primero debes ejecutar `schema.sql`.
+- Borra movimientos de stock > 2 años
+- Borra ventas canceladas > 1 año
+- Compacta las tablas (VACUUM ANALYZE)
+- Muestra el tamaño actual de cada tabla
+
+**Cuándo ejecutarlo:** cada 3-6 meses (o configurar `pg_cron` para automatizar).
 
 ---
 
@@ -47,11 +49,13 @@ Si ya tienes la app funcionando y quieres añadir features nuevas:
 
 | Archivo | Descripción | Para qué sirve |
 |---------|-------------|----------------|
-| `schema.sql` | 14 tablas + índices + 3 RPCs + campos mayorista | Instalación nueva |
-| `policies.sql` | RLS + buckets Storage + grants | Instalación nueva |
-| `seed.sql` | Datos demo + productos con tiers mayorista | Instalación nueva |
-| `migration-v2.sql` | RLS por warehouseIds + RPCs seguridad | Actualizar existente |
-| `migration-v3.sql` | Campos de ventas mayoristas | Actualizar existente |
+| `schema.sql` | 14 tablas + índices + 3 RPCs + campos mayorista | **Instalación nueva** |
+| `policies.sql` | RLS + buckets Storage + grants + funciones seguridad | **Instalación nueva** |
+| `seed.sql` | Datos demo + productos con tiers mayorista | **Instalación nueva** |
+| `lifecycle-cleanup.sql` | Mantenimiento periódico | Cada 3-6 meses |
+
+> ⚠️ Si tuvieras archivos `migration-v2.sql` o `migration-v3.sql` de una versión anterior,
+> ya no los necesitas. Su contenido fue consolidado en `policies.sql` y `schema.sql`.
 
 ---
 
@@ -68,15 +72,37 @@ cards             (tarjetas bancarias BPA/BANDEC/BANMET)
 categories        (categorías de productos)
 subcategories     (subcategorías)
 products          (catálogo + units_per_box + wholesale_tiers)
-stock             (inventario por warehouse×product)
-stock_movements   (auditoría de movimientos)
-sales             (ventas RETAIL + WHOLESALE, con client_ref unique)
+stock             (inventario por warehouse×product, filtrado por almacén)
+stock_movements   (auditoría de movimientos, filtrado por almacén)
+sales             (ventas RETAIL + WHOLESALE, con client_ref unique, filtrado por almacén)
 commission_payouts (marcas de comisión pagada)
 ```
 
 ---
 
-## Ventas mayoristas (desde v9)
+## Seguridad RLS (Row Level Security)
+
+### Funciones helper
+
+| Función | Propósito |
+|---------|-----------|
+| `is_active_user()` | Usuario autenticado y activo |
+| `is_admin()` | Usuario con rol 'admin' |
+| `is_admin_or_gestor()` | Admin o gestor activo |
+| `user_can_access_warehouse(uuid)` | ¿El usuario tiene acceso a este almacén? |
+
+### Filtrado por almacén
+
+Las tablas `stock`, `stock_movements` y `sales` usan `user_can_access_warehouse(warehouse_id)` en sus políticas RLS. Esto significa:
+
+- **Admin:** ve todos los almacenes
+- **Gestor/Vendedor:** solo ve los almacenes asignados en `users.warehouse_id` o `users.warehouse_ids[]`
+
+Si solo usas 1 almacén o no necesitas segregar por usuario, puedes reemplazar las políticas para usar `is_active_user()` directamente.
+
+---
+
+## Ventas mayoristas (incluido en schema.sql desde v9)
 
 Cada producto puede tener configuración mayorista opcional:
 
@@ -121,17 +147,30 @@ Las ventas mayoristas se guardan en la misma tabla `sales` con:
 
 ## RPCs (functions Postgres)
 
+### Funciones transaccionales (creadas en schema.sql)
+
 | Function | Descripción |
 |----------|-------------|
 | `adjust_stock(...)` | Insert/update atómico de stock + auditoría |
-| `update_sale_status()` | Cambio de estado de venta atómico (stock en tx) |
-| `create_admin_user()` | Crea auth.user + perfil público en una transacción |
-| `change_user_password()` | Admin cambia contraseña sin exponer service_role |
-| `deactivate_user()` | Soft-delete + ban automático en auth.users |
-| `is_admin()` | Helper RLS |
-| `is_active_user()` | Helper RLS |
-| `is_admin_or_gestor()` | Helper RLS |
-| `user_can_access_warehouse()` | Helper RLS por warehouseIds |
+| `update_sale_status(...)` | Cambio de estado de venta atómico (stock en tx) |
+| `create_admin_user(...)` | Crea auth.user + perfil público en una transacción |
+
+### Funciones de seguridad (creadas en policies.sql)
+
+| Function | Descripción |
+|----------|-------------|
+| `change_user_password(uuid, text)` | Admin cambia contraseña sin exponer service_role |
+| `deactivate_user(uuid)` | Soft-delete + ban automático en auth.users |
+| `sync_user_warehouse_denorm()` | Trigger automático para denormalizar warehouse_name/code |
+
+### Funciones helper RLS (creadas en policies.sql)
+
+| Function | Descripción |
+|----------|-------------|
+| `is_admin()` | TRUE si el usuario actual es admin |
+| `is_active_user()` | TRUE si el usuario actual está autenticado y activo |
+| `is_admin_or_gestor()` | TRUE si es admin o gestor |
+| `user_can_access_warehouse(uuid)` | TRUE si tiene acceso al almacén dado |
 
 ---
 
@@ -145,11 +184,15 @@ deben estar en la publicación `supabase_realtime`. Si alguna no aparece:
 ```sql
 alter publication supabase_realtime add table public.sales;
 alter publication supabase_realtime add table public.stock;
+alter publication supabase_realtime add table public.stock_movements;
 alter publication supabase_realtime add table public.rates;
 alter publication supabase_realtime add table public.warehouses;
 alter publication supabase_realtime add table public.products;
 alter publication supabase_realtime add table public.categories;
 alter publication supabase_realtime add table public.subcategories;
+alter publication supabase_realtime add table public.users;
+alter publication supabase_realtime add table public.managers;
+alter publication supabase_realtime add table public.cards;
 ```
 
 ---
@@ -158,10 +201,13 @@ alter publication supabase_realtime add table public.subcategories;
 
 2 buckets públicos creados automáticamente:
 
-- `products` — imágenes de productos (WebP, < 5MB)
+- `products` — imágenes de productos (WebP, < 5MB, con limpieza automática al borrar producto)
 - `images` — imágenes genéricas
 
-Políticas: lectura pública, escritura autenticada.
+Políticas:
+- **Lectura:** pública (cualquiera puede ver)
+- **Escritura:** cualquier usuario autenticado
+- **Borrado:** solo admin (limpieza de huérfanos desde el panel)
 
 ---
 
@@ -188,13 +234,18 @@ que usa la RPC `create_admin_user`.
 
 ### Error: "relation public.products does not exist"
 
-Estás ejecutando `migration-v3.sql` sin haber ejecutado `schema.sql` primero.
-**Solución**: ejecuta `schema.sql` → `policies.sql` → `seed.sql` (en ese orden).
+Ejecutaste `policies.sql` o `seed.sql` antes de `schema.sql`.
+**Solución:** ejecuta `schema.sql` → `policies.sql` → `seed.sql` (en ese orden).
 
 ### Error: "column units_per_box does not exist"
 
-Tu `schema.sql` es de una versión anterior (pre-v9) que no incluye los campos mayoristas.
-**Solución**: ejecuta `migration-v3.sql` (que añade los campos con `IF NOT EXISTS`).
+Tu `schema.sql` es de una versión muy antigua (pre-v9).
+**Solución:** descarga la última versión del repo y vuelve a ejecutar `schema.sql` (incluye todos los campos mayoristas).
+
+### Error: "function user_can_access_warehouse does not exist"
+
+Tu `policies.sql` es de una versión muy antigua.
+**Solución:** descarga la última versión del repo y vuelve a ejecutar `policies.sql`.
 
 ### Las subscripciones realtime no funcionan
 
@@ -204,3 +255,9 @@ Verifica que las tablas estén en la publicación `supabase_realtime` (ver secci
 
 La RPC `create_admin_user` requiere que el caller esté autenticado como admin.
 Verifica que tu usuario tenga `role = 'admin'` en la tabla `public.users`.
+
+### Un vendedor ve ventas de otros almacenes
+
+Las políticas RLS de `stock`, `stock_movements` y `sales` usan `user_can_access_warehouse()`.
+Si no usas el filtrado por almacén, asigna todos los `warehouse_ids[]` correctamente al usuario,
+o cambia las políticas para usar `is_active_user()` directamente (menos seguro).
