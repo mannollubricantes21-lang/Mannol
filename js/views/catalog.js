@@ -5,7 +5,7 @@
 import { getStore } from "../store.js";
 import { subscribeProducts, subscribeCategories, subscribeSubcategories, saveProduct, deleteProduct, saveCategory, deleteCategory, saveSubcategory, deleteSubcategory } from "../db.js";
 import { formatMoney, generateId } from "../currency.js";
-import { toast, icon, showModal, closeModal, confirmDialog } from "../ui.js";
+import { toast, icon, showModal, closeModal, confirmDialog, esc } from "../ui.js";
 import { uploadImageAsWebP, pickImageFile } from "../image-upload.js";
 
 export function mountCatalogView(container, navigate) {
@@ -45,7 +45,7 @@ export function mountCatalogView(container, navigate) {
             </div>
             <select class="select" id="category-filter" style="width:12rem">
               <option value="all">Todas las categorías</option>
-              ${categories.map((c) => `<option value="${c.id}" ${categoryFilter === c.id ? "selected" : ""}>${c.name}</option>`).join("")}
+              ${categories.map((c) => `<option value="${esc(c.id)}" ${categoryFilter === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
             </select>
             <button class="btn btn-primary" id="new-product">${icon("plus", 14)} Nuevo</button>
           </div>
@@ -62,16 +62,16 @@ export function mountCatalogView(container, navigate) {
                     return `
                       <tr>
                         <td class="font-medium flex items-center gap-2">
-                          ${p.imageUrl || p.imageURL ? `<img src="${p.imageUrl || p.imageURL}" alt="${p.name}" style="width:2rem;height:2rem;border-radius:0.25rem;object-fit:cover" />` : `<div style="width:2rem;height:2rem;border-radius:0.25rem;background:var(--bg-soft);display:flex;align-items:center;justify-content:center">${icon("tags", 12)}</div>`}
-                          ${p.name}
+                          ${p.imageUrl || p.imageURL ? `<img src="${esc(p.imageUrl || p.imageURL)}" alt="${esc(p.name)}" style="width:2rem;height:2rem;border-radius:0.25rem;object-fit:cover" />` : `<div style="width:2rem;height:2rem;border-radius:0.25rem;background:var(--bg-soft);display:flex;align-items:center;justify-content:center">${icon("tags", 12)}</div>`}
+                          ${esc(p.name)}
                         </td>
-                        <td class="text-xs text-muted">${p.sku}</td>
-                        <td class="text-xs">${cat?.name || "—"}</td>
+                        <td class="text-xs text-muted">${esc(p.sku)}</td>
+                        <td class="text-xs">${esc(cat?.name || "—")}</td>
                         <td class="text-right">${formatMoney(p.salePrice || p.priceUSD, "USD")}</td>
                         <td class="text-center"><span class="badge ${p.active ? "badge-accent" : ""}">${p.active ? "Activo" : "Inactivo"}</span></td>
                         <td class="text-right">
-                          <button class="btn btn-ghost btn-sm" data-edit-product="${p.id}">Editar</button>
-                          <button class="btn btn-ghost btn-sm text-danger" data-delete-product="${p.id}">${icon("trash", 12)}</button>
+                          <button class="btn btn-ghost btn-sm" data-edit-product="${esc(p.id)}">Editar</button>
+                          <button class="btn btn-ghost btn-sm text-danger" data-delete-product="${esc(p.id)}">${icon("trash", 12)}</button>
                         </td>
                       </tr>
                     `;
@@ -91,24 +91,24 @@ export function mountCatalogView(container, navigate) {
               return `
                 <div class="card">
                   <div class="card-header flex justify-between">
-                    <h3 class="card-title text-base">${c.icon || "📁"} ${c.name}</h3>
+                    <h3 class="card-title text-base">${esc(c.icon || "📁")} ${esc(c.name)}</h3>
                     <span class="badge">${prods.length} prod.</span>
                   </div>
                   <div class="card-content" style="display:flex;flex-direction:column;gap:0.5rem">
                     ${subs.length === 0 ? `<div class="text-xs text-muted">Sin subcategorías</div>` :
                       subs.map((s) => `
                         <div class="flex items-center justify-between text-xs">
-                          <span>${s.name}</span>
-                          <button class="btn btn-ghost btn-icon btn-sm text-danger" data-delete-sub="${s.id}">${icon("trash", 12)}</button>
+                          <span>${esc(s.name)}</span>
+                          <button class="btn btn-ghost btn-icon btn-sm text-danger" data-delete-sub="${esc(s.id)}">${icon("trash", 12)}</button>
                         </div>
                       `).join("")}
-                    <form data-sub-form="${c.id}" style="display:flex;gap:0.25rem;margin-top:0.25rem">
+                    <form data-sub-form="${esc(c.id)}" style="display:flex;gap:0.25rem;margin-top:0.25rem">
                       <input class="input" placeholder="Nueva subcategoría..." style="height:1.75rem;font-size:0.75rem" name="name" />
                       <button type="submit" class="btn btn-outline btn-sm btn-icon">${icon("plus", 12)}</button>
                     </form>
                     <div class="flex gap-2 mt-2 pt-2 border">
-                      <button class="btn btn-outline btn-sm" style="flex:1" data-edit-category="${c.id}">Editar</button>
-                      <button class="btn btn-outline btn-sm text-danger" data-delete-category="${c.id}">${icon("trash", 12)}</button>
+                      <button class="btn btn-outline btn-sm" style="flex:1" data-edit-category="${esc(c.id)}">Editar</button>
+                      <button class="btn btn-outline btn-sm text-danger" data-delete-category="${esc(c.id)}">${icon("trash", 12)}</button>
                     </div>
                   </div>
                 </div>
@@ -151,7 +151,7 @@ export function mountCatalogView(container, navigate) {
       btn.addEventListener("click", () => {
         const p = products.find((x) => x.id === btn.dataset.deleteProduct);
         if (!p) return;
-        confirmDialog(`¿Eliminar ${p.name}?`, async () => {
+        confirmDialog(`¿Eliminar ${p.name}? Esto borrará también su imagen del almacenamiento.`, async () => {
           await deleteProduct(p.id);
           toast("Producto eliminado", "success");
         });
@@ -171,7 +171,7 @@ export function mountCatalogView(container, navigate) {
       btn.addEventListener("click", () => {
         const c = categories.find((x) => x.id === btn.dataset.deleteCategory);
         if (!c) return;
-        confirmDialog(`¿Eliminar ${c.name}?`, async () => {
+        confirmDialog(`¿Eliminar la categoría "${c.name}"? Los productos asociados no se borrarán pero quedarán sin categoría.`, async () => {
           await deleteCategory(c.id);
           toast("Categoría eliminada", "success");
         });
@@ -210,15 +210,15 @@ export function mountCatalogView(container, navigate) {
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Nombre *</label><input class="input" id="p-name" value="${p.name || ""}" /></div>
-            <div><label class="label label-xs">SKU *</label><input class="input" id="p-sku" value="${p.sku || ""}" /></div>
+            <div><label class="label label-xs">Nombre *</label><input class="input" id="p-name" value="${esc(p.name || "")}" /></div>
+            <div><label class="label label-xs">SKU *</label><input class="input" id="p-sku" value="${esc(p.sku || "")}" /></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
             <div><label class="label label-xs">Categoría *</label>
-              <select class="select" id="p-category">${categories.map((c) => `<option value="${c.id}" ${p.categoryId === c.id ? "selected" : ""}>${c.name}</option>`).join("")}</select>
+              <select class="select" id="p-category">${categories.map((c) => `<option value="${esc(c.id)}" ${p.categoryId === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>
             </div>
             <div><label class="label label-xs">Subcategoría</label>
-              <select class="select" id="p-subcategory"><option value="">(opcional)</option>${subcategories.filter((s) => s.categoryId === p.categoryId).map((s) => `<option value="${s.id}" ${p.subcategoryId === s.id ? "selected" : ""}>${s.name}</option>`).join("")}</select>
+              <select class="select" id="p-subcategory"><option value="">(opcional)</option>${subcategories.filter((s) => s.categoryId === p.categoryId).map((s) => `<option value="${esc(s.id)}" ${p.subcategoryId === s.id ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>
             </div>
           </div>
           <div class="grid grid-cols-2 gap-2">
@@ -227,16 +227,16 @@ export function mountCatalogView(container, navigate) {
               <select class="select" id="p-active"><option value="true" ${p.active !== false ? "selected" : ""}>Activo</option><option value="false" ${p.active === false ? "selected" : ""}>Inactivo</option></select>
             </div>
           </div>
-          <div><label class="label label-xs">Descripción</label><input class="input" id="p-description" value="${p.description || ""}" /></div>
+          <div><label class="label label-xs">Descripción</label><input class="input" id="p-description" value="${esc(p.description || "")}" /></div>
           <div>
             <label class="label label-xs">Imagen del producto</label>
             <div style="display:flex;gap:0.5rem;align-items:center">
               <div id="p-image-preview" style="width:3rem;height:3rem;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--bg-soft);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-                ${p.imageUrl || p.imageURL ? `<img src="${p.imageUrl || p.imageURL}" style="width:100%;height:100%;object-fit:cover" />` : icon("tags", 20)}
+                ${p.imageUrl || p.imageURL ? `<img src="${esc(p.imageUrl || p.imageURL)}" style="width:100%;height:100%;object-fit:cover" />` : icon("tags", 20)}
               </div>
               <div style="flex:1;display:flex;flex-direction:column;gap:0.25rem">
                 <button type="button" class="btn btn-outline btn-sm" id="p-upload-btn">${icon("download", 12)} Subir imagen</button>
-                <input class="input" id="p-image" value="${p.imageUrl || p.imageURL || ""}" placeholder="URL o sube archivo" style="font-size:0.75rem" />
+                <input class="input" id="p-image" value="${esc(p.imageUrl || p.imageURL || "")}" placeholder="URL o sube archivo" style="font-size:0.75rem" />
                 <p class="text-xs text-muted" id="p-image-info" style="margin:0">Se convierte a WebP automáticamente</p>
               </div>
             </div>
@@ -252,7 +252,7 @@ export function mountCatalogView(container, navigate) {
     document.querySelector("#p-category").addEventListener("change", (e) => {
       const catId = e.target.value;
       const subSelect = document.querySelector("#p-subcategory");
-      subSelect.innerHTML = `<option value="">(opcional)</option>` + subcategories.filter((s) => s.categoryId === catId).map((s) => `<option value="${s.id}">${s.name}</option>`).join("");
+      subSelect.innerHTML = `<option value="">(opcional)</option>` + subcategories.filter((s) => s.categoryId === catId).map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
     });
 
     // ===== Upload de imagen con conversión a WebP =====
@@ -313,10 +313,10 @@ export function mountCatalogView(container, navigate) {
       title: isNew ? "Nueva categoría" : "Editar categoría",
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
-          <div><label class="label label-xs">Nombre *</label><input class="input" id="c-name" value="${c.name || ""}" /></div>
+          <div><label class="label label-xs">Nombre *</label><input class="input" id="c-name" value="${esc(c.name || "")}" /></div>
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Ícono (emoji)</label><input class="input" id="c-icon" value="${c.icon || ""}" placeholder="📦" /></div>
-            <div><label class="label label-xs">Orden</label><input class="input" type="number" id="c-order" value="${c.order ?? 0}" /></div>
+            <div><label class="label label-xs">Ícono (emoji)</label><input class="input" id="c-icon" value="${esc(c.icon || "")}" placeholder="📦" /></div>
+            <div><label class="label label-xs">Orden</label><input class="input" type="number" id="c-order" value="${c.order ?? c.sortOrder ?? 0}" /></div>
           </div>
         </div>
       `,

@@ -6,6 +6,7 @@
 // =====================================================
 
 const STORAGE_KEY = "almacen-pos-state-v1";
+const OFFLINE_QUEUE_MAX = 500; // tope de seguridad para no saturar localStorage
 
 const DEFAULT_STATE = {
   // Auth
@@ -206,7 +207,16 @@ class Store {
 
   // Offline queue
   enqueueOfflineSale(sale) {
-    this.setState((st) => ({ offlineQueue: [...st.offlineQueue, sale] }));
+    this.setState((st) => {
+      const queue = [...st.offlineQueue, sale];
+      // Si excede el tope, descartar las más antiguas y avisar
+      if (queue.length > OFFLINE_QUEUE_MAX) {
+        const dropped = queue.length - OFFLINE_QUEUE_MAX;
+        console.warn(`[Store] Cola offline saturada: descartando ${dropped} venta(s) antigua(s). Sincroniza antes de que se acumulen.`);
+        return { offlineQueue: queue.slice(dropped) };
+      }
+      return { offlineQueue: queue };
+    });
   }
 
   dequeueOfflineSale(id) {

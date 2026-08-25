@@ -16,10 +16,12 @@ sincronización de tasas con API elToque. PWA vanilla JS sin bundler.
 | Componente        | Tecnología                                 |
 | ----------------- | ------------------------------------------ |
 | Frontend          | Vanilla JS (ES modules) — sin bundler      |
-| Estilos           | CSS propio + sistema de variables (OKLCH)   |
+| Estilos           | CSS propio + sistema de variables (OKLCH)  |
 | Backend           | Supabase (Postgres + Auth + Storage + Realtime) |
 | Offline           | Service Worker + cola idempotente en localStorage |
 | PWA               | manifest.webmanifest + sw.js               |
+| Tests             | Vitest + jsdom                            |
+| CI                | GitHub Actions                            |
 
 ---
 
@@ -134,9 +136,17 @@ Esto permite probar el UI sin necesidad de desplegar backend.
 ```
 Mannol/
 ├── index.html              ← App shell + bootstrap
+├── admin.html              ← Panel admin (carga solo código admin)
 ├── manifest.webmanifest    ← PWA manifest
 ├── sw.js                   ← Service Worker
 ├── offline.html            ← Fallback sin conexión
+├── package.json            ← Dependencias dev (Vitest, etc)
+├── vitest.config.js        ← Configuración de tests
+├── REVIEW.md               ← Análisis completo del proyecto
+├── README.md               ← Este archivo
+├── .github/
+│   └── workflows/
+│       └── ci.yml          ← GitHub Actions (lint + test + SQL)
 ├── css/
 │   └── styles.css          ← Sistema de diseño (OKLCH + temas)
 ├── js/
@@ -144,12 +154,14 @@ Mannol/
 │   ├── supabase-config.example.js  ← Template de config
 │   ├── db.js               ← Capa DAL (reemplaza firestore.js)
 │   ├── auth.js             ← Supabase Auth wrapper
-│   ├── image-upload.js     ← Supabase Storage wrapper
+│   ├── image-upload.js     ← Supabase Storage wrapper (WebP + 5MB cap)
 │   ├── offline-sync.js     ← Cola offline idempotente
+│   ├── pin-rate-limit.js   ← Rate limit para PIN de almacén
 │   ├── store.js            ← Estado global (Zustand-like)
 │   ├── types.js            ← Constantes y defaults
 │   ├── currency.js         ← Formateo de moneda y fecha
-│   ├── ui.js               ← Toast, modal, iconos SVG
+│   ├── ui.js               ← Toast, modal, iconos SVG, escapeHtml
+│   ├── charts.js           ← Gráficos SVG inline (bar/line/donut)
 │   ├── demo-data.js        ← Datos demo
 │   ├── app.js              ← Bootstrap + router de vistas
 │   ├── components/
@@ -157,52 +169,204 @@ Mannol/
 │   └── views/              ← 14 vistas (home, dashboard, sales, ...)
 ├── supabase/
 │   ├── schema.sql          ← 14 tablas + índices + 3 RPCs
-│   ├── policies.sql        ← RLS + buckets de Storage
+│   ├── policies.sql        ← RLS + buckets Storage + grants
 │   ├── seed.sql            ← Datos demo iniciales
-│   └── README.md           ← Guía detallada del backend
-└── icons/                  ← Favicon + PWA icons
+│   ├── migration-v2.sql    ← RLS por warehouseIds + RPCs seguridad
+│   ├── migration-v3.sql    ← Campos de ventas mayoristas
+│   └── lifecycle-cleanup.sql  ← Mantenimiento mensual (manual)
+├── tests/                   ← Tests con Vitest
+│   ├── pin-rate-limit.test.js
+│   ├── escape-html.test.js
+│   ├── wholesale.test.js
+│   ├── currency.test.js
+│   ├── store-cap.test.js
+│   └── client-ref.test.js
+└── icons/                   ← Favicon + PWA icons
 ```
 
 ---
 
-## Bug fixes incluidos en esta versión
+## Comandos útiles
 
-1. **PIN de almacén no funcionaba** — `pin-login.js` leía `warehouse.pinCode`
-   pero el campo real en la BD es `pin`. Ahora lee `warehouse.pin || settings.pinCode`.
+```bash
+# Validar sintaxis de todos los archivos JS
+npm run validate
 
-2. **Inconsistencia `order` vs `sortOrder` en categorías** — `subscribeCategories`
-   usaba `order` pero `listCategories` usaba `sortOrder` (que no existía como columna).
-   Ambos usan ahora `sort_order` consistentemente. `saveCategory` acepta ambos
-   campos para backwards compat.
+# Ejecutar tests
+npm test
 
-3. **Race condition en `adjustStock`** — antes hacía read-then-write que podía
-   perder actualizaciones concurrentes. Ahora usa una RPC Postgres
-   (`adjust_stock`) que hace `INSERT ... ON CONFLICT DO UPDATE` atómicamente.
+# Tests con UI
+npm run test:ui
 
-4. **`updateSaleStatus` no transaccional** — el descuento/restauración de stock
-   se hacía en un loop en JS; si fallaba a mitad, la venta quedaba inconsistente.
-   Ahora usa la RPC `update_sale_status` que ejecuta todo en una transacción.
+# Cobertura de código
+npm run test:coverage
 
-5. **Idempotencia débil en offline-sync** — antes hacía una query + insert;
-   ahora usa `client_ref UNIQUE constraint` + `INSERT ON CONFLICT DO NOTHING`
-   para garantizar idempotencia incluso bajo concurrencia.
+# Linter
+npm run lint
 
-6. **`getWarehouseSummary` y `getWarehouseHistory` eran TODO** — estaban
-   implementados solo en modo demo. Ahora funcionan también en Supabase.
-
-7. **Imports de Firebase muertos** — `writeBatch` se importaba pero nunca se
-   usaba. Eliminado.
+# Formatear código
+npm run format
+```
 
 ---
 
-## Mejoras de diseño y UX pendientes (ZIP #2)
+## Ventas mayoristas (desde v9)
 
-- Layout responsive para desktop (la clase `.app-layout-desktop` existe
-  pero no se usa en HTML).
-- Skeleton loaders durante cargas.
-- aria-labels en botones de icono.
-- Eliminar duplicación de constantes (`types.js` vs `currency.js`).
-- Mejorar manejo de modales anidados.
+Cada producto puede tener configuración mayorista opcional:
+
+- `units_per_box`: pomos/botellas por caja (NULL = no mayorista)
+- `wholesale_tiers`: JSON con escalones de precio por cantidad
+
+Ejemplo de `wholesale_tiers`:
+```json
+[
+  {
+    "minBoxes": 1,
+    "maxBoxes": 5,
+    "pricePerUnit": 22,
+    "vendorCommission": 0.50,
+    "gestorCommission": 0.30
+  },
+  {
+    "minBoxes": 6,
+    "maxBoxes": 20,
+    "pricePerUnit": 20,
+    "vendorCommission": 0.75,
+    "gestorCommission": 0.40
+  },
+  {
+    "minBoxes": 21,
+    "maxBoxes": null,
+    "pricePerUnit": 18,
+    "vendorCommission": 1.00,
+    "gestorCommission": 0.50
+  }
+]
+```
+
+Las ventas mayoristas se guardan en la misma tabla `sales` con:
+- `sale_type = 'WHOLESALE'`
+- `boxes`: cajas vendidas
+- `price_per_box`: precio negociado (editable al registrar)
+- `vendor_commission_per_box`: comisión vendedor/caja (editable)
+- `gestor_commission_per_box`: comisión gestor/caja (editable)
+
+---
+
+## RPCs (functions Postgres)
+
+| Function | Descripción |
+|----------|-------------|
+| `adjust_stock(...)` | Insert/update atómico de stock + auditoría |
+| `update_sale_status()` | Cambio de estado de venta atómico (stock en tx) |
+| `create_admin_user()` | Crea auth.user + perfil público en una transacción |
+| `change_user_password()` | Admin cambia contraseña sin exponer service_role |
+| `deactivate_user()` | Soft-delete + ban automático en auth.users |
+| `is_admin()` | Helper RLS |
+| `is_active_user()` | Helper RLS |
+| `is_admin_or_gestor()` | Helper RLS |
+| `user_can_access_warehouse()` | Helper RLS por warehouseIds |
+
+---
+
+## Realtime
+
+Las subscripciones en `db.js` (funciones `subscribe*`) usan **Supabase Realtime**.
+
+Para verificar: **Database → Replication** → las tablas del schema `public`
+deben estar en la publicación `supabase_realtime`. Si alguna no aparece:
+
+```sql
+alter publication supabase_realtime add table public.sales;
+alter publication supabase_realtime add table public.stock;
+alter publication supabase_realtime add table public.rates;
+alter publication supabase_realtime add table public.warehouses;
+alter publication supabase_realtime add table public.products;
+alter publication supabase_realtime add table public.categories;
+alter publication supabase_realtime add table public.subcategories;
+```
+
+---
+
+## Storage
+
+2 buckets públicos creados automáticamente:
+
+- `products` — imágenes de productos (WebP, < 5MB, con limpieza automática al borrar)
+- `images` — imágenes genéricas
+
+Políticas:
+- **Lectura pública** (anon + authenticated)
+- **Escritura**: solo authenticated
+- **Borrado**: solo admin (limpieza de huérfanos)
+
+---
+
+## Lifecycle / Mantenimiento
+
+Para evitar que la DB crezca sin control (free tier = 500 MB), ejecuta periódicamente
+`supabase/lifecycle-cleanup.sql` desde el SQL Editor. Recomendado: cada 3-6 meses.
+
+El script:
+- Borra movimientos de stock > 2 años
+- Borra ventas canceladas > 1 año
+- Compacta las tablas (VACUUM ANALYZE)
+- Muestra el tamaño actual de cada tabla
+
+Si tienes plan Pro, descomenta la sección de `pg_cron` para automatizar.
+
+---
+
+## Crear el primer admin
+
+Como las políticas RLS requieren autenticación, **el primer admin debe crearse manualmente**:
+
+1. **Authentication → Users → "Add user"**
+2. Email: `admin@mannol.cu`, contraseña segura, marcar "Auto Confirm"
+3. Copia el UUID del usuario
+4. Ejecuta:
+```sql
+insert into public.users (auth_uid, username, display_name, email, role, active)
+values ('<ADMIN_AUTH_UID>'::uuid, 'admin', 'Administrador', 'admin@mannol.cu', 'admin', true);
+```
+
+A partir de ahí, el admin puede crear más usuarios desde la UI (vista Users),
+que usa la RPC `create_admin_user`.
+
+---
+
+## Resolución de problemas
+
+### Error: "relation public.products does not exist"
+
+Estás ejecutando `migration-v3.sql` sin haber ejecutado `schema.sql` primero.
+**Solución**: ejecuta `schema.sql` → `policies.sql` → `seed.sql` (en ese orden).
+
+### Error: "column units_per_box does not exist"
+
+Tu `schema.sql` es de una versión anterior (pre-v9) que no incluye los campos mayoristas.
+**Solución**: ejecuta `migration-v3.sql` (que añade los campos con `IF NOT EXISTS`).
+
+### Las subscripciones realtime no funcionan
+
+Verifica que las tablas estén en la publicación `supabase_realtime` (ver sección Realtime arriba).
+
+### No puedo crear usuarios desde el panel admin
+
+La RPC `create_admin_user` requiere que el caller esté autenticado como admin.
+Verifica que tu usuario tenga `role = 'admin'` en la tabla `public.users`.
+
+### Error "Cannot read property of undefined" al cargar el admin
+
+Probablemente `supabase-config.js` no existe o no está configurado. Verifica que:
+1. El archivo existe en `js/supabase-config.js`
+2. Tiene `isSupabaseConfigured = true`
+3. `url` y `anonKey` son válidos
+
+### La app carga lento o se traba
+
+- El Service Worker puede estar sirviendo una versión cacheada. Borra la caché del navegador o ve a DevTools → Application → Service Workers → Unregister.
+- Supabase puede estar rate-limiting. Revisa el dashboard de Supabase para ver las métricas.
 
 ---
 

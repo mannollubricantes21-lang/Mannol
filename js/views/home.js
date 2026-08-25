@@ -6,7 +6,7 @@
 import { getStore } from "../store.js";
 import { listWarehouses, subscribeRates, syncElToqueRates, getSettings } from "../db.js";
 import { formatMoney, formatDate } from "../currency.js";
-import { toast, icon } from "../ui.js";
+import { toast, icon, esc } from "../ui.js";
 
 export function renderHomeView(navigate) {
   const store = getStore();
@@ -146,25 +146,25 @@ export function renderHomeView(navigate) {
                   <div class="flex items-start justify-between gap-2 mb-2">
                     <div class="min-w-0" style="flex:1">
                       <div class="flex items-center gap-2">
-                        <span class="badge badge-dark font-mono" style="font-size: 0.625rem">${w.code}</span>
-                        <h3 class="font-semibold text-sm truncate text-on-dark" style="margin:0">${w.name}</h3>
+                        <span class="badge badge-dark font-mono" style="font-size: 0.625rem">${esc(w.code)}</span>
+                        <h3 class="font-semibold text-sm truncate text-on-dark" style="margin:0">${esc(w.name)}</h3>
                         ${isOwn ? '<span class="badge badge-accent" style="font-size: 0.5625rem">Tu local</span>' : ''}
                       </div>
                       ${w.address ? `
                         <p class="text-xs text-muted-on-dark flex items-start gap-1 mt-1" style="margin:0.25rem 0 0">
                           ${icon("mapPin", 12)}
-                          <span>${w.address}</span>
+                          <span>${esc(w.address)}</span>
                         </p>
                       ` : ''}
                       ${w.phone ? `
                         <p class="text-xs text-muted-on-dark flex items-center gap-1" style="margin:0.125rem 0 0">
                           ${icon("phone", 12)}
-                          ${w.phone}
+                          ${esc(w.phone)}
                         </p>
                       ` : ''}
                     </div>
                   </div>
-                  <button class="btn btn-primary btn-block btn-sm" data-enter-warehouse="${w.id}" aria-label="Entrar al almacén ${w.name} con PIN" style="height:2.5rem;font-size:0.75rem">
+                  <button class="btn btn-primary btn-block btn-sm" data-enter-warehouse="${esc(w.id)}" aria-label="Entrar al almacén ${esc(w.name)} con PIN" style="height:2.5rem;font-size:0.75rem">
                     ${icon("lock", 14)}
                     Entrar al almacén
                     ${icon("arrowRight", 14)}
@@ -189,12 +189,19 @@ export function mountHomeView(container, navigate) {
   const store = getStore();
 
   // Load settings + warehouses + rates
-  getSettings().then((s) => {
+  // Track subscriptions/promises for cleanup to avoid memory leaks on re-mount
+  let settingsPromise = null;
+  let warehousesPromise = null;
+  let mounted = true;
+
+  settingsPromise = getSettings().then((s) => {
+    if (!mounted) return;
     store.setSettings(s);
     render();
-  });
+  }).catch(() => {});
 
-  listWarehouses().then((list) => {
+  warehousesPromise = listWarehouses().then((list) => {
+    if (!mounted) return;
     // Si no hay Firebase configurado o no hay almacenes, usar datos demo
     if (!list || list.length === 0) {
       const demoWarehouses = [
@@ -208,9 +215,10 @@ export function mountHomeView(container, navigate) {
       store.setState({ _warehouses: list.filter((w) => w.active !== false) });
     }
     render();
-  });
+  }).catch(() => {});
 
   const unsubRates = subscribeRates((rates) => {
+    if (!mounted) return;
     store.setRates(rates);
     render();
   });
@@ -315,6 +323,9 @@ export function mountHomeView(container, navigate) {
   render();
 
   return () => {
-    unsubRates();
+    mounted = false;
+    if (unsubRates) {
+      try { unsubRates(); } catch {}
+    }
   };
 }

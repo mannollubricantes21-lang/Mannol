@@ -5,7 +5,7 @@
 import { getStore } from "../store.js";
 import { listManagerCommissions, markManagerCommissionPaid } from "../db.js";
 import { formatMoney, formatPeriod, formatDate, skeletonStatCard, skeletonRow } from "../currency.js";
-import { toast, icon } from "../ui.js";
+import { toast, icon, esc } from "../ui.js";
 import { exportToCSV } from "../csv-export.js";
 
 export function mountCommissionsView(container, navigate) {
@@ -77,8 +77,8 @@ export function mountCommissionsView(container, navigate) {
                   ${records.map((r) => `
                     <tr>
                       <td class="font-medium">
-                        ${r.name}
-                        <div class="text-xs text-muted">${r.code} · ${r.phone || ''}</div>
+                        ${esc(r.name)}
+                        <div class="text-xs text-muted">${esc(r.code)} · ${esc(r.phone || '')}</div>
                       </td>
                       <td class="text-center">${r.salesCount}</td>
                       <td class="text-center">${r.totalUnits}</td>
@@ -89,7 +89,7 @@ export function mountCommissionsView(container, navigate) {
                         ${r.paid ? `<span class="badge badge-accent">${icon("check", 12)} Pagada</span>` : `<span class="badge badge-warning">${icon("clock", 12)} Pendiente</span>`}
                       </td>
                       ${isAdmin ? `<td class="text-right">
-                        <button class="btn ${r.paid ? 'btn-outline' : 'btn-primary'} btn-sm" data-toggle-paid="${r.managerId}" data-paid="${!r.paid}">
+                        <button class="btn ${r.paid ? 'btn-outline' : 'btn-primary'} btn-sm" data-toggle-paid="${esc(r.managerId)}" data-paid="${!r.paid}">
                           ${r.paid ? 'Marcar pendiente' : 'Marcar pagada'}
                         </button>
                       </td>` : ''}

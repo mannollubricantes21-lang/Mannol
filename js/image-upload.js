@@ -21,8 +21,12 @@ const WEBP_QUALITY = 0.82;
 /**
  * Convierte un File de imagen a WebP usando Canvas.
  * Redimensiona si excede MAX_WIDTH/HEIGHT.
- * Retorna un Blob WebP.
+ * Si tras la conversión el WebP supera 5MB, reintenta con calidad decreciente.
+ * Retorna un Blob WebP que SIEMPRE es <= 5MB (o lanza error).
  */
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB — Supabase Storage bucket limit
+const QUALITY_FALLBACKS = [0.82, 0.7, 0.6, 0.5, 0.4];
+
 export async function convertToWebP(file) {
   if (!file.type.startsWith("image/")) {
     throw new Error("El archivo no es una imagen");
@@ -33,36 +37,53 @@ export async function convertToWebP(file) {
   try {
     const img = await loadImage(objectUrl);
 
-    let { width, height } = img;
-    if (width > MAX_WIDTH || height > MAX_HEIGHT) {
-      const ratio = Math.min(MAX_WIDTH / width, MAX_HEIGHT / height);
-      width = Math.round(width * ratio);
-      height = Math.round(height * ratio);
+    // Intentar varias calidades hasta que el WebP quepa en 5MB
+    let lastError = null;
+    for (const quality of QUALITY_FALLBACKS) {
+      const webpBlob = await tryConvert(img, quality);
+      if (webpBlob && webpBlob.size <= MAX_FILE_SIZE) {
+        return webpBlob;
+      }
+      lastError = new Error(`WebP con calidad ${quality} pesa ${(webpBlob.size / 1024 / 1024).toFixed(2)}MB — aún excede 5MB`);
     }
-
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(img, 0, 0, width, height);
-
-    const webpBlob = await new Promise((resolve, reject) => {
-      canvas.toBlob(
-        (blob) => {
-          if (blob) resolve(blob);
-          else reject(new Error("Error al convertir a WebP"));
-        },
-        "image/webp",
-        WEBP_QUALITY
-      );
-    });
-
-    return webpBlob;
+    throw new Error(
+      `No se pudo reducir la imagen por debajo de 5MB tras ${QUALITY_FALLBACKS.length} intentos. ` +
+      `La imagen original probablemente es demasiado grande o compleja.`
+    );
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
+}
+
+/**
+ * Helper: convierte la imagen a WebP con una calidad dada.
+ */
+async function tryConvert(img, quality) {
+  let { width, height } = img;
+  if (width > MAX_WIDTH || height > MAX_HEIGHT) {
+    const ratio = Math.min(MAX_WIDTH / width, MAX_HEIGHT / height);
+    width = Math.round(width * ratio);
+    height = Math.round(height * ratio);
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(img, 0, 0, width, height);
+
+  return await new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("Error al convertir a WebP"));
+      },
+      "image/webp",
+      quality
+    );
+  });
 }
 
 function loadImage(src) {
