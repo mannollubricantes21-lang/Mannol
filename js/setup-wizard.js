@@ -137,8 +137,27 @@ function isValidSupabaseUrl(url) {
   return /^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/i.test(url || "");
 }
 function isValidAnonKey(key) {
-  // Supabase anon keys are JWTs starting with eyJ
-  return /^eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$/.test(key || "");
+  // Supabase supports two API key formats:
+  // 1. Legacy JWT format (starts with "eyJ", 3 parts separated by dots)
+  // 2. New "sb_publish_..." format (introduced ~2024, used by all new projects)
+  const k = (key || "").trim();
+  if (!k) return false;
+  // New publishable key format
+  if (/^sb_publish_[a-zA-Z0-9_-]+$/.test(k)) return true;
+  // Legacy JWT format
+  if (/^eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$/.test(k)) return true;
+  return false;
+}
+
+function isSecretKey(key) {
+  // Detect if the user accidentally pasted the SECRET (service_role) key
+  // — those should NEVER be used in frontend code.
+  const k = (key || "").trim();
+  if (!k) return false;
+  if (/^sb_secret_[a-zA-Z0-9_-]+$/.test(k)) return true;
+  // Legacy service_role JWTs are harder to distinguish from anon JWTs by format alone,
+  // but we can warn the user to double-check they grabbed "anon public" not "service_role".
+  return false;
 }
 
 // ===== Main render =====
@@ -638,8 +657,8 @@ function renderCredentialsStep() {
 
       <div class="wizard-form-group" style="margin-top:0.75rem">
         <label class="wizard-form-label" for="supabase-key-input">anon public key</label>
-        <textarea id="supabase-key-input" class="wizard-form-input wizard-textarea" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." spellcheck="false" autocomplete="off">${keyVal.replace(/</g, "&lt;")}</textarea>
-        <p class="wizard-form-hint">Es un string largo que empieza con "eyJ". NO uses la service_role key.</p>
+        <textarea id="supabase-key-input" class="wizard-form-input wizard-textarea" placeholder="sb_publish_xxx... o eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." spellcheck="false" autocomplete="off">${keyVal.replace(/</g, "&lt;")}</textarea>
+        <p class="wizard-form-hint">Es un string largo que empieza con <code>sb_publish_</code> (proyectos nuevos) o <code>eyJ</code> (proyectos anteriores). NO uses la <code>sb_secret_</code> o <code>service_role</code>.</p>
       </div>
 
       <div class="wizard-alert wizard alert-info" id="creds-validation" style="display:none; margin-top:0.75rem"></div>
@@ -949,9 +968,10 @@ function wireCredentialsStep() {
     const key = keyInput.value.trim();
     const urlOk = isValidSupabaseUrl(url);
     const keyOk = isValidAnonKey(key);
+    const isSecret = isSecretKey(key);
 
     urlInput.classList.toggle("invalid", url !== "" && !urlOk);
-    keyInput.classList.toggle("invalid", key !== "" && !keyOk);
+    keyInput.classList.toggle("invalid", key !== "" && !keyOk && !isSecret);
 
     if (!url && !key) {
       validation.style.display = "none";
@@ -961,9 +981,12 @@ function wireCredentialsStep() {
     if (!urlOk) {
       validation.className = "wizard-alert wizard-alert-danger";
       validation.innerHTML = `<span class="wizard-alert-icon">${ICONS.alert}</span><div><strong>URL inválida.</strong> Debe ser <code>https://algo.supabase.co</code> (sin barra al final).</div>`;
+    } else if (isSecret) {
+      validation.className = "wizard-alert wizard-alert-danger";
+      validation.innerHTML = `<span class="wizard-alert-icon">${ICONS.alert}</span><div><strong>¡Cuidado!</strong> Pegaste la <code>secret key</code> (sb_secret_...). Esa es privada y <strong>NUNCA</strong> debe ir en el frontend. Volvé a Supabase → Project Settings → API y copiá la <code>publishable key</code> (sb_publish_...) o la <code>anon public</code> (eyJ...).</div>`;
     } else if (!keyOk) {
       validation.className = "wizard-alert wizard-alert-warning";
-      validation.innerHTML = `<span class="wizard-alert-icon">${ICONS.alert}</span><div><strong>anon key inválida.</strong> Debe empezar con <code>eyJ</code> y contener 3 partes separadas por puntos.</div>`;
+      validation.innerHTML = `<span class="wizard-alert-icon">${ICONS.alert}</span><div><strong>anon key inválida.</strong> Debe empezar con <code>sb_publish_</code> (formato nuevo) o <code>eyJ</code> (formato anterior JWT). Asegurate de copiar la <strong>"publishable key"</strong> o <strong>"anon public"</strong> desde Supabase → Project Settings → API.</div>`;
     } else {
       validation.className = "wizard-alert wizard-alert-success";
       validation.innerHTML = `<span class="wizard-alert-icon">${ICONS.check}</span><div><strong>Formato válido.</strong> Ya puedes guardar y probar la conexión.</div>`;
