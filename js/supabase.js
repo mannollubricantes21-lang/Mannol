@@ -10,7 +10,7 @@
 // without changes.
 // =====================================================
 
-const SUPABASE_VERSION = "2.45.4";
+const SUPABASE_VERSION = "2.108.2";
 const ESM_CDN = `https://esm.sh/@supabase/supabase-js@${SUPABASE_VERSION}`;
 
 // Default placeholder config (used when supabase-config.js is missing)

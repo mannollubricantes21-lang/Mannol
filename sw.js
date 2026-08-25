@@ -1,10 +1,10 @@
 // =====================================================
-// Almacén POS — Service Worker
-// Cache-first for static assets, network-first for navigation,
-// IndexedDB queue for offline sale POSTs.
+// MANNOL POS — Service Worker
+// Cache-first for static assets, network-first for navigation.
+// Bump CACHE_VERSION on every release to force clients to refresh.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v7";
+const CACHE_VERSION = "mannol-pos-supabase-v8";
 const STATIC_ASSETS = [
   "./",
   "./index.html",
@@ -27,6 +27,7 @@ const STATIC_ASSETS = [
   "./js/charts.js",
   "./js/push-notify.js",
   "./js/global-search.js",
+  "./js/pin-rate-limit.js",
   "./js/components/sync-banner.js",
   "./js/views/home.js",
   "./js/views/pin-login.js",
@@ -49,37 +50,8 @@ const STATIC_ASSETS = [
   "./icons/icon-512.png",
   "./icons/favicon.png",
   "./icons/icon-64.png",
+  "./icons/icon-maskable-512.png",
 ];
-
-// IndexedDB for offline sale queue (legacy — app uses localStorage via store)
-const DB_NAME = "almacen-pos-queue";
-const STORE_NAME = "sales";
-
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: "id" });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function getQueuedSales() {
-  try {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, "readonly");
-      const req = tx.objectStore(STORE_NAME).getAll();
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => reject(req.error);
-    });
-  } catch { return []; }
-}
 
 // ===== Lifecycle =====
 self.addEventListener("install", (event) => {

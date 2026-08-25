@@ -64,7 +64,7 @@ export function mountUsersView(container, navigate) {
               <span style="color:var(--primary);flex-shrink:0">${icon("shield", 20)}</span>
               <div>
                 <p class="font-medium mb-1">Importante:</p>
-                <p class="text-muted text-xs">Para crear un usuario con login por email/contraseña, primero créalo en Firebase Authentication (Console → Authentication → Add user) con el mismo email. Luego créalo aquí con el rol correspondiente. La contraseña no se guarda en Firestore.</p>
+                <p class="text-muted text-xs">Para crear un usuario con login por email/contraseña, primero créalo en Supabase Authentication (Dashboard → Authentication → Add user) con el mismo email. Marca "Auto Confirm User". Luego créalo aquí con el rol correspondiente. La contraseña no se guarda en la base de datos, se valida contra Supabase Auth.</p>
               </div>
             </div>
           </div>

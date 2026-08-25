@@ -202,7 +202,7 @@ export function mountHomeView(container, navigate) {
 
   warehousesPromise = listWarehouses().then((list) => {
     if (!mounted) return;
-    // Si no hay Firebase configurado o no hay almacenes, usar datos demo
+    // Si Supabase no está configurado o no hay almacenes, usar datos demo
     if (!list || list.length === 0) {
       const demoWarehouses = [
         { id: "demo-1", name: "Víbora", code: "VIB", address: "Obispo #45, Habana Vieja", phone: "+53 7 866-2020", active: true, pin: "2025", hasPin: true },
