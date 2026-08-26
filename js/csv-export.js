@@ -58,3 +58,30 @@ function downloadCSV(filename, csvContent) {
     URL.revokeObjectURL(url);
   }, 100);
 }
+
+/**
+ * Export multiple CSVs as separate downloads (one per "apartado").
+ * Cada apartado se descarga con un pequeño delay para que el navegador no los bloque.
+ *
+ * @param {Array<{filename: string, rows: Array<Object>, columns?: Array<string>}>} datasets
+ * @param {string} prefix - prefijo común para los filenames (ej: "mannol-export")
+ * @returns {Promise<number>} - cantidad de archivos descargados
+ */
+export async function exportMultipleCSVs(datasets, prefix = "mannol-export") {
+  let count = 0;
+  for (const ds of datasets) {
+    if (!ds.rows || ds.rows.length === 0) continue;
+    const filename = `${prefix}-${ds.filename}`;
+    const cols = ds.columns || Object.keys(ds.rows[0]);
+    const header = cols.map(escapeCSV).join(",");
+    const body = ds.rows.map((row) =>
+      cols.map((col) => escapeCSV(row[col])).join(",")
+    ).join("\n");
+    const csv = "\uFEFF" + header + "\n" + body;
+    downloadCSV(filename, csv);
+    count++;
+    // Pequeño delay para no saturar el navegador
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return count;
+}

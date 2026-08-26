@@ -44,7 +44,15 @@ export function mountCommissionsView(container, navigate) {
           <div class="flex gap-2 items-center">
             <input class="input" type="month" id="period-input" value="${period}" style="width:10rem" aria-label="Seleccionar mes" />
             <button class="btn btn-outline btn-sm" id="export-csv-btn" title="Exportar comisiones a CSV" aria-label="Exportar a CSV">${icon("download", 14)} CSV</button>
+            <button class="btn btn-primary btn-sm" id="print-btn" title="Imprimir / Guardar como PDF" aria-label="Imprimir">${icon("printer", 14)} Imprimir</button>
           </div>
+        </div>
+
+        <!-- Header de impresión (solo visible al imprimir) -->
+        <div class="print-only" style="display:none">
+          <h1 style="margin:0 0 0.25rem;font-size:1.5rem">MANNOL POS · Reporte de comisiones</h1>
+          <p style="margin:0 0 0.25rem;color:#666;font-size:0.875rem">Período: ${formatPeriod(period)}</p>
+          <p style="margin:0 0 1rem;color:#666;font-size:0.75rem">Generado: ${new Date().toLocaleString("es-ES")}</p>
         </div>
 
         ${loading ? `<div class="grid md:grid-cols-3 gap-3">${skeletonStatCard(3)}</div>` : `
@@ -72,16 +80,23 @@ export function mountCommissionsView(container, navigate) {
             ${loading ? `<table class="table"><thead><tr><th>Gestor</th><th class="text-center">Ventas</th><th class="text-right">Comisión USD</th><th class="text-center">Estado</th></tr></thead><tbody>${skeletonRow(4, 4)}</tbody></table>` :
               records.length === 0 ? `<div class="empty-state"><div class="empty-state-icon">${icon("wallet", 24)}</div><p class="empty-state-title">Sin comisiones</p><p class="empty-state-desc">No hay comisiones para este período.</p></div>` :
               `<table class="table">
-                <thead><tr><th>Gestor</th><th>Tipo</th><th class="text-center">Ventas</th><th class="text-center">Unidades</th><th class="text-right">Total vendido</th><th class="text-right">Comisión</th><th class="text-center">Estado</th>${isAdmin ? '<th class="text-right">Acción</th>' : ''}</tr></thead>
+                <thead><tr>
+                  <th>Gestor</th>
+                  <th>Tipo</th>
+                  <th class="text-center">Ventas<br><span class="text-muted">Lun-Vie / Sáb-Dom</span></th>
+                  <th class="text-center">Unidades</th>
+                  <th class="text-right">Total vendido</th>
+                  <th class="text-right" style="background: color-mix(in oklab, var(--accent-mn) 8%, transparent)">Comisión MN</th>
+                  <th class="text-right" style="background: color-mix(in oklab, var(--accent-usd) 8%, transparent)">Comisión USD</th>
+                  <th class="text-center">Estado</th>
+                  ${isAdmin ? '<th class="text-right">Acción</th>' : ''}
+                </tr></thead>
                 <tbody>
                   ${records.map((r) => {
                     const typeLabel = r.managerType === "LOCAL" ? `Local · ${esc(r.warehouseName || '—')}` : "Referidor";
                     const commTypeLabel = (r.commissionType || "PERCENT") === "PERCENT"
                       ? `${r.commission}% del total`
                       : `${formatMoney(r.commission, r.commissionCurrency || "USD")} por venta`;
-                    const commissionAmountLabel = r.commissionCurrency === "MN"
-                      ? formatMoney(r.amountMN, "MN") + " (MN)"
-                      : formatMoney(r.amountUSD, "USD") + " (USD)";
                     return `
                     <tr>
                       <td class="font-medium">
@@ -92,10 +107,36 @@ export function mountCommissionsView(container, navigate) {
                         <div>${typeLabel}</div>
                         <div class="text-muted">${commTypeLabel}</div>
                       </td>
-                      <td class="text-center">${r.salesCount}</td>
+                      <td class="text-center">
+                        <div class="font-semibold">${r.salesCount}</div>
+                        <div class="text-xs" style="display:flex;justify-content:center;gap:0.25rem;align-items:center;margin-top:0.125rem">
+                          <span style="background:var(--bg-soft);padding:0.0625rem 0.375rem;border-radius:var(--radius-sm);font-weight:600">${r.weekdayCount || 0}</span>
+                          <span style="color:var(--text-muted)">·</span>
+                          <span style="background: color-mix(in oklab, var(--warning) 12%, transparent); color: var(--warning); padding:0.0625rem 0.375rem;border-radius:var(--radius-sm);font-weight:600">${r.weekendCount || 0}</span>
+                        </div>
+                      </td>
                       <td class="text-center">${r.totalUnits}</td>
-                      <td class="text-right">${formatMoney(r.totalSales, "USD")}</td>
-                      <td class="text-right font-bold">${commissionAmountLabel}</td>
+                      <td class="text-right">
+                        <div>${formatMoney(r.totalSales, "USD")}</div>
+                        ${r.weekendAmount > 0 ? `
+                          <div class="text-xs" style="margin-top:0.125rem;display:flex;align-items:center;justify-content:flex-end;gap:0.25rem;color:var(--warning);font-weight:600">
+                            ${icon("calendar", 10)}
+                            <span>Fin de semana: ${formatMoney(r.weekendAmount, "USD")}</span>
+                          </div>
+                        ` : ''}
+                      </td>
+                      <td class="text-right" style="background: color-mix(in oklab, var(--accent-mn) 4%, transparent)">
+                        <span style="display:inline-flex;align-items:center;gap:0.25rem;font-weight:700;color:var(--accent-mn)">
+                          <span style="font-size:0.875rem;line-height:1">₱</span>
+                          ${formatMoney(r.amountMN, "MN")}
+                        </span>
+                      </td>
+                      <td class="text-right" style="background: color-mix(in oklab, var(--accent-usd) 4%, transparent)">
+                        <span style="display:inline-flex;align-items:center;gap:0.25rem;font-weight:700;color:var(--accent-usd)">
+                          <span style="font-size:0.875rem;line-height:1">$</span>
+                          ${formatMoney(r.amountUSD, "USD")}
+                        </span>
+                      </td>
                       <td class="text-center">
                         ${r.paid ? `<span class="badge badge-accent">${icon("check", 12)} Pagada</span>` : `<span class="badge badge-warning">${icon("clock", 12)} Pendiente</span>`}
                       </td>
@@ -109,9 +150,19 @@ export function mountCommissionsView(container, navigate) {
                 </tbody>
                 <tfoot>
                   <tr style="background:var(--bg-soft);font-weight:700">
-                    <td colspan="5">Totales</td>
-                    <td class="text-right">
-                      ${formatMoney(totalUSD, "USD")} + ${formatMoney(totalMN, "MN")}
+                    <td colspan="4">Totales</td>
+                    <td class="text-right">${formatMoney(totalUSD + totalMN * (getStore().getState().rates["MN"]?.rateUSD || (1/320)), "USD")}</td>
+                    <td class="text-right" style="background: color-mix(in oklab, var(--accent-mn) 8%, transparent);color:var(--accent-mn)">
+                      <span style="display:inline-flex;align-items:center;gap:0.25rem">
+                        <span>₱</span>
+                        ${formatMoney(totalMN, "MN")}
+                      </span>
+                    </td>
+                    <td class="text-right" style="background: color-mix(in oklab, var(--accent-usd) 8%, transparent);color:var(--accent-usd)">
+                      <span style="display:inline-flex;align-items:center;gap:0.25rem">
+                        <span>$</span>
+                        ${formatMoney(totalUSD, "USD")}
+                      </span>
                     </td>
                     <td colspan="${isAdmin ? '2' : '1'}"></td>
                   </tr>
@@ -128,6 +179,14 @@ export function mountCommissionsView(container, navigate) {
       periodInput.addEventListener("change", (e) => {
         period = e.target.value;
         load();
+      });
+    }
+
+    // Botón Imprimir / Guardar como PDF
+    const printBtn = container.querySelector("#print-btn");
+    if (printBtn) {
+      printBtn.addEventListener("click", () => {
+        window.print();
       });
     }
 

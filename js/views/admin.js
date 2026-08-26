@@ -16,6 +16,10 @@ import {
   getRateConfig, saveRateConfig, syncRatesFromElToque,
   listStockMovements,
   getSettings, saveSettings,
+  // Nuevas funciones v5.3.0
+  listCardsWithBalances, getCardBalance, addCardMovement,
+  listAllStockAcrossWarehouses, listStockForProductInAllWarehouses,
+  createStockTransfer, listStockTransfers, processStockTransfer,
 } from "../db.js";
 import { logout } from "../auth.js";
 import { formatMoney, formatDate, formatDateShort } from "../currency.js";
@@ -23,6 +27,7 @@ import { toast, icon, showModal, closeModal, confirmDialog, esc } from "../ui.js
 import { CURRENCIES, CATEGORY_COLORS, STOCK_REASONS, STOCK_REASON_LABELS } from "../types.js";
 import { uploadImageAsWebP, pickImageFile } from "../image-upload.js";
 import { lineChart, barChart, COLORS } from "../charts.js";
+import { exportToCSV, exportMultipleCSVs } from "../csv-export.js";
 
 // Secciones agrupadas por categoría para mejor organización
 const NAV_SECTIONS = [
@@ -49,6 +54,8 @@ const NAV_SECTIONS = [
   {
     label: "Sistema",
     items: [
+      { id: "transfers", label: "Transferencias", icon: "arrowLeftRight" },
+      { id: "movements", label: "Movimientos", icon: "listTree" },
       { id: "weekend", label: "Fin de semana", icon: "calendar" },
       { id: "audit", label: "Auditoría", icon: "receipt" },
     ],
@@ -82,6 +89,21 @@ export function mountAdminView(container, navigateOrUser) {
   let activeTab = "dashboard"; // Por defecto: dashboard con todas las opciones de gestión visibles
   let tabGeneration = 0;
   let sidebarOpen = false;
+  let pendingTransfersCount = 0; // badge rojo en sidebar
+
+  // Cargar conteo de transferencias pendientes para el badge del sidebar
+  listStockTransfers({ status: "PENDING" }).then((pending) => {
+    pendingTransfersCount = pending.length;
+    // Actualizar solo el badge si la sidebar ya está renderizada
+    const badgeEl = document.querySelector("[data-pending-count]");
+    if (badgeEl) {
+      badgeEl.textContent = String(pendingTransfersCount);
+      badgeEl.style.display = pendingTransfersCount > 0 ? "" : "none";
+    } else if (pendingTransfersCount > 0) {
+      // Si el badge no existe pero hay pendientes, re-render el sidebar
+      render();
+    }
+  }).catch(() => {});
 
   function render() {
     container.innerHTML = `
@@ -102,6 +124,20 @@ export function mountAdminView(container, navigateOrUser) {
                 <button class="admin-nav-item ${activeTab === item.id ? 'active' : ''}" data-tab="${item.id}" aria-label="${item.label}">
                   <span class="admin-nav-item-icon">${icon(item.icon, 16)}</span>
                   <span>${item.label}</span>
+                  ${item.id === "transfers" && pendingTransfersCount > 0 ? `
+                    <span data-pending-count class="admin-nav-badge" style="
+                      margin-left:auto;
+                      background: var(--danger);
+                      color: white;
+                      font-size: 0.625rem;
+                      font-weight: 700;
+                      padding: 0.0625rem 0.375rem;
+                      border-radius: var(--radius-full);
+                      min-width: 1.125rem;
+                      text-align: center;
+                      box-shadow: 0 0 8px color-mix(in oklab, var(--danger) 50%, transparent);
+                    ">${pendingTransfersCount}</span>
+                  ` : ''}
                 </button>
               `).join('')}
             `).join('')}
@@ -111,6 +147,10 @@ export function mountAdminView(container, navigateOrUser) {
               <span class="admin-nav-item-icon">${icon("arrowLeft", 16)}</span>
               <span>App principal</span>
             </a>
+            <button class="admin-nav-item" id="admin-export-all" style="width: 100%; margin-top: 0.25rem" aria-label="Exportar todos los datos">
+              <span class="admin-nav-item-icon">${icon("download", 16)}</span>
+              <span>Exportar todo</span>
+            </button>
             <button class="admin-nav-item" id="admin-logout" style="color: var(--danger); width: 100%; margin-top: 0.25rem" aria-label="Cerrar sesión">
               <span class="admin-nav-item-icon">${icon("logout", 16)}</span>
               <span>Cerrar sesión</span>
@@ -195,6 +235,360 @@ export function mountAdminView(container, navigateOrUser) {
       window.location.href = "./index.html";
     });
 
+    // Exportar todos los datos (backup completo por apartados)
+    container.querySelector("#admin-export-all")?.addEventListener("click", async () => {
+      // Confirmación con dialog mostrando qué se va a exportar
+      confirmDialog(
+        "<strong>Exportar todos los datos</strong><br><br>Se van a descargar múltiples archivos CSV (uno por apartado: almacenes, productos, ventas, stock, movimientos, comisiones, transferencias, tarjetas, usuarios, etc.). ¿Continuar?",
+        async () => {
+          toast("Preparando exportación completa...", "info", 3000);
+          try {
+            const { getAllDataForExport } = await import("../db.js");
+            const data = await getAllDataForExport();
+            if (!data) {
+              toast("No se pudieron cargar los datos. ¿Supabase está configurado?", "error");
+              return;
+            }
+
+            // Mapear cada apartado a un dataset con columnas legibles
+            const datasets = [];
+
+            // 1. Almacenes
+            if (data.warehouses && data.warehouses.length > 0) {
+              datasets.push({
+                filename: "01-almacenes",
+                rows: data.warehouses.map((w) => ({
+                  id: w.id,
+                  nombre: w.name,
+                  codigo: w.code,
+                  direccion: w.address,
+                  telefono: w.phone,
+                  activo: w.active ? "Sí" : "No",
+                  pin: w.pin || "",
+                  comision_vendedor_pct: w.sellerCommissionPercent,
+                  moneda_comision: w.sellerCommissionCurrency,
+                  fecha_creacion: w.createdAt ? new Date(w.createdAt).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            // 2. Productos
+            if (data.products && data.products.length > 0) {
+              datasets.push({
+                filename: "02-productos",
+                rows: data.products.map((p) => ({
+                  id: p.id,
+                  nombre: p.name,
+                  marca: p.brand,
+                  sku: p.sku,
+                  viscosidad: p.viscosity,
+                  volumen_litros: p.volumeLiters,
+                  categoria: p.categoryName,
+                  precio_costo: p.costPrice,
+                  precio_venta: p.salePrice,
+                  stock_minimo: p.minStock,
+                  comision_gestor: p.gestorCommission,
+                  moneda_comision_gestor: p.gestorCommissionCurrency,
+                  comision_vendedor: p.vendorCommission,
+                  moneda_comision_vendedor: p.vendorCommissionCurrency,
+                  unidades_por_caja: p.unitsPerBox,
+                  activo: p.active ? "Sí" : "No",
+                  fecha_creacion: p.createdAt ? new Date(p.createdAt).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            // 3. Categorías
+            if (data.categories && data.categories.length > 0) {
+              datasets.push({
+                filename: "03-categorias",
+                rows: data.categories.map((c) => ({
+                  id: c.id,
+                  nombre: c.name,
+                  slug: c.slug,
+                  color: c.color,
+                  icono: c.icon,
+                  orden: c.sortOrder,
+                  activo: c.active ? "Sí" : "No",
+                })),
+              });
+            }
+
+            // 4. Subcategorías
+            if (data.subcategories && data.subcategories.length > 0) {
+              datasets.push({
+                filename: "04-subcategorias",
+                rows: data.subcategories.map((c) => ({
+                  id: c.id,
+                  categoria_id: c.categoryId,
+                  nombre: c.name,
+                  slug: c.slug,
+                  orden: c.sortOrder,
+                  activo: c.active ? "Sí" : "No",
+                })),
+              });
+            }
+
+            // 5. Gestores (managers)
+            if (data.managers && data.managers.length > 0) {
+              datasets.push({
+                filename: "05-gestores",
+                rows: data.managers.map((m) => ({
+                  id: m.id,
+                  nombre: m.name,
+                  codigo: m.code,
+                  telefono: m.phone,
+                  email: m.email,
+                  tipo: m.managerType || "REFERRER",
+                  almacen_id: m.warehouseId || "",
+                  tipo_comision: m.commissionType || "PERCENT",
+                  comision: m.commission,
+                  moneda_comision: m.commissionCurrency || "USD",
+                  notas: m.notes || "",
+                  activo: m.active ? "Sí" : "No",
+                  fecha_creacion: m.createdAt ? new Date(m.createdAt).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            // 6. Tarjetas
+            if (data.cards && data.cards.length > 0) {
+              datasets.push({
+                filename: "06-tarjetas",
+                rows: data.cards.map((c) => ({
+                  id: c.id,
+                  nombre: c.name,
+                  numero: c.number,
+                  banco: c.bank,
+                  saldo_inicial: c.initialBalance,
+                  moneda_saldo: c.balanceCurrency,
+                  activa: c.active ? "Sí" : "No",
+                  fecha_creacion: c.createdAt ? new Date(c.createdAt).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            // 7. Usuarios
+            if (data.users && data.users.length > 0) {
+              datasets.push({
+                filename: "07-usuarios",
+                rows: data.users.map((u) => ({
+                  id: u.id,
+                  username: u.username,
+                  nombre: u.displayName,
+                  email: u.email,
+                  rol: u.role,
+                  activo: u.active ? "Sí" : "No",
+                  almacen_id: u.warehouseId || "",
+                  nombre_almacen: u.warehouseName,
+                  codigo_almacen: u.warehouseCode,
+                  fecha_creacion: u.createdAt ? new Date(u.createdAt).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            // 8. Ventas
+            if (data.sales && data.sales.length > 0) {
+              datasets.push({
+                filename: "08-ventas",
+                rows: data.sales.map((s) => ({
+                  id: s.id,
+                  codigo: s.code,
+                  almacen_id: s.warehouseId,
+                  almacen_nombre: s.warehouseName,
+                  almacen_codigo: s.warehouseCode,
+                  usuario_id: s.userId,
+                  usuario_nombre: s.userName,
+                  gestor_id: s.managerId,
+                  gestor_nombre: s.managerName,
+                  gestor_codigo: s.managerCode,
+                  tipo_venta: s.saleType || "RETAIL",
+                  cliente_ref: s.clientRef || "",
+                  total_amount: s.totalAmount,
+                  moneda: s.currency,
+                  modo_pago: s.paymentMode,
+                  paid_usd: s.paidUSD,
+                  paid_mn: s.paidMN,
+                  paid_eur: s.paidEUR,
+                  paid_transfer: s.paidTransfer,
+                  metodo_pago: s.paymentMethod,
+                  tarjeta_id: s.cardId,
+                  tarjeta_numero: s.cardNumber,
+                  tarjeta_nombre: s.cardName,
+                  comision_gestor_usd: s.gestorCommissionUSD,
+                  comision_gestor_mn: s.gestorCommissionMN,
+                  comision_vendedor_usd: s.vendorCommissionUSD,
+                  comision_vendedor_mn: s.vendorCommissionMN,
+                  cajas: s.boxes || "",
+                  precio_por_caja: s.pricePerBox || "",
+                  comision_vendedor_por_caja: s.vendorCommissionPerBox || "",
+                  comision_gestor_por_caja: s.gestorCommissionPerBox || "",
+                  dia_semana: s.dayOfWeek,
+                  redirigido_fin_semana: s.weekendRedirect ? "Sí" : "No",
+                  almacen_origen_id: s.originalWarehouseId,
+                  estado: s.status,
+                  nota: s.note,
+                  fecha_creacion: s.createdAt ? new Date(s.createdAt).toLocaleString("es-ES") : "",
+                  fecha_completado: s.completedAt ? new Date(s.completedAt).toLocaleString("es-ES") : "",
+                  fecha_cancelado: s.cancelledAt ? new Date(s.cancelledAt).toLocaleString("es-ES") : "",
+                  motivo_cancelacion: s.cancelReason,
+                  fecha_sync: s.syncedAt ? new Date(s.syncedAt).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            // 9. Stock (inventario actual)
+            if (data.stock && data.stock.length > 0) {
+              datasets.push({
+                filename: "09-stock",
+                rows: data.stock.map((s) => ({
+                  id: s.id,
+                  almacen_id: s.warehouseId,
+                  producto_id: s.productId,
+                  cantidad: s.quantity,
+                  precio_local: s.localPrice,
+                  stock_minimo: s.minStock,
+                  fecha_actualizacion: s.updatedAt ? new Date(s.updatedAt).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            // 10. Movimientos de stock (auditoría)
+            if (data.stockMovements && data.stockMovements.length > 0) {
+              datasets.push({
+                filename: "10-movimientos-stock",
+                rows: data.stockMovements.map((m) => ({
+                  id: m.id,
+                  almacen_id: m.warehouseId,
+                  producto_id: m.productId,
+                  delta: m.delta,
+                  motivo: m.reason,
+                  nota: m.note,
+                  usuario_id: m.userId,
+                  usuario_nombre: m.userName,
+                  fecha: m.createdAt ? new Date(m.createdAt).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            // 11. Movimientos de tarjetas
+            if (data.cardMovements && data.cardMovements.length > 0) {
+              datasets.push({
+                filename: "11-movimientos-tarjetas",
+                rows: data.cardMovements.map((m) => ({
+                  id: m.id,
+                  tarjeta_id: m.cardId,
+                  tipo_movimiento: m.movementType,
+                  monto: m.amount,
+                  moneda: m.currency,
+                  nota: m.note,
+                  venta_id: m.saleId,
+                  usuario_id: m.userId,
+                  usuario_nombre: m.userName,
+                  fecha: m.createdAt ? new Date(m.createdAt).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            // 12. Transferencias entre almacenes
+            if (data.stockTransfers && data.stockTransfers.length > 0) {
+              datasets.push({
+                filename: "12-transferencias",
+                rows: data.stockTransfers.map((t) => ({
+                  id: t.id,
+                  codigo: t.code,
+                  almacen_origen_id: t.fromWarehouseId,
+                  almacen_destino_id: t.toWarehouseId,
+                  producto_id: t.productId,
+                  producto_nombre: t.productName,
+                  cantidad: t.quantity,
+                  estado: t.status,
+                  nota: t.note,
+                  solicitado_por_id: t.requestedBy,
+                  solicitado_por_nombre: t.requestedByName,
+                  procesado_por_id: t.processedBy,
+                  procesado_por_nombre: t.processedByName,
+                  fecha_procesado: t.processedAt ? new Date(t.processedAt).toLocaleString("es-ES") : "",
+                  fecha_creacion: t.createdAt ? new Date(t.createdAt).toLocaleString("es-ES") : "",
+                  fecha_actualizacion: t.updatedAt ? new Date(t.updatedAt).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            // 13. Pagos de comisiones
+            if (data.commissionPayouts && data.commissionPayouts.length > 0) {
+              datasets.push({
+                filename: "13-pagos-comisiones",
+                rows: data.commissionPayouts.map((p) => ({
+                  id: p.id,
+                  gestor_id: p.managerId,
+                  anio: p.year,
+                  mes: p.month,
+                  pagado_por_id: p.paidBy,
+                  fecha_pago: p.paidAt ? new Date(p.paidAt).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            // 14. Configuración
+            if (data.settings && data.settings.length > 0) {
+              datasets.push({
+                filename: "14-configuracion",
+                rows: data.settings.map((s) => ({
+                  id: s.id,
+                  pin: s.pinCode,
+                  nombre_negocio: s.businessName,
+                  eltoque_habilitado: s.elToqueEnabled ? "Sí" : "No",
+                  eltoque_markup: s.elToqueMarkup,
+                  ultima_sync_tasas: s.lastRateSync ? new Date(s.lastRateSync).toLocaleString("es-ES") : "",
+                  fin_semana_habilitado: s.weekendRedirectEnabled ? "Sí" : "No",
+                  fin_semana_almacen_id: s.weekendWarehouseId,
+                })),
+              });
+            }
+
+            // 15. Tasas
+            if (data.rates && data.rates.length > 0) {
+              datasets.push({
+                filename: "15-tasas",
+                rows: data.rates.map((r) => ({
+                  id: r.id,
+                  moneda: r.currency,
+                  tasa_usd: r.rateUSD,
+                  fuente: r.source,
+                  fecha_actualizacion: r.updatedAt ? new Date(r.updatedAt).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            // 16. Configuración de tasas (elToque)
+            if (data.rateConfig && data.rateConfig.length > 0) {
+              datasets.push({
+                filename: "16-config-tasas",
+                rows: data.rateConfig.map((r) => ({
+                  id: r.id,
+                  token: r.elToqueToken ? "(oculto por seguridad)" : "",
+                  markup: r.elToqueMarkup,
+                  ultima_sync: r.lastSync ? new Date(r.lastSync).toLocaleString("es-ES") : "",
+                })),
+              });
+            }
+
+            const prefix = `mannol-backup-${new Date().toISOString().slice(0, 10)}`;
+            const count = await exportMultipleCSVs(datasets, prefix);
+            if (count === 0) {
+              toast("No se encontraron datos para exportar", "error");
+            } else {
+              toast(`Exportación completa: ${count} archivos CSV descargados`, "success", 4000);
+            }
+          } catch (err) {
+            console.error("Export all failed:", err);
+            toast("Error al exportar: " + (err.message || "desconocido"), "error");
+          }
+        }
+      );
+    });
+
     renderTabContent();
   }
 
@@ -227,6 +621,8 @@ export function mountAdminView(container, navigateOrUser) {
       case "cards": mountCardsPanel(content, myGen); break;
       case "warehouseCommissions": mountWarehouseCommissionsPanel(content, myGen); break;
       case "weekend": mountWeekendPanel(content, myGen); break;
+      case "transfers": mountTransfersPanel(content, myGen); break;
+      case "movements": mountMovementsPanel(content, myGen); break;
       case "rates": mountRatesPanel(content, myGen); break;
       case "profit": mountProfitPanel(content, myGen); break;
       case "audit": mountAuditPanel(content, myGen); break;
@@ -236,6 +632,263 @@ export function mountAdminView(container, navigateOrUser) {
   // ===== DASHBOARD ANALÍTICO (admin) =====
   // Vista por defecto al entrar al admin: muestra analíticas + acceso
   // rápido a TODAS las opciones de gestión (usuarios, productos, etc.)
+  // Renderiza el widget de tarjetas con saldo para el dashboard admin
+  function renderCardsWidget(cards) {
+    if (!cards || cards.length === 0) {
+      return `
+        <div class="card">
+          <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+            <h3 class="card-title flex items-center gap-1">${icon("creditCard", 14)} Saldos de tarjetas</h3>
+          </div>
+          <div class="card-content" style="padding:1.5rem;text-align:center">
+            <div class="empty-state-icon" style="color:var(--text-muted)">${icon("creditCard", 24)}</div>
+            <p class="empty-state-title text-sm">Sin tarjetas</p>
+            <p class="empty-state-desc text-xs">Creá tarjetas desde la sección "Tarjetas" para ver su saldo acá.</p>
+            <button class="btn btn-outline btn-sm" data-jump="cards" style="margin-top:0.75rem">${icon("plus", 12)} Crear tarjeta</button>
+          </div>
+        </div>
+      `;
+    }
+
+    // Calcular totales por moneda
+    const totalsByCurrency = {};
+    cards.forEach((c) => {
+      const cur = c.currency || "USD";
+      if (!totalsByCurrency[cur]) totalsByCurrency[cur] = 0;
+      totalsByCurrency[cur] += (c.balance || 0);
+    });
+
+    // Identificar la tarjeta con mayor saldo absoluto para mostrarle un mini-gráfico
+    const topCard = cards.slice().sort((a, b) => Math.abs(b.balance || 0) - Math.abs(a.balance || 0))[0];
+
+    return `
+      <div class="card">
+        <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+          <h3 class="card-title flex items-center gap-1">${icon("creditCard", 14)} Saldos de tarjetas</h3>
+          <button class="btn btn-ghost btn-sm" data-jump="cards" style="font-size:0.75rem">${icon("chevronRight", 12)} Ver detalle</button>
+        </div>
+        <div class="card-content" style="padding:0.875rem;display:flex;flex-direction:column;gap:0.625rem">
+          <!-- Totales por moneda -->
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+            ${Object.entries(totalsByCurrency).map(([cur, total]) => {
+              const color = cur === "USD" ? "var(--accent-usd)" : cur === "MN" ? "var(--accent-mn)" : "var(--accent-eur)";
+              const symbol = cur === "USD" ? "$" : cur === "MN" ? "₱" : "€";
+              return `
+                <div style="flex:1;min-width:8rem;padding:0.5rem 0.75rem;background:color-mix(in oklab, ${color} 8%, var(--bg-soft));border:1px solid color-mix(in oklab, ${color} 25%, transparent);border-radius:var(--radius)">
+                  <div class="text-xs" style="color:${color};font-weight:700;letter-spacing:0.04em">${cur}</div>
+                  <div class="text-lg font-bold" style="color:${color}">${symbol} ${formatMoney(total, cur)}</div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+
+          <!-- Mini-gráfico de evolución de la tarjeta con mayor saldo -->
+          ${topCard ? `
+            <div id="card-balance-chart-container" style="padding:0.5rem 0.25rem 0.25rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-soft)">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.25rem;padding:0 0.25rem">
+                <div class="text-xs text-muted" style="font-weight:600">Evolución · ${esc(topCard.name)}</div>
+                <div class="text-xs text-muted">últimos 30 días</div>
+              </div>
+              <div id="card-balance-chart" style="padding:0 0.25rem;min-height:60px">
+                <div class="text-xs text-muted text-center" style="padding:1.5rem 0">
+                  <div class="spinner spinner-sm" style="margin:0 auto 0.5rem"></div>
+                  Cargando evolución...
+                </div>
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- Lista de tarjetas (resumen) -->
+          <div style="display:flex;flex-direction:column;gap:0.375rem">
+            ${cards.slice(0, 5).map((c) => {
+              const color = (c.balance || 0) >= 0 ? 'var(--primary)' : 'var(--danger)';
+              const bankColor = c.bank === 'BPA' ? 'var(--primary)' : c.bank === 'BANDEC' ? 'var(--accent-mn)' : 'var(--accent-eur)';
+              return `
+                <div data-card-click="${esc(c.id)}" style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.625rem;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;transition:border-color 0.15s,background 0.15s" onmouseover="this.style.borderColor='color-mix(in oklab, var(--primary) 40%, transparent)';this.style.background='var(--bg-soft)'" onmouseout="this.style.borderColor='var(--border)';this.style.background='transparent'">
+                  <div style="width:1.875rem;height:1.875rem;background:color-mix(in oklab, ${bankColor} 12%, var(--bg-soft));color:${bankColor};border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                    ${icon("creditCard", 14)}
+                  </div>
+                  <div style="flex:1;min-width:0">
+                    <div class="text-xs font-medium truncate">${esc(c.name)}</div>
+                    <div class="text-xs text-muted">
+                      <code style="font-family:ui-monospace,monospace;font-size:0.6875rem">${esc(c.number || '').slice(0, 4)}···${esc(c.number || '').slice(-4)}</code>
+                      ${c.bank ? ` · ${esc(c.bank)}` : ''}
+                    </div>
+                  </div>
+                  <div style="text-align:right">
+                    <div class="text-sm font-bold" style="color:${color}">${formatMoney(c.balance || 0, c.currency || "USD")}</div>
+                    ${c.salesCount > 0 ? `<div class="text-xs text-muted">${c.salesCount} venta(s)</div>` : ''}
+                  </div>
+                  <div style="color:var(--text-muted);flex-shrink:0">${icon("chevronRight", 14)}</div>
+                </div>
+              `;
+            }).join('')}
+            ${cards.length > 5 ? `
+              <button class="btn btn-ghost btn-sm" data-jump="cards" style="font-size:0.75rem;align-self:center">${icon("chevronRight", 12)} Ver ${cards.length - 5} tarjetas más</button>
+            ` : ''}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // Carga async del mini-gráfico de evolución de la tarjeta top (llamar después de render)
+  async function loadCardBalanceChart(cardId) {
+    try {
+      const { getCardBalanceHistory } = await import("../db.js");
+      const history = await getCardBalanceHistory(cardId, 30);
+      const chartEl = document.getElementById("card-balance-chart");
+      if (!chartEl) return;
+      if (!history || history.length === 0) {
+        chartEl.innerHTML = '<div class="text-xs text-muted text-center" style="padding:1rem">Sin datos suficientes para mostrar evolución.</div>';
+        return;
+      }
+      // Usar lineChart de charts.js (ya importado arriba)
+      const card = (dataCache?.cards || []).find((c) => c.id === cardId);
+      const cardColor = card?.currency === "MN" ? COLORS.mn : card?.currency === "EUR" ? COLORS.eur : COLORS.usd;
+      chartEl.innerHTML = `
+        <div style="background:transparent">
+          ${lineChart(history, {
+            height: 60,
+            color: cardColor,
+            formatValue: (v) => formatMoney(v, card?.currency || "USD"),
+          })}
+        </div>
+      `;
+    } catch (err) {
+      console.error("loadCardBalanceChart failed:", err);
+      const chartEl = document.getElementById("card-balance-chart");
+      if (chartEl) chartEl.innerHTML = '<div class="text-xs text-muted text-center" style="padding:1rem">Error al cargar evolución.</div>';
+    }
+  }
+
+  // Modal: ver evolución detallada del saldo de una tarjeta (90 días)
+  function showCardEvolutionModal(cardId) {
+    const card = (dataCache?.cards || []).find((c) => c.id === cardId);
+    if (!card) return;
+    const close = showModal({
+      title: `${esc(card.name)} · Evolución del saldo`,
+      body: `
+        <div style="display:flex;flex-direction:column;gap:0.75rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem">
+            <div>
+              <div class="text-xs text-muted">Saldo actual</div>
+              <div class="text-xl font-bold" style="color:${(card.balance || 0) >= 0 ? 'var(--primary)' : 'var(--danger)'}">
+                ${formatMoney(card.balance || 0, card.currency || "USD")}
+              </div>
+            </div>
+            <div style="text-align:right">
+              <div class="text-xs text-muted">Tarjeta</div>
+              <div class="text-sm font-semibold">
+                <code style="font-family:ui-monospace,monospace;font-size:0.75rem">${esc(card.number || '')}</code>
+              </div>
+              <div class="text-xs text-muted">${esc(card.bank || '—')} · ${card.salesCount || 0} venta(s) con transf.</div>
+            </div>
+          </div>
+          <div>
+            <div class="text-xs text-muted" style="margin-bottom:0.375rem;font-weight:600">Evolución últimos 90 días</div>
+            <div id="modal-card-chart" style="background:var(--bg-soft);padding:0.875rem;border-radius:var(--radius);min-height:180px">
+              <div class="text-xs text-muted text-center" style="padding:3rem 0">
+                <div class="spinner spinner-sm" style="margin:0 auto 0.5rem"></div>
+                Cargando evolución...
+              </div>
+            </div>
+          </div>
+          <div id="modal-card-stats" style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.5rem"></div>
+        </div>
+      `,
+      footer: `<button class="btn btn-outline" id="modal-card-close">Cerrar</button>`,
+    });
+    document.querySelector("#modal-card-close").addEventListener("click", close);
+
+    // Cargar evolución de 90 días
+    import("../db.js").then(async ({ getCardBalanceHistory }) => {
+      const history = await getCardBalanceHistory(cardId, 90);
+      const chartEl = document.querySelector("#modal-card-chart");
+      const statsEl = document.querySelector("#modal-card-stats");
+      if (!chartEl) return;
+      if (!history || history.length === 0) {
+        chartEl.innerHTML = '<div class="empty-state text-xs">Sin movimientos en los últimos 90 días.</div>';
+        if (statsEl) statsEl.innerHTML = '';
+        return;
+      }
+      const cardColor = card?.currency === "MN" ? COLORS.mn : card?.currency === "EUR" ? COLORS.eur : COLORS.usd;
+      chartEl.innerHTML = `
+        <div style="background:transparent">
+          ${lineChart(history, {
+            height: 180,
+            color: cardColor,
+            formatValue: (v) => formatMoney(v, card?.currency || "USD"),
+          })}
+        </div>
+      `;
+      // Stats: máximo, mínimo, promedio
+      if (statsEl) {
+        const values = history.map((h) => h.value || 0);
+        const max = Math.max(...values);
+        const min = Math.min(...values);
+        const avg = values.reduce((a, b) => a + b, 0) / values.length;
+        statsEl.innerHTML = `
+          <div style="padding:0.5rem;background:var(--bg-soft);border-radius:var(--radius);border:1px solid var(--border);text-align:center">
+            <div class="text-xs text-muted" style="font-weight:600">Máximo</div>
+            <div class="text-sm font-bold text-accent">${formatMoney(max, card.currency || "USD")}</div>
+          </div>
+          <div style="padding:0.5rem;background:var(--bg-soft);border-radius:var(--radius);border:1px solid var(--border);text-align:center">
+            <div class="text-xs text-muted" style="font-weight:600">Mínimo</div>
+            <div class="text-sm font-bold text-danger">${formatMoney(min, card.currency || "USD")}</div>
+          </div>
+          <div style="padding:0.5rem;background:var(--bg-soft);border-radius:var(--radius);border:1px solid var(--border);text-align:center">
+            <div class="text-xs text-muted" style="font-weight:600">Promedio</div>
+            <div class="text-sm font-bold">${formatMoney(avg, card.currency || "USD")}</div>
+          </div>
+        `;
+      }
+    }).catch((err) => {
+      console.error("showCardEvolutionModal load failed:", err);
+      const chartEl = document.querySelector("#modal-card-chart");
+      if (chartEl) chartEl.innerHTML = '<div class="empty-state text-xs">Error al cargar evolución.</div>';
+    });
+  }
+
+
+  // Renderiza el widget de transferencias pendientes para el dashboard admin
+  function renderTransfersWidget(pendingTransfers) {
+    if (!pendingTransfers || pendingTransfers.length === 0) {
+      return '';  // No mostrar nada si no hay pendientes (dashboard más limpio)
+    }
+
+    return `
+      <div class="card" style="border-color: color-mix(in oklab, var(--warning) 35%, transparent)">
+        <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;background: color-mix(in oklab, var(--warning) 5%, transparent);border-bottom-color: color-mix(in oklab, var(--warning) 20%, transparent)">
+          <h3 class="card-title flex items-center gap-1" style="color:var(--warning)">${icon("arrowLeftRight", 14)} Transferencias pendientes</h3>
+          <button class="btn btn-ghost btn-sm" data-jump="transfers" style="font-size:0.75rem">${icon("chevronRight", 12)} Ver todas</button>
+        </div>
+        <div class="card-content" style="padding:0.625rem;display:flex;flex-direction:column;gap:0.375rem">
+          <div class="text-xs text-muted" style="padding:0.25rem 0.5rem">${pendingTransfers.length} transferencia(s) esperando confirmación</div>
+          ${pendingTransfers.slice(0, 5).map((t) => `
+            <div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.625rem;border:1px solid var(--border);border-radius:var(--radius);background: color-mix(in oklab, var(--warning) 3%, var(--bg-soft))">
+              <div style="width:2rem;height:2rem;background: color-mix(in oklab, var(--warning) 12%, var(--bg-soft));color: var(--warning);border-radius: var(--radius-sm);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                ${icon("arrowLeftRight", 14)}
+              </div>
+              <div style="flex:1;min-width:0">
+                <div class="text-xs font-medium truncate">${esc(t.productName || 'Producto')}</div>
+                <div class="text-xs text-muted">
+                  <span class="font-mono" style="font-size:0.6875rem">${esc(t.code || '')}</span>
+                  · <strong>${t.quantity}</strong> u
+                  ${t.requestedByName ? ` · ${esc(t.requestedByName)}` : ''}
+                </div>
+              </div>
+              <button class="btn btn-primary btn-sm" data-jump="transfers" style="padding:0.25rem 0.5rem;font-size:0.625rem;white-space:nowrap">Revisar</button>
+            </div>
+          `).join('')}
+          ${pendingTransfers.length > 5 ? `
+            <button class="btn btn-ghost btn-sm" data-jump="transfers" style="font-size:0.75rem;align-self:center">${icon("chevronRight", 12)} Ver ${pendingTransfers.length - 5} pendientes más</button>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  }
+
   function mountAnalyticsDashboard(content, gen) {
     content.innerHTML = `<div class="empty-state"><div class="spinner spinner-lg"></div><p class="text-sm text-muted mt-2">Cargando panel…</p></div>`;
     let range = 30; // días
@@ -247,11 +900,16 @@ export function mountAdminView(container, navigateOrUser) {
       content.innerHTML = renderShell();
       wireQuickAccess();
       try {
-        const allSales = await listSales({});
+        const [allSales, cardsWithBalances, unpaidReminder, pendingTransfers] = await Promise.all([
+          listSales({}),
+          listCardsWithBalances(),
+          import("../db.js").then((m) => m.getUnpaidCommissionsFromPreviousMonth()),
+          listStockTransfers({ status: "PENDING" }),
+        ]);
         if (gen !== tabGeneration) return;
         const now = Date.now();
         const from = now - range * 86400000;
-        dataCache = { allSales, filtered: allSales.filter((s) => s.createdAt >= from) };
+        dataCache = { allSales, filtered: allSales.filter((s) => s.createdAt >= from), cards: cardsWithBalances, unpaidReminder, pendingTransfers };
         renderDashboard();
       } catch (err) {
         console.error("Dashboard load failed:", err);
@@ -453,6 +1111,19 @@ export function mountAdminView(container, navigateOrUser) {
       const cancelled = filtered.filter((s) => s.status === "CANCELADA");
       const pending = filtered.filter((s) => s.status === "PENDIENTE");
 
+      // Hook: después de renderizar, cargar el mini-gráfico de evolución de la tarjeta top
+      setTimeout(() => {
+        const topCard = (dataCache.cards || []).slice().sort((a, b) => Math.abs(b.balance || 0) - Math.abs(a.balance || 0))[0];
+        if (topCard) loadCardBalanceChart(topCard.id);
+      }, 100);
+
+      // Hook: cablear clicks en las tarjetas del widget para abrir modal con su evolución
+      setTimeout(() => {
+        document.querySelectorAll("[data-card-click]").forEach((el) => {
+          el.addEventListener("click", () => showCardEvolutionModal(el.dataset.cardClick));
+        });
+      }, 100);
+
       const totalRevenue = completed.reduce((s, x) => s + x.totalAmount, 0);
       const totalUnits = completed.reduce((s, x) => s + x.items.reduce((a, i) => a + i.quantity, 0), 0);
       const avgTicket = completed.length > 0 ? totalRevenue / completed.length : 0;
@@ -511,6 +1182,26 @@ export function mountAdminView(container, navigateOrUser) {
         <div style="display:flex;flex-direction:column;gap:1rem;padding-top:0.5rem;border-top:1px solid var(--border);margin-top:0.5rem">
           <p class="text-xs font-semibold text-muted" style="text-transform:uppercase;letter-spacing:0.05em;margin:0">Analíticas · ${range} días</p>
 
+          <!-- Banner recordatorio: comisiones no pagadas del mes anterior -->
+          ${dataCache.unpaidReminder?.hasUnpaid ? `
+            <div style="background: linear-gradient(135deg, color-mix(in oklab, var(--warning) 12%, var(--bg-elevated)) 0%, var(--bg-elevated) 100%); border: 1px solid color-mix(in oklab, var(--warning) 40%, transparent); border-radius: var(--radius-xl); padding: 0.875rem 1rem; display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+              <div style="width:2.5rem;height:2.5rem;background:var(--warning);color:var(--warning-foreground);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                ${icon("alertTriangle", 18)}
+              </div>
+              <div style="flex:1;min-width:0">
+                <div class="font-bold text-sm" style="color:var(--warning);margin:0 0 0.125rem">Comisiones pendientes de pago · ${esc(dataCache.unpaidReminder.monthLabel)}</div>
+                <div class="text-xs text-muted" style="margin:0">
+                  Tenés <strong>${dataCache.unpaidReminder.gestores} gestor(es)</strong> con comisiones sin marcar como pagadas del mes anterior.
+                  ${dataCache.unpaidReminder.totalUSD > 0 ? ` · USD: ${formatMoney(dataCache.unpaidReminder.totalUSD, "USD")}` : ''}
+                  ${dataCache.unpaidReminder.totalMN > 0 ? ` · MN: ${formatMoney(dataCache.unpaidReminder.totalMN, "MN")}` : ''}
+                </div>
+              </div>
+              <button class="btn btn-primary btn-sm" data-jump="warehouseCommissions" style="background:var(--warning);color:var(--warning-foreground);white-space:nowrap">
+                ${icon("chevronRight", 12)} Ir a comisiones
+              </button>
+            </div>
+          ` : ''}
+
           <!-- KPIs principales -->
           <div class="grid grid-cols-2 gap-2">
             <div class="stat-card">
@@ -538,6 +1229,12 @@ export function mountAdminView(container, navigateOrUser) {
               <div class="stat-sub">${cancelRate}% tasa cancelación · ${pending.length} pendientes</div>
             </div>
           </div>
+
+          <!-- ===== Widget de tarjetas con saldo ===== -->
+          ${renderCardsWidget(dataCache.cards)}
+
+          <!-- ===== Widget de transferencias pendientes ===== -->
+          ${renderTransfersWidget(dataCache.pendingTransfers || [])}
 
           <!-- Gráfico de línea de ventas por día -->
           <div class="card">
@@ -1365,6 +2062,414 @@ export function mountAdminView(container, navigateOrUser) {
     });
   }
 
+  // ===== TRANSFERS (panel de transferencias entre almacenes — vista admin) =====
+  function mountTransfersPanel(content, gen) {
+    content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+    Promise.all([
+      listStockTransfers({}),
+      listWarehouses(),
+    ]).then(([transfers, warehouses]) => {
+      if (gen !== tabGeneration) return;
+      const whMap = new Map(warehouses.map((w) => [w.id, w]));
+      const pending = transfers.filter((t) => t.status === "PENDING");
+      const completed = transfers.filter((t) => t.status === "COMPLETED");
+      const rejected = transfers.filter((t) => t.status === "REJECTED" || t.status === "CANCELLED");
+
+      content.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:1rem">
+          <div>
+            <h1 class="text-2xl font-bold flex items-center gap-2">${icon("arrowLeftRight", 24)} Transferencias</h1>
+            <p class="text-sm text-muted">Movimientos de mercancía entre almacenes · ${transfers.length} en total</p>
+          </div>
+
+          <!-- Stats -->
+          <div class="grid md:grid-cols-3 gap-3">
+            <div class="stat-card">
+              <div class="stat-label" style="color:var(--warning)">${icon("clock", 14)} Pendientes</div>
+              <div class="stat-value text-warning">${pending.length}</div>
+              <div class="stat-sub">Esperando confirmación</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label" style="color:var(--accent)">${icon("check", 14)} Completadas</div>
+              <div class="stat-value text-accent">${completed.length}</div>
+              <div class="stat-sub">Stock ya actualizado</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label" style="color:var(--danger)">${icon("x", 14)} Rechazadas / Canceladas</div>
+              <div class="stat-value text-danger">${rejected.length}</div>
+              <div class="stat-sub">No se movió stock</div>
+            </div>
+          </div>
+
+          <!-- Filtros rápidos -->
+          <div class="flex gap-2 flex-wrap">
+            <button class="btn btn-primary btn-sm" data-transfer-filter="all">Todas (${transfers.length})</button>
+            <button class="btn btn-outline btn-sm" data-transfer-filter="PENDING">Pendientes (${pending.length})</button>
+            <button class="btn btn-outline btn-sm" data-transfer-filter="COMPLETED">Completadas (${completed.length})</button>
+            <button class="btn btn-outline btn-sm" data-transfer-filter="REJECTED">Rechazadas (${rejected.length})</button>
+          </div>
+
+          <!-- Tabla -->
+          <div class="card">
+            <div class="overflow-x-auto">
+              ${transfers.length === 0 ? `
+                <div class="empty-state" style="padding:2rem">
+                  <div class="empty-state-icon">${icon("arrowLeftRight", 24)}</div>
+                  <p class="empty-state-title">Sin transferencias</p>
+                  <p class="empty-state-desc">Las transferencias se crean desde la vista de cada almacén (tab "Transferir").</p>
+                </div>
+              ` : `
+                <table class="table" id="transfers-table">
+                  <thead><tr>
+                    <th>Código</th>
+                    <th>Producto</th>
+                    <th>Cantidad</th>
+                    <th>Origen</th>
+                    <th>Destino</th>
+                    <th>Estado</th>
+                    <th>Solicitado por</th>
+                    <th>Fecha</th>
+                    <th class="text-right">Acciones</th>
+                  </tr></thead>
+                  <tbody>
+                    ${transfers.map((t) => {
+                      const fromWh = whMap.get(t.fromWarehouseId);
+                      const toWh = whMap.get(t.toWarehouseId);
+                      const statusBadge = { PENDING: 'badge-warning', COMPLETED: 'badge-accent', REJECTED: 'badge-danger', CANCELLED: '' }[t.status] || '';
+                      const statusLabel = { PENDING: 'Pendiente', COMPLETED: 'Completada', REJECTED: 'Rechazada', CANCELLED: 'Cancelada' }[t.status] || t.status;
+                      const canProcess = t.status === "PENDING";
+                      return `
+                        <tr data-transfer-row data-status="${esc(t.status)}">
+                          <td class="font-mono text-xs">${esc(t.code || '—')}</td>
+                          <td class="font-medium">
+                            ${esc(t.productName || '—')}
+                            ${t.note ? `<div class="text-xs text-muted" style="font-style:italic">"${esc(t.note)}"</div>` : ''}
+                          </td>
+                          <td class="text-center"><strong>${t.quantity}</strong></td>
+                          <td class="text-xs">
+                            ${fromWh ? `${esc(fromWh.name)} <span class="badge badge-outline" style="font-size:0.5625rem">${esc(fromWh.code)}</span>` : '—'}
+                          </td>
+                          <td class="text-xs">
+                            ${toWh ? `${esc(toWh.name)} <span class="badge badge-outline" style="font-size:0.5625rem">${esc(toWh.code)}</span>` : '—'}
+                          </td>
+                          <td class="text-center"><span class="badge ${statusBadge}" style="font-size:0.6875rem">${statusLabel}</span></td>
+                          <td class="text-xs text-muted">${esc(t.requestedByName || '—')}</td>
+                          <td class="text-xs text-muted">${formatDate(t.createdAt)}</td>
+                          <td class="text-right">
+                            ${canProcess ? `
+                              <div style="display:flex;gap:0.25rem;justify-content:flex-end">
+                                <button class="btn btn-primary btn-sm" data-admin-confirm-transfer="${esc(t.id)}" title="Confirmar y mover stock">${icon("check", 12)} Confirmar</button>
+                                <button class="btn btn-outline btn-sm text-danger" data-admin-reject-transfer="${esc(t.id)}" title="Rechazar">${icon("x", 12)}</button>
+                              </div>
+                            ` : '<span class="text-xs text-muted">—</span>'}
+                          </td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              `}
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Filtros rápidos
+      content.querySelectorAll("[data-transfer-filter]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const filter = btn.dataset.transferFilter;
+          content.querySelectorAll("[data-transfer-filter]").forEach((b) => {
+            b.classList.toggle("btn-primary", b === btn);
+            b.classList.toggle("btn-outline", b !== btn);
+          });
+          content.querySelectorAll("[data-transfer-row]").forEach((row) => {
+            const status = row.dataset.status;
+            row.style.display = (filter === "all" || filter === status) ? "" : "none";
+          });
+        });
+      });
+
+      // Confirmar / rechazar
+      const user = getStore().getState().currentUser;
+      async function refreshPendingBadge() {
+        try {
+          const pending = await listStockTransfers({ status: "PENDING" });
+          pendingTransfersCount = pending.length;
+          render();
+        } catch {}
+      }
+      content.querySelectorAll("[data-admin-confirm-transfer]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.dataset.adminConfirmTransfer;
+          try {
+            await processStockTransfer(id, "COMPLETED", user);
+            toast("Transferencia confirmada. Stock movido.", "success");
+            mountTransfersPanel(content, tabGeneration);
+            refreshPendingBadge();
+          } catch (err) {
+            toast("Error: " + (err.message || "desconocido"), "error");
+          }
+        });
+      });
+      content.querySelectorAll("[data-admin-reject-transfer]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = btn.dataset.adminRejectTransfer;
+          confirmDialog("¿Rechazar esta transferencia? No se moverá stock.", async () => {
+            try {
+              await processStockTransfer(id, "REJECTED", user);
+              toast("Transferencia rechazada", "info");
+              mountTransfersPanel(content, tabGeneration);
+              refreshPendingBadge();
+            } catch (err) {
+              toast("Error: " + (err.message || "desconocido"), "error");
+            }
+          });
+        });
+      });
+    });
+  }
+
+  // ===== MOVIMENTS (historial de movimientos de stock — vista admin) =====
+  function mountMovementsPanel(content, gen) {
+    content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+    let filterWarehouse = "";
+    let filterReason = "";
+    let filterProduct = "";
+    let filterFrom = "";
+    let filterTo = "";
+    let allMovements = [];
+    let allWarehouses = [];
+    let allProducts = [];
+
+    async function load() {
+      try {
+        const [movements, warehouses, products] = await Promise.all([
+          listStockMovements({ limit: 500 }),
+          listWarehouses(),
+          listProducts(),
+        ]);
+        if (gen !== tabGeneration) return;
+        allMovements = movements;
+        allWarehouses = warehouses;
+        allProducts = products;
+        render();
+      } catch (err) {
+        console.error("mountMovementsPanel load failed:", err);
+        if (gen !== tabGeneration) return;
+        content.innerHTML = `<div class="empty-state text-danger">Error al cargar movimientos: ${esc(err.message || 'desconocido')}</div>`;
+      }
+    }
+
+    function render() {
+      const whMap = new Map(allWarehouses.map((w) => [w.id, w]));
+      const prodMap = new Map(allProducts.map((p) => [p.id, p]));
+
+      // Aplicar filtros
+      let filtered = allMovements;
+      if (filterWarehouse) filtered = filtered.filter((m) => m.warehouseId === filterWarehouse);
+      if (filterReason) filtered = filtered.filter((m) => m.reason === filterReason);
+      if (filterProduct) filtered = filtered.filter((m) => m.productId === filterProduct);
+      if (filterFrom) filtered = filtered.filter((m) => m.createdAt >= new Date(filterFrom).getTime());
+      if (filterTo) filtered = filtered.filter((m) => m.createdAt <= new Date(filterTo).getTime() + 86400000);
+
+      // Stats
+      const totalIn = filtered.filter((m) => (m.delta || 0) > 0).reduce((s, m) => s + m.delta, 0);
+      const totalOut = filtered.filter((m) => (m.delta || 0) < 0).reduce((s, m) => s + Math.abs(m.delta), 0);
+      const totalMovements = filtered.length;
+
+      const reasonLabels = {
+        AJUSTE_MANUAL: "Ajuste manual",
+        INVENTARIO: "Inventario",
+        MERMA: "Merma",
+        DEVOLUCION: "Devolución",
+        VENTA: "Venta",
+        CANCELACION: "Cancelación",
+        REABRIR: "Reabrir",
+        TRANSFERENCIA_SALIDA: "Transferencia salida",
+        TRANSFERENCIA_ENTRADA: "Transferencia entrada",
+      };
+      const reasonColors = {
+        AJUSTE_MANUAL: "badge-outline",
+        INVENTARIO: "badge-outline",
+        MERMA: "badge-danger",
+        DEVOLUCION: "badge-accent",
+        VENTA: "badge-warning",
+        CANCELACION: "badge-danger",
+        REABRIR: "badge-accent",
+        TRANSFERENCIA_SALIDA: "badge-danger",
+        TRANSFERENCIA_ENTRADA: "badge-accent",
+      };
+
+      content.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:1rem">
+          <div>
+            <h1 class="text-2xl font-bold flex items-center gap-2">${icon("listTree", 24)} Movimientos de stock</h1>
+            <p class="text-sm text-muted">Auditoría completa · ${totalMovements} movimientos (mostrando últimos 500)</p>
+          </div>
+
+          <!-- Stats -->
+          <div class="grid md:grid-cols-3 gap-3">
+            <div class="stat-card">
+              <div class="stat-label" style="color:var(--accent)">${icon("arrowDown", 14)} Entradas</div>
+              <div class="stat-value text-accent">+${totalIn}</div>
+              <div class="stat-sub">unidades que entraron</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label" style="color:var(--danger)">${icon("arrowUp", 14)} Salidas</div>
+              <div class="stat-value text-danger">−${totalOut}</div>
+              <div class="stat-sub">unidades que salieron</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">${icon("listTree", 14)} Total movimientos</div>
+              <div class="stat-value">${totalMovements}</div>
+              <div class="stat-sub">en el período filtrado</div>
+            </div>
+          </div>
+
+          <!-- Filtros -->
+          <div class="card">
+            <div class="card-content" style="padding:0.875rem;display:flex;flex-direction:column;gap:0.625rem">
+              <div class="grid grid-cols-2 md:grid-cols-5 gap-2">
+                <div>
+                  <label class="label label-xs">Almacén</label>
+                  <select class="select" id="mv-filter-warehouse">
+                    <option value="">Todos</option>
+                    ${allWarehouses.map((w) => `<option value="${w.id}" ${filterWarehouse === w.id ? 'selected' : ''}>${esc(w.name)} (${esc(w.code)})</option>`).join('')}
+                  </select>
+                </div>
+                <div>
+                  <label class="label label-xs">Producto</label>
+                  <select class="select" id="mv-filter-product">
+                    <option value="">Todos</option>
+                    ${allProducts.map((p) => `<option value="${p.id}" ${filterProduct === p.id ? 'selected' : ''}>${esc(p.name)} · ${esc(p.brand || '')}</option>`).join('')}
+                  </select>
+                </div>
+                <div>
+                  <label class="label label-xs">Motivo</label>
+                  <select class="select" id="mv-filter-reason">
+                    <option value="">Todos</option>
+                    ${Object.entries(reasonLabels).map(([val, label]) => `<option value="${val}" ${filterReason === val ? 'selected' : ''}>${label}</option>`).join('')}
+                  </select>
+                </div>
+                <div>
+                  <label class="label label-xs">Desde</label>
+                  <input class="input" type="date" id="mv-filter-from" value="${filterFrom}" />
+                </div>
+                <div>
+                  <label class="label label-xs">Hasta</label>
+                  <input class="input" type="date" id="mv-filter-to" value="${filterTo}" />
+                </div>
+              </div>
+              <div class="flex gap-2 flex-wrap">
+                <button class="btn btn-primary btn-sm" id="mv-apply-filters">${icon("search", 12)} Aplicar filtros</button>
+                <button class="btn btn-outline btn-sm" id="mv-clear-filters">Limpiar</button>
+                <button class="btn btn-outline btn-sm" id="mv-export-csv" title="Exportar movimientos filtrados a CSV">${icon("download", 12)} Exportar CSV</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tabla -->
+          <div class="card">
+            <div class="overflow-x-auto">
+              ${filtered.length === 0 ? `
+                <div class="empty-state" style="padding:2rem">
+                  <div class="empty-state-icon">${icon("listTree", 24)}</div>
+                  <p class="empty-state-title">Sin movimientos</p>
+                  <p class="empty-state-desc">No hay movimientos que coincidan con los filtros seleccionados.</p>
+                </div>
+              ` : `
+                <table class="table">
+                  <thead><tr>
+                    <th>Fecha</th>
+                    <th>Producto</th>
+                    <th>Almacén</th>
+                    <th>Motivo</th>
+                    <th class="text-right">Delta</th>
+                    <th>Usuario</th>
+                    <th>Nota</th>
+                  </tr></thead>
+                  <tbody>
+                    ${filtered.map((m) => {
+                      const wh = whMap.get(m.warehouseId);
+                      const prod = prodMap.get(m.productId);
+                      const isPositive = (m.delta || 0) > 0;
+                      const isZero = (m.delta || 0) === 0;
+                      const reasonBadge = reasonColors[m.reason] || 'badge-outline';
+                      const reasonLabel = reasonLabels[m.reason] || m.reason;
+                      return `
+                        <tr>
+                          <td class="text-xs text-muted">${formatDateShort(m.createdAt)}</td>
+                          <td class="font-medium text-sm">${esc(prod?.name || 'Producto eliminado')}</td>
+                          <td class="text-xs">
+                            ${wh ? `${esc(wh.name)} <span class="badge badge-outline" style="font-size:0.5625rem">${esc(wh.code)}</span>` : '—'}
+                          </td>
+                          <td><span class="badge ${reasonBadge}" style="font-size:0.625rem">${esc(reasonLabel)}</span></td>
+                          <td class="text-right font-bold ${isZero ? '' : isPositive ? 'text-accent' : 'text-danger'}">
+                            ${isZero ? '0' : (isPositive ? '+' : '−') + Math.abs(m.delta || 0)}
+                          </td>
+                          <td class="text-xs text-muted">${esc(m.userName || '—')}</td>
+                          <td class="text-xs text-muted" style="max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.note || '—')}</td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              `}
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Cablear filtros
+      content.querySelector("#mv-apply-filters").addEventListener("click", () => {
+        filterWarehouse = content.querySelector("#mv-filter-warehouse").value;
+        filterProduct = content.querySelector("#mv-filter-product").value;
+        filterReason = content.querySelector("#mv-filter-reason").value;
+        filterFrom = content.querySelector("#mv-filter-from").value;
+        filterTo = content.querySelector("#mv-filter-to").value;
+        render();
+      });
+      content.querySelector("#mv-clear-filters").addEventListener("click", () => {
+        filterWarehouse = "";
+        filterProduct = "";
+        filterReason = "";
+        filterFrom = "";
+        filterTo = "";
+        render();
+      });
+
+      // Export CSV con los movimientos filtrados
+      const exportBtn = content.querySelector("#mv-export-csv");
+      if (exportBtn) {
+        exportBtn.addEventListener("click", () => {
+          if (filtered.length === 0) {
+            toast("No hay movimientos para exportar con los filtros actuales", "error");
+            return;
+          }
+          const rows = filtered.map((m) => {
+            const wh = whMap.get(m.warehouseId);
+            const prod = prodMap.get(m.productId);
+            return {
+              fecha: new Date(m.createdAt).toLocaleString("es-ES"),
+              producto: prod?.name || 'Producto eliminado',
+              marca: prod?.brand || '',
+              almacen: wh?.name || '',
+              codigo_almacen: wh?.code || '',
+              motivo: reasonLabels[m.reason] || m.reason,
+              delta: m.delta || 0,
+              usuario: m.userName || '',
+              nota: m.note || '',
+            };
+          });
+          exportToCSV('movimientos-stock', rows);
+          toast(`${rows.length} movimientos exportados`, "success");
+        });
+      }
+    }
+
+    load();
+  }
+
   // ===== WEEKEND (regla de fin de semana) =====
   function mountWeekendPanel(content, gen) {
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
@@ -1488,51 +2593,201 @@ export function mountAdminView(container, navigateOrUser) {
   // ===== CARDS =====
   function mountCardsPanel(content, gen) {
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
-    listCards().then((cards) => {
+    Promise.all([
+      listCardsWithBalances(),
+      Promise.resolve(getStore().getState().currentUser),
+    ]).then(([cards, currentUser]) => {
       if (gen !== tabGeneration) return;
-      content.innerHTML = `
-        <div class="card">
-          <div class="card-header flex justify-between">
-            <h2 class="card-title">Tarjetas (${cards.length})</h2>
-            <button class="btn btn-primary btn-sm" id="new-card">${icon("plus", 14)} Nueva</button>
+      let expandedCardId = null;
+      let cardMovements = [];
+
+      function render() {
+        const totalBalance = cards.reduce((s, c) => s + (c.balance || 0), 0);
+        const totalCurrency = cards[0]?.currency || "USD";
+        content.innerHTML = `
+          <div style="display:flex;flex-direction:column;gap:1rem">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h1 class="text-2xl font-bold flex items-center gap-2">${icon("creditCard", 24)} Tarjetas</h1>
+                <p class="text-sm text-muted">Saldo total: <strong>${formatMoney(totalBalance, totalCurrency)}</strong> · ${cards.length} tarjetas</p>
+              </div>
+              <button class="btn btn-primary btn-sm" id="new-card">${icon("plus", 14)} Nueva</button>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:0.75rem">
+              ${cards.length === 0 ? `
+                <div class="empty-state"><div class="empty-state-icon">${icon("creditCard", 24)}</div><p class="empty-state-title">Sin tarjetas</p><p class="empty-state-desc">Creá una tarjeta bancaria para registrar transferencias.</p></div>
+              ` : cards.map((c) => {
+                const isExpanded = expandedCardId === c.id;
+                const balanceColor = (c.balance || 0) >= 0 ? 'var(--primary)' : 'var(--danger)';
+                return `
+                  <div class="card" style="${isExpanded ? 'border-color:color-mix(in oklab, var(--primary) 40%, transparent)' : ''}">
+                    <div class="card-header flex justify-between" style="cursor:pointer" data-toggle-card="${esc(c.id)}">
+                      <div class="flex items-center gap-2 min-w-0">
+                        <div class="brand-logo" style="background: ${c.bank === 'BPA' ? 'color-mix(in oklab, var(--primary) 15%, var(--bg-soft))' : c.bank === 'BANDEC' ? 'color-mix(in oklab, var(--accent-mn) 15%, var(--bg-soft))' : 'color-mix(in oklab, var(--accent-eur) 15%, var(--bg-soft))'}; color: ${c.bank === 'BPA' ? 'var(--primary)' : c.bank === 'BANDEC' ? 'var(--accent-mn)' : 'var(--accent-eur)'}">
+                          ${icon("creditCard", 16)}
+                        </div>
+                        <div class="min-w-0">
+                          <h3 class="font-semibold">${esc(c.name)}</h3>
+                          <p class="text-xs text-muted">
+                            <code class="font-mono">${esc(c.number)}</code>
+                            ${c.bank ? `· <span class="badge badge-outline" style="font-size:0.5625rem">${esc(c.bank)}</span>` : ''}
+                            ${!c.active ? '<span class="badge badge-danger" style="font-size:0.5625rem">Inactiva</span>' : ''}
+                          </p>
+                        </div>
+                      </div>
+                      <div style="text-align:right">
+                        <div class="text-xs text-muted">Saldo actual</div>
+                        <div class="text-lg font-bold" style="color: ${balanceColor}">${formatMoney(c.balance || 0, c.currency || "USD")}</div>
+                        <div class="text-xs text-muted">${c.salesCount || 0} venta(s) con transf.</div>
+                      </div>
+                      <div class="ml-2" style="align-self:center;color:var(--text-muted)">${icon(isExpanded ? "chevronUp" : "chevronDown", 14)}</div>
+                    </div>
+                    ${isExpanded ? `
+                      <div class="card-content" style="padding:0.875rem;display:flex;flex-direction:column;gap:0.75rem">
+                        <div class="flex justify-between items-center flex-wrap gap-2">
+                          <h4 class="text-sm font-semibold">Movimientos (${cardMovements.length})</h4>
+                          <div class="flex gap-1">
+                            <button class="btn btn-primary btn-sm" data-deposit-card="${esc(c.id)}" style="background:var(--primary)">${icon("plus", 12)} Depósito</button>
+                            <button class="btn btn-outline btn-sm" data-withdraw-card="${esc(c.id)}" style="color:var(--danger)">${icon("minus", 12)} Retiro</button>
+                            <button class="btn btn-ghost btn-sm" data-edit-card="${esc(c.id)}">Editar</button>
+                            <button class="btn btn-ghost btn-sm text-danger" data-delete-card="${esc(c.id)}">${icon("trash", 12)}</button>
+                          </div>
+                        </div>
+                        ${cardMovements.length === 0 ? `
+                          <div class="empty-state text-xs">Sin movimientos. Hacé un depósito para empezar a usar la tarjeta.</div>
+                        ` : `
+                          <div style="max-height:20rem;overflow-y:auto;display:flex;flex-direction:column;gap:0.375rem">
+                            ${cardMovements.slice(0, 30).map((m) => {
+                              const isPositive = (m.amount || 0) >= 0;
+                              const typeLabel = { DEPOSIT: "Depósito", WITHDRAW: "Retiro", ADJUST: "Ajuste", SALE: "Venta" }[m.movementType] || m.movementType;
+                              const typeColor = { DEPOSIT: "var(--primary)", WITHDRAW: "var(--danger)", ADJUST: "var(--warning)", SALE: "var(--accent-mn)" }[m.movementType] || "var(--text-muted)";
+                              return `
+                                <div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem;border:1px solid var(--border);border-radius:var(--radius)">
+                                  <div style="width:2rem;height:2rem;border-radius:var(--radius-sm);background:${typeColor}15;color:${typeColor};display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                                    ${icon(isPositive ? "arrowDown" : "arrowUp", 14)}
+                                  </div>
+                                  <div style="flex:1;min-width:0">
+                                    <div class="text-sm font-medium truncate">${typeLabel}${m.note ? ` · <span class="text-muted">${esc(m.note)}</span>` : ''}</div>
+                                    <div class="text-xs text-muted">${formatDate(m.createdAt)}${m.userName ? ' · ' + esc(m.userName) : ''}</div>
+                                  </div>
+                                  <div class="font-bold ${isPositive ? 'text-primary' : 'text-danger'}">
+                                    ${isPositive ? '+' : ''}${formatMoney(m.amount, m.currency || c.currency || "USD")}
+                                  </div>
+                                </div>
+                              `;
+                            }).join('')}
+                          </div>
+                        `}
+                      </div>
+                    ` : ''}
+                  </div>
+                `;
+              }).join('')}
+            </div>
           </div>
-          <div class="overflow-x-auto">
-            <table class="table">
-              <thead><tr><th>Nombre</th><th>Número</th><th>Banco</th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
-              <tbody>
-                ${cards.map((c) => `
-                  <tr>
-                    <td class="font-medium">${esc(c.name)}</td>
-                    <td class="text-xs font-mono">${esc(c.number)}</td>
-                    <td><span class="badge badge-outline">${esc(c.bank || '—')}</span></td>
-                    <td class="text-center">${c.active ? `<span class="badge badge-accent">Activa</span>` : `<span class="badge">Inactiva</span>`}</td>
-                    <td class="text-right">
-                      <button class="btn btn-ghost btn-sm" data-edit-card="${esc(c.id)}">Editar</button>
-                      <button class="btn btn-ghost btn-sm text-danger" data-delete-card="${esc(c.id)}">${icon("trash", 12)}</button>
-                    </td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      `;
-      content.querySelector("#new-card").addEventListener("click", () => showCardDialog(null, () => mountCardsPanel(content)));
-      content.querySelectorAll("[data-edit-card]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const c = cards.find((x) => x.id === btn.dataset.editCard);
-          if (c) showCardDialog(c, () => mountCardsPanel(content));
-        });
-      });
-      content.querySelectorAll("[data-delete-card]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          confirmDialog("¿Eliminar tarjeta? (las ventas existentes conservan el dato)", async () => {
-            await deleteCard(btn.dataset.deleteCard);
-            toast("Tarjeta eliminada", "success");
-            mountCardsPanel(content, tabGeneration);
+        `;
+
+        // Toggle expand/collapse
+        content.querySelectorAll("[data-toggle-card]").forEach((header) => {
+          header.addEventListener("click", async () => {
+            const id = header.dataset.toggleCard;
+            if (expandedCardId === id) {
+              expandedCardId = null;
+              cardMovements = [];
+              render();
+            } else {
+              expandedCardId = id;
+              const result = await getCardBalance(id);
+              cardMovements = result.movements || [];
+              render();
+            }
           });
         });
-      });
+
+        content.querySelector("#new-card").addEventListener("click", () => showCardDialog(null, () => mountCardsPanel(content)));
+        content.querySelectorAll("[data-edit-card]").forEach((btn) => {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const c = cards.find((x) => x.id === btn.dataset.editCard);
+            if (c) showCardDialog(c, () => mountCardsPanel(content));
+          });
+        });
+        content.querySelectorAll("[data-delete-card]").forEach((btn) => {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            confirmDialog("¿Eliminar tarjeta? (las ventas existentes conservan el dato)", async () => {
+              await deleteCard(btn.dataset.deleteCard);
+              toast("Tarjeta eliminada", "success");
+              mountCardsPanel(content, tabGeneration);
+            });
+          });
+        });
+        content.querySelectorAll("[data-deposit-card]").forEach((btn) => {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const c = cards.find((x) => x.id === btn.dataset.depositCard);
+            if (c) showCardMovementDialog(c, "DEPOSIT", () => mountCardsPanel(content));
+          });
+        });
+        content.querySelectorAll("[data-withdraw-card]").forEach((btn) => {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const c = cards.find((x) => x.id === btn.dataset.withdrawCard);
+            if (c) showCardMovementDialog(c, "WITHDRAW", () => mountCardsPanel(content));
+          });
+        });
+      }
+
+      render();
+    });
+  }
+
+  // Diálogo para agregar un movimiento (depósito / retiro) a una tarjeta
+  function showCardMovementDialog(card, movementType, onSaved) {
+    const isDeposit = movementType === "DEPOSIT";
+    const close = showModal({
+      title: isDeposit ? `Depósito a ${card.name}` : `Retiro de ${card.name}`,
+      body: `
+        <div style="display:flex;flex-direction:column;gap:0.75rem">
+          <div>
+            <label class="label label-xs">Monto (${card.currency || "USD"}) *</label>
+            <input class="input" type="number" step="0.01" min="0.01" id="mv-amount" placeholder="0.00" autofocus />
+          </div>
+          <div>
+            <label class="label label-xs">Nota (opcional)</label>
+            <input class="input" id="mv-note" placeholder="${isDeposit ? 'Ej: Depósito inicial, transferencia recibida' : 'Ej: Gasto, retiro para caja'}" />
+          </div>
+          <div class="text-xs text-muted" style="background:var(--bg-soft);padding:0.5rem;border-radius:var(--radius);line-height:1.5">
+            <strong>Saldo actual:</strong> ${formatMoney(card.balance || 0, card.currency || "USD")}<br>
+            <strong>Después del movimiento:</strong> ${formatMoney((card.balance || 0) + (isDeposit ? 0 : 0), card.currency || "USD")} (se calculará al guardar)
+          </div>
+        </div>
+      `,
+      footer: `<button class="btn btn-outline" id="mv-cancel">Cancelar</button><button class="btn btn-primary" id="mv-save">${isDeposit ? "Depositar" : "Retirar"}</button>`,
+    });
+    document.querySelector("#mv-cancel").addEventListener("click", close);
+    document.querySelector("#mv-save").addEventListener("click", async () => {
+      const amount = parseFloat(document.querySelector("#mv-amount").value);
+      const note = document.querySelector("#mv-note").value.trim() || null;
+      if (!amount || amount <= 0) { toast("Ingresá un monto válido", "error"); return; }
+      const user = getStore().getState().currentUser;
+      try {
+        await addCardMovement({
+          cardId: card.id,
+          movementType,
+          amount,
+          currency: card.currency || "USD",
+          note,
+          userId: user?.id,
+          userName: user?.displayName,
+        });
+        toast(isDeposit ? `Depósito de ${formatMoney(amount, card.currency || "USD")} registrado` : `Retiro de ${formatMoney(amount, card.currency || "USD")} registrado`, "success");
+        close();
+        onSaved();
+      } catch (err) {
+        toast("Error al registrar movimiento", "error");
+      }
     });
   }
 
@@ -1545,14 +2800,25 @@ export function mountAdminView(container, navigateOrUser) {
         <div style="display:flex;flex-direction:column;gap:0.75rem">
           <div><label class="label label-xs">Nombre *</label><input class="input" id="c-name" value="${esc(c.name || '')}" placeholder="BPA Principal" /></div>
           <div><label class="label label-xs">Número *</label><input class="input" id="c-number" value="${esc(c.number || '')}" placeholder="9225-6789-0123-4567" /></div>
-          <div><label class="label label-xs">Banco</label>
-            <select class="select" id="c-bank">
-              <option value="">(selecciona)</option>
-              <option value="BPA" ${c.bank === 'BPA' ? 'selected' : ''}>BPA</option>
-              <option value="BANDEC" ${c.bank === 'BANDEC' ? 'selected' : ''}>BANDEC</option>
-              <option value="BANMET" ${c.bank === 'BANMET' ? 'selected' : ''}>BANMET</option>
-            </select>
+          <div class="grid grid-cols-2 gap-2">
+            <div><label class="label label-xs">Banco</label>
+              <select class="select" id="c-bank">
+                <option value="">(selecciona)</option>
+                <option value="BPA" ${c.bank === 'BPA' ? 'selected' : ''}>BPA</option>
+                <option value="BANDEC" ${c.bank === 'BANDEC' ? 'selected' : ''}>BANDEC</option>
+                <option value="BANMET" ${c.bank === 'BANMET' ? 'selected' : ''}>BANMET</option>
+              </select>
+            </div>
+            <div><label class="label label-xs">Moneda del saldo</label>
+              <select class="select" id="c-balanceCurrency">
+                <option value="USD" ${(c.balanceCurrency || 'USD') === 'USD' ? 'selected' : ''}>USD ($)</option>
+                <option value="MN" ${c.balanceCurrency === 'MN' ? 'selected' : ''}>MN (₱)</option>
+                <option value="EUR" ${c.balanceCurrency === 'EUR' ? 'selected' : ''}>EUR (€)</option>
+              </select>
+            </div>
           </div>
+          <div><label class="label label-xs">Saldo inicial</label><input class="input" type="number" step="0.01" id="c-initialBalance" value="${c.initialBalance ?? 0}" placeholder="0.00" /></div>
+          <p class="text-xs text-muted">El saldo inicial se suma automáticamente a los movimientos. Después podés ajustarlo con depósitos y retiros desde la tarjeta.</p>
         </div>
       `,
       footer: `<button class="btn btn-outline" id="c-cancel">Cancelar</button><button class="btn btn-primary" id="c-save">Guardar</button>`,
@@ -1564,6 +2830,8 @@ export function mountAdminView(container, navigateOrUser) {
         name: document.querySelector("#c-name").value.trim(),
         number: document.querySelector("#c-number").value.trim(),
         bank: document.querySelector("#c-bank").value || null,
+        balanceCurrency: document.querySelector("#c-balanceCurrency").value,
+        initialBalance: parseFloat(document.querySelector("#c-initialBalance").value) || 0,
         active: true,
       };
       if (!data.name || !data.number) { toast("Nombre y número son obligatorios", "error"); return; }

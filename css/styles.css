@@ -2157,3 +2157,101 @@ kbd {
 @media (min-width: 640px) {
   .premium-home-main { padding: 0 1.5rem 2rem; }
 }
+
+/* ============================================================
+   Print styles — v5.4.0
+   ============================================================
+   Estilos para imprimir reportes (especialmente comisiones).
+   Cuando el usuario hace Ctrl+P o click "Imprimir":
+   - Oculta el sidebar y elementos de UI no esenciales
+   - Muestra solo el header de impresión + la tabla
+   - Ajusta colores para impresión en blanco y negro o color
+   ============================================================ */
+
+@media print {
+  /* Ocultar todo lo que no sea del reporte */
+  .admin-sidebar,
+  .admin-topbar,
+  .app-header,
+  .premium-header,
+  .bottom-nav,
+  .fab,
+  .toast-container,
+  #modal-container,
+  #toast-container,
+  /* Ocultar botones de acción dentro del reporte */
+  button[id="export-csv-btn"],
+  button[id="print-btn"],
+  button[data-toggle-paid],
+  /* Ocultar tabs y filtros no esenciales */
+  .admin-nav-section-label,
+  /* Mantener visible el contenido principal */
+  { display: none !important; }
+
+  /* Mostrar solo el header de impresión */
+  .print-only {
+    display: block !important;
+  }
+
+  /* Resetear el layout para que ocupe toda la página */
+  .admin-shell {
+    display: block !important;
+  }
+  .admin-main {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  .admin-content {
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  /* Asegurar que la tabla se vea bien al imprimir */
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 11pt !important;
+  }
+  th, td {
+    border: 1px solid #ccc !important;
+    padding: 0.375rem 0.5rem !important;
+    color: black !important;
+  }
+  th {
+    background: #f0f0f0 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  tfoot tr {
+    background: #f5f5f5 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Las stat-cards se vuelven bloques simples */
+  .stat-card {
+    border: 1px solid #ccc !important;
+    background: white !important;
+    padding: 0.5rem !important;
+    page-break-inside: avoid;
+  }
+  .stat-label, .stat-value, .stat-sub {
+    color: black !important;
+  }
+
+  /* Asegurar que los fondos tenues se impriman */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Evitar cortes raros en la tabla */
+  tr, .stat-card {
+    page-break-inside: avoid;
+  }
+
+  /* Margen de página */
+  @page {
+    margin: 1.5cm;
+  }
+}

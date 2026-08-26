@@ -1209,6 +1209,13 @@ export async function saveSale(sale) {
       }
       throw error;
     }
+    // Hook: si la venta es con TRANSFERENCIA a una tarjeta, registrar el movimiento
+    // de tarjeta (saldo). Es non-blocking: si falla, la venta ya está guardada.
+    try {
+      await recordCardMovementForSale(sale);
+    } catch (e) {
+      console.warn("[saveSale] recordCardMovementForSale failed (non-blocking):", e);
+    }
   } catch (err) {
     console.error("saveSale failed:", err);
     throw err;
@@ -1518,6 +1525,11 @@ function computeManagerCommission(m, sales, year, month, payouts) {
   let amountMN = 0;
   let totalUnits = 0;
   let totalSales = 0;
+  // Separar ventas de fin de semana (sábado/domingo) de las de lunes-viernes
+  let weekdayCount = 0;
+  let weekendCount = 0;
+  let weekdayAmount = 0;
+  let weekendAmount = 0;
 
   // Filtrar ventas según el tipo de gestor:
   // - LOCAL: solo cuenta las ventas del almacén al que pertenece el gestor
@@ -1534,6 +1546,20 @@ function computeManagerCommission(m, sales, year, month, payouts) {
 
   for (const s of managerSales) {
     totalSales += s.totalAmount;
+
+    // Determinar si la venta fue en fin de semana (sábado=6 o domingo=0)
+    // dayOfWeek puede venir del campo guardado, o se calcula de createdAt
+    const dow = s.dayOfWeek !== undefined && s.dayOfWeek !== null
+      ? s.dayOfWeek
+      : new Date(s.createdAt).getDay();
+    const isWeekend = (dow === 0 || dow === 6);
+    if (isWeekend) {
+      weekendCount++;
+      weekendAmount += s.totalAmount;
+    } else {
+      weekdayCount++;
+      weekdayAmount += s.totalAmount;
+    }
 
     // Calcular comisión según tipo
     let commissionForThisSale = 0;
@@ -1575,6 +1601,11 @@ function computeManagerCommission(m, sales, year, month, payouts) {
     amountUSD,
     amountMN,
     amount: amountUSD + amountMN * (getStore().getState().rates["MN"]?.rateUSD || (1/320)),
+    // Separación sábado/domingo vs lunes-viernes (para el reporte de comisiones)
+    weekdayCount,
+    weekendCount,
+    weekdayAmount,
+    weekendAmount,
   };
 }
 
@@ -1593,6 +1624,42 @@ export async function markManagerCommissionPaid(managerId, year, month, paid, pa
     }
   } catch (err) {
     console.error("markManagerCommissionPaid failed:", err);
+  }
+}
+
+/**
+ * Verifica si hay comisiones NO PAGADAS del mes anterior al actual.
+ * Devuelve un objeto con el resumen para mostrar como recordatorio en el dashboard.
+ *
+ * @returns {Promise<{hasUnpaid: boolean, month: number, year: number, monthLabel: string, gestores: number, totalUSD: number, totalMN: number}>}
+ */
+export async function getUnpaidCommissionsFromPreviousMonth() {
+  const now = new Date();
+  // Mes anterior
+  const prevMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+  const prevYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+  const monthLabel = new Date(prevYear, prevMonth, 1).toLocaleDateString("es-ES", { month: "long", year: "numeric" });
+
+  try {
+    const commissions = await listManagerCommissions(prevYear, prevMonth + 1);
+    const unpaid = commissions.filter((c) => !c.paid);
+    if (unpaid.length === 0) {
+      return { hasUnpaid: false, month: prevMonth + 1, year: prevYear, monthLabel, gestores: 0, totalUSD: 0, totalMN: 0 };
+    }
+    const totalUSD = unpaid.reduce((s, c) => s + (c.amountUSD || 0), 0);
+    const totalMN = unpaid.reduce((s, c) => s + (c.amountMN || 0), 0);
+    return {
+      hasUnpaid: true,
+      month: prevMonth + 1,
+      year: prevYear,
+      monthLabel,
+      gestores: unpaid.length,
+      totalUSD,
+      totalMN,
+    };
+  } catch (err) {
+    console.error("getUnpaidCommissionsFromPreviousMonth failed:", err);
+    return { hasUnpaid: false, month: prevMonth + 1, year: prevYear, monthLabel, gestores: 0, totalUSD: 0, totalMN: 0 };
   }
 }
 
@@ -2048,6 +2115,517 @@ export async function deleteCard(id) {
     if (error) throw error;
   } catch (err) {
     console.error("deleteCard failed:", err);
+  }
+}
+
+// =====================================================
+// ============ Card balances + movements ============
+// =====================================================
+// El saldo actual de una tarjeta se calcula así:
+//   saldo = initial_balance + SUM(card_movements.amount)
+// donde cada movimiento.amount es positivo (depósito/venta)
+// o negativo (retiro/ajuste).
+
+/**
+ * Calcula el saldo actual de una tarjeta, considerando:
+ * - initial_balance (saldo inicial configurado)
+ * - movimientos manuales (DEPOSIT, WITHDRAW, ADJUST)
+ * - ventas con TRANSFERENCIA a esa tarjeta (movimientos SALE)
+ *
+ * @param {string} cardId
+ * @returns {Promise<{balance: number, currency: string, movements: Array, salesCount: number}>}
+ */
+export async function getCardBalance(cardId) {
+  const s = await sb();
+  if (!s) {
+    // Modo demo
+    return { balance: 0, currency: "USD", movements: [], salesCount: 0 };
+  }
+  try {
+    // 1) Obtener la tarjeta (initial_balance + currency)
+    const { data: card, error: cardErr } = await s.from("cards")
+      .select("initial_balance, balance_currency")
+      .eq("id", cardId)
+      .maybeSingle();
+    if (cardErr) throw cardErr;
+    if (!card) return { balance: 0, currency: "USD", movements: [], salesCount: 0 };
+
+    // 2) Obtener movimientos
+    const { data: movements, error: mvErr } = await s.from("card_movements")
+      .select("*")
+      .eq("card_id", cardId)
+      .order("created_at", { ascending: false });
+    if (mvErr) throw mvErr;
+
+    // 3) Calcular saldo
+    const initial = Number(card.initial_balance) || 0;
+    const movementsSum = (movements || []).reduce((acc, m) => acc + (Number(m.amount) || 0), 0);
+    const balance = initial + movementsSum;
+    const salesCount = (movements || []).filter((m) => m.movement_type === "SALE").length;
+
+    return {
+      balance,
+      currency: card.balance_currency || "USD",
+      movements: rows(movements || []),
+      salesCount,
+    };
+  } catch (err) {
+    console.error("getCardBalance failed:", err);
+    return { balance: 0, currency: "USD", movements: [], salesCount: 0 };
+  }
+}
+
+/**
+ * Obtiene el saldo de TODAS las tarjetas en una sola consulta.
+ * Más eficiente que llamar a getCardBalance para cada una.
+ *
+ * @returns {Promise<Array<{id, name, number, bank, balance, currency, salesCount}>>}
+ */
+export async function listCardsWithBalances() {
+  const s = await sb();
+  if (!s) {
+    // Modo demo: devolver cards sin balance
+    return (DEMO_CARDS || []).map((c) => ({
+      ...c,
+      balance: 0,
+      currency: "USD",
+      salesCount: 0,
+      movements: [],
+    }));
+  }
+  try {
+    const { data: cards, error: cErr } = await s.from("cards")
+      .select("*")
+      .order("created_at", { ascending: true });
+    if (cErr) throw cErr;
+
+    const { data: movements, error: mErr } = await s.from("card_movements")
+      .select("card_id, amount, movement_type");
+    if (mErr) throw mErr;
+
+    // Agrupar movimientos por card_id
+    const movementsByCard = new Map();
+    for (const m of movements || []) {
+      if (!movementsByCard.has(m.card_id)) movementsByCard.set(m.card_id, []);
+      movementsByCard.get(m.card_id).push(m);
+    }
+
+    return (cards || []).map((card) => {
+      const cardMvs = movementsByCard.get(card.id) || [];
+      const initial = Number(card.initial_balance) || 0;
+      const sum = cardMvs.reduce((acc, m) => acc + (Number(m.amount) || 0), 0);
+      const salesCount = cardMvs.filter((m) => m.movement_type === "SALE").length;
+      return {
+        ...rows([card])[0],
+        balance: initial + sum,
+        currency: card.balance_currency || "USD",
+        salesCount,
+      };
+    });
+  } catch (err) {
+    console.error("listCardsWithBalances failed:", err);
+    return [];
+  }
+}
+
+/**
+ * Agregar un movimiento manual a una tarjeta (depósito, retiro o ajuste).
+ *
+ * @param {Object} data - { cardId, movementType, amount, currency, note, userId, userName }
+ * @returns {Promise<void>}
+ */
+export async function addCardMovement(data) {
+  const s = await sb();
+  if (!s) return;
+  try {
+    // amount: para DEPOSIT es positivo, para WITHDRAW negativo
+    let amount = Number(data.amount) || 0;
+    if (data.movementType === "WITHDRAW" && amount > 0) amount = -amount;
+
+    const r = toRow({
+      cardId: data.cardId,
+      movementType: data.movementType,
+      amount,
+      currency: data.currency || "USD",
+      note: data.note || null,
+      userId: data.userId || null,
+      userName: data.userName || null,
+      createdAt: Date.now(),
+    });
+    const { error } = await s.from("card_movements").insert(r);
+    if (error) throw error;
+  } catch (err) {
+    console.error("addCardMovement failed:", err);
+    throw err;
+  }
+}
+
+/**
+ * Registrar automáticamente un movimiento SALE cuando se hace una venta
+ * con TRANSFERENCIA a una tarjeta. Se llama desde saveSale().
+ */
+async function recordCardMovementForSale(sale) {
+  if (!sale.cardId || sale.paymentMethod !== "TRANSFERENCIA") return;
+  const amount = sale.transferAmount || sale.paidTransfer || sale.totalAmount || 0;
+  if (!amount) return;
+  const s = await sb();
+  if (!s) return;
+  try {
+    const r = toRow({
+      cardId: sale.cardId,
+      movementType: "SALE",
+      amount,  // positivo: entra dinero a la tarjeta
+      currency: sale.currency === "TRANSFERENCIA" ? "USD" : sale.currency,
+      note: `Venta ${sale.code}`,
+      saleId: sale.id,
+      userId: sale.userId,
+      userName: sale.userName,
+      createdAt: Date.now(),
+    });
+    const { error } = await s.from("card_movements").insert(r);
+    if (error) throw error;
+  } catch (err) {
+    console.error("recordCardMovementForSale failed:", err);
+  }
+}
+
+/**
+ * Obtiene la evolución del saldo de una tarjeta en el tiempo.
+ * Devuelve un array de puntos { label, value } listos para lineChart.
+ *
+ * @param {string} cardId
+ * @param {number} days - cuántos días hacia atrás (default 30)
+ * @returns {Promise<Array<{label: string, value: number}>>}
+ */
+export async function getCardBalanceHistory(cardId, days = 30) {
+  const s = await sb();
+  if (!s) {
+    // Modo demo: devolver una línea plana en 0
+    return Array.from({ length: days }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (days - 1 - i));
+      return { label: d.toLocaleDateString("es-ES", { day: "numeric", month: "short" }), value: 0 };
+    });
+  }
+  try {
+    // 1) Obtener initial_balance
+    const { data: card, error: cErr } = await s.from("cards")
+      .select("initial_balance, balance_currency")
+      .eq("id", cardId)
+      .maybeSingle();
+    if (cErr) throw cErr;
+    const initial = Number(card?.initial_balance) || 0;
+
+    // 2) Obtener movimientos del período
+    const fromMs = Date.now() - days * 86400000;
+    const { data: movements, error: mErr } = await s.from("card_movements")
+      .select("amount, created_at")
+      .eq("card_id", cardId)
+      .order("created_at", { ascending: true });
+    if (mErr) throw mErr;
+
+    // 3) Calcular evolución acumulada por día
+    // Primero: sumar todos los movimientos ANTES del período (saldo inicial efectivo)
+    const beforePeriod = (movements || [])
+      .filter((m) => isoToMs(m.created_at) < fromMs)
+      .reduce((acc, m) => acc + (Number(m.amount) || 0), 0);
+    let runningBalance = initial + beforePeriod;
+
+    // Movimientos dentro del período
+    const inPeriod = (movements || []).filter((m) => isoToMs(m.created_at) >= fromMs);
+
+    // Generar un punto por día
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const points = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const day = new Date(today);
+      day.setDate(day.getDate() - i);
+      const dayEnd = new Date(day);
+      dayEnd.setDate(dayEnd.getDate() + 1);
+      // Sumar movimientos del día
+      const dayMovements = inPeriod.filter((m) => {
+        const t = isoToMs(m.created_at);
+        return t >= day.getTime() && t < dayEnd.getTime();
+      });
+      for (const m of dayMovements) {
+        runningBalance += Number(m.amount) || 0;
+      }
+      const label = day.toLocaleDateString("es-ES", { day: "numeric", month: "short" });
+      points.push({ label, value: runningBalance });
+    }
+    return points;
+  } catch (err) {
+    console.error("getCardBalanceHistory failed:", err);
+    return [];
+  }
+}
+
+// =====================================================
+// ============ Stock availability across warehouses ============
+// =====================================================
+// Permite a un vendedor ver en qué otros almacenes hay stock
+// de un producto que está agotado o bajo en su almacén.
+
+/**
+ * Lista el stock de un producto específico en TODOS los almacenes.
+ *
+ * @param {string} productId
+ * @returns {Promise<Array<{warehouseId, warehouseName, warehouseCode, quantity, localPrice}>>}
+ */
+export async function listStockForProductInAllWarehouses(productId) {
+  const s = await sb();
+  if (!s) return [];
+  try {
+    // Join stock + warehouses
+    const { data, error } = await s
+      .from("stock")
+      .select(`
+        quantity,
+        local_price,
+        warehouse:warehouse_id ( id, name, code, active )
+      `)
+      .eq("product_id", productId);
+    if (error) throw error;
+    return (data || [])
+      .filter((row) => row.warehouse?.active !== false)
+      .map((row) => ({
+        warehouseId: row.warehouse?.id,
+        warehouseName: row.warehouse?.name,
+        warehouseCode: row.warehouse?.code,
+        quantity: Number(row.quantity) || 0,
+        localPrice: row.local_price,
+      }))
+      .sort((a, b) => b.quantity - a.quantity);  // más stock primero
+  } catch (err) {
+    console.error("listStockForProductInAllWarehouses failed:", err);
+    return [];
+  }
+}
+
+/**
+ * Lista el stock completo de TODOS los almacenes en una sola consulta.
+ * Útil para mostrar "disponibilidad en otros almacenes" en el inventario.
+ *
+ * @returns {Promise<Array<{productId, warehouseId, warehouseName, warehouseCode, quantity, localPrice}>>}
+ */
+export async function listAllStockAcrossWarehouses() {
+  const s = await sb();
+  if (!s) return [];
+  try {
+    const { data, error } = await s
+      .from("stock")
+      .select(`
+        quantity,
+        local_price,
+        product_id,
+        warehouse:warehouse_id ( id, name, code, active )
+      `);
+    if (error) throw error;
+    return (data || [])
+      .filter((row) => row.warehouse?.active !== false)
+      .map((row) => ({
+        productId: row.product_id,
+        warehouseId: row.warehouse?.id,
+        warehouseName: row.warehouse?.name,
+        warehouseCode: row.warehouse?.code,
+        quantity: Number(row.quantity) || 0,
+        localPrice: row.local_price,
+      }));
+  } catch (err) {
+    console.error("listAllStockAcrossWarehouses failed:", err);
+    return [];
+  }
+}
+
+// =====================================================
+// ============ Stock transfers (entre almacenes) ============
+// =====================================================
+
+/**
+ * Crea una nueva transferencia de stock entre almacenes.
+ * Estado inicial: PENDING (esperando aceptación del destino).
+ *
+ * @param {Object} data - { fromWarehouseId, toWarehouseId, productId, productName, quantity, note, requestedBy, requestedByName }
+ * @returns {Promise<string>} - el id de la transferencia creada
+ */
+export async function createStockTransfer(data) {
+  const s = await sb();
+  if (!s) return "demo-id";
+  try {
+    const code = `TR-${String(Date.now()).slice(-5)}${Math.floor(Math.random() * 9)}`;
+    const r = toRow({
+      code,
+      fromWarehouseId: data.fromWarehouseId,
+      toWarehouseId: data.toWarehouseId,
+      productId: data.productId,
+      productName: data.productName,
+      quantity: data.quantity,
+      status: "PENDING",
+      note: data.note || null,
+      requestedBy: data.requestedBy || null,
+      requestedByName: data.requestedByName || null,
+      createdAt: Date.now(),
+    });
+    const { data: inserted, error } = await s.from("stock_transfers").insert(r).select().single();
+    if (error) throw error;
+    return inserted.id;
+  } catch (err) {
+    console.error("createStockTransfer failed:", err);
+    throw err;
+  }
+}
+
+/**
+ * Lista transferencias (filtradas por estado, almacén origen o destino).
+ *
+ * @param {Object} filters - { status, fromWarehouseId, toWarehouseId, productId }
+ * @returns {Promise<Array>}
+ */
+export async function listStockTransfers(filters = {}) {
+  const s = await sb();
+  if (!s) return [];
+  try {
+    let query = s.from("stock_transfers").select("*");
+    if (filters.status) query = query.eq("status", filters.status);
+    if (filters.fromWarehouseId) query = query.eq("from_warehouse_id", filters.fromWarehouseId);
+    if (filters.toWarehouseId) query = query.eq("to_warehouse_id", filters.toWarehouseId);
+    if (filters.productId) query = query.eq("product_id", filters.productId);
+    query = query.order("created_at", { ascending: false });
+    const { data, error } = await query;
+    if (error) throw error;
+    return rows(data || []);
+  } catch (err) {
+    console.error("listStockTransfers failed:", err);
+    return [];
+  }
+}
+
+/**
+ * Procesa una transferencia: cambia el estado y, si se confirma,
+ * descuenta stock del origen y suma al destino (atómicamente).
+ *
+ * @param {string} transferId
+ * @param {string} newStatus - "COMPLETED" | "REJECTED" | "CANCELLED"
+ * @param {Object} user - { id, displayName } del que procesa
+ * @returns {Promise<void>}
+ */
+export async function processStockTransfer(transferId, newStatus, user) {
+  const s = await sb();
+  if (!s) return;
+  try {
+    // 1) Obtener la transferencia
+    const { data: transfer, error: tErr } = await s.from("stock_transfers")
+      .select("*")
+      .eq("id", transferId)
+      .maybeSingle();
+    if (tErr) throw tErr;
+    if (!transfer) throw new Error("Transferencia no encontrada");
+    if (transfer.status !== "PENDING") {
+      throw new Error(`No se puede procesar: estado actual es ${transfer.status}`);
+    }
+
+    const t = rows([transfer])[0];
+
+    // 2) Si se rechaza o cancela, solo actualizar estado
+    if (newStatus === "REJECTED" || newStatus === "CANCELLED") {
+      const { error } = await s.from("stock_transfers").update({
+        status: newStatus,
+        processed_by: user?.id,
+        processed_by_name: user?.displayName,
+        processed_at: new Date().toISOString(),
+      }).eq("id", transferId);
+      if (error) throw error;
+      return;
+    }
+
+    // 3) Si se confirma (COMPLETED): descuenta del origen y suma al destino
+    if (newStatus === "COMPLETED") {
+      // Llamar a adjustStock dos veces (origen sale, destino entra)
+      // Importamos las funciones dinámicamente para evitar dependencias circulares
+      const { adjustStock } = await import("./db.js");
+
+      // Descuenta del origen (cantidad negativa)
+      await adjustStock(
+        t.fromWarehouseId,
+        t.productId,
+        -t.quantity,
+        "TRANSFERENCIA_SALIDA",
+        `Transferencia ${t.code} → destino`,
+        user?.id,
+        user?.displayName
+      );
+      // Suma al destino (cantidad positiva)
+      await adjustStock(
+        t.toWarehouseId,
+        t.productId,
+        t.quantity,
+        "TRANSFERENCIA_ENTRADA",
+        `Transferencia ${t.code} ← origen`,
+        user?.id,
+        user?.displayName
+      );
+
+      // Marca la transferencia como COMPLETED
+      const { error } = await s.from("stock_transfers").update({
+        status: newStatus,
+        processed_by: user?.id,
+        processed_by_name: user?.displayName,
+        processed_at: new Date().toISOString(),
+      }).eq("id", transferId);
+      if (error) throw error;
+    }
+  } catch (err) {
+    console.error("processStockTransfer failed:", err);
+    throw err;
+  }
+}
+
+// =====================================================
+// ============ Export all data (backup completo) ============
+// =====================================================
+// Devuelve todos los datos de la base de datos en un solo objeto,
+// listo para exportar como CSVs separados (un archivo por apartado).
+
+/**
+ * Obtiene todos los datos de la base de datos para exportación completa.
+ * Devuelve un objeto con arrays por apartado.
+ *
+ * @returns {Promise<Object|null>}
+ */
+export async function getAllDataForExport() {
+  const s = await sb();
+  if (!s) return null;
+  try {
+    // Hacer todas las consultas en paralelo para optimizar
+    const tables = [
+      "warehouses", "products", "categories", "subcategories", "managers",
+      "cards", "users", "sales", "stock", "stock_movements",
+      "card_movements", "stock_transfers", "commission_payouts",
+      "settings", "rates", "rate_config",
+    ];
+    const results = await Promise.all(
+      tables.map(async (table) => {
+        try {
+          const { data, error } = await s.from(table).select("*").order("created_at", { ascending: true });
+          if (error) return { table, data: [], error: error.message };
+          return { table, data: data || [] };
+        } catch (err) {
+          return { table, data: [], error: err.message };
+        }
+      })
+    );
+    // Convertir a objeto
+    const out = {};
+    for (const r of results) {
+      // camelCase para el frontend
+      const key = r.table.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+      out[key] = rows(r.data);
+    }
+    return out;
+  } catch (err) {
+    console.error("getAllDataForExport failed:", err);
+    return null;
   }
 }
 

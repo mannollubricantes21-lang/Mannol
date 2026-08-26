@@ -23,8 +23,14 @@ export function renderHomeView(navigate) {
   const supabaseConfigured = state._supabaseConfigured;
 
   // Tasas en formato MANNOL: USD = X MN, EUR = Y MN
-  const usdInMN = mnRate ? (1 / mnRate.rateUSD) : 320;
-  const eurInMN = (mnRate && eurRate) ? (eurRate.rateUSD / mnRate.rateUSD) : 345;
+  // Si no hay rates cargados (modo demo sin sync, o Supabase vacío),
+  // usamos defaults razonables en lugar de NaN.
+  const DEFAULT_USD_IN_MN = 320;
+  const DEFAULT_EUR_IN_MN = 345;
+  const usdInMN = mnRate && mnRate.rateUSD > 0 ? (1 / mnRate.rateUSD) : DEFAULT_USD_IN_MN;
+  const eurInMN = (mnRate && mnRate.rateUSD > 0 && eurRate && eurRate.rateUSD > 0)
+    ? (eurRate.rateUSD / mnRate.rateUSD)
+    : DEFAULT_EUR_IN_MN;
   const usdSource = mnRate?.source || "manual";
   const eurSource = eurRate?.source || "manual";
   const usdMarkupPct = settings.elToqueMarkup > 0 ? settings.elToqueMarkup : 0;
@@ -143,21 +149,8 @@ export function renderHomeView(navigate) {
           </div>
         </section>
 
-        <!-- ===== CTA login sutil ===== -->
-        ${!user ? `
-          <a href="#" data-nav="login" class="premium-cta premium-fade-in premium-fade-in-delay-3" style="text-decoration:none;color:inherit">
-            <div>
-              <p class="premium-cta-title">¿Eres administrador o gestor?</p>
-              <p class="premium-cta-desc">Iniciá sesión para acceder al panel de control, gestión de productos y reportes.</p>
-            </div>
-            <button type="button" class="premium-cta-btn">
-              Iniciar sesión ${icon("arrowRight", 14)}
-            </button>
-          </a>
-        ` : ''}
-
         <!-- ===== Almacenes ===== -->
-        <section class="premium-fade-in premium-fade-in-delay-${Math.min(warehouses.length + 3, 5)}">
+        <section class="premium-fade-in premium-fade-in-delay-3">
           <div class="premium-section-header">
             <h3 class="premium-section-title">Almacenes</h3>
             <span class="premium-section-count">${warehouses.length}</span>
