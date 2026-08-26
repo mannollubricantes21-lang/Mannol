@@ -2326,6 +2326,18 @@ export function mountAdminView(container, navigateOrUser) {
             </div>
           </div>
 
+          <!-- Aclaración + acción de nueva transferencia -->
+          <div style="background: color-mix(in oklab, var(--info) 8%, var(--bg-elevated)); border: 1px solid color-mix(in oklab, var(--info) 25%, transparent); border-radius: var(--radius); padding: 0.75rem 1rem; display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+            <div style="width:2rem;height:2rem;background: color-mix(in oklab, var(--info) 15%, transparent); color: var(--info); border-radius: var(--radius); display:flex;align-items:center;justify-content:center;flex-shrink:0">
+              ${icon("info", 16)}
+            </div>
+            <div style="flex:1;min-width:0">
+              <div class="text-sm font-semibold">¿Querés mover mercancía entre almacenes?</div>
+              <div class="text-xs text-muted">Una transferencia descuenta del almacén origen y suma al destino automáticamente. Queda registrada acá en el historial.</div>
+            </div>
+            <button class="btn btn-primary btn-sm" id="mv-new-transfer">${icon("arrowLeftRight", 12)} Nueva transferencia</button>
+          </div>
+
           <!-- Filtros -->
           <div class="card">
             <div class="card-content" style="padding:0.875rem;display:flex;flex-direction:column;gap:0.625rem">
@@ -2465,9 +2477,140 @@ export function mountAdminView(container, navigateOrUser) {
           toast(`${rows.length} movimientos exportados`, "success");
         });
       }
+
+      // Botón "Nueva transferencia" (en el panel de Movimientos — admin)
+      const newTransferBtn = content.querySelector("#mv-new-transfer");
+      if (newTransferBtn) {
+        newTransferBtn.addEventListener("click", () => {
+          showAdminTransferModal(() => load());
+        });
+      }
     }
 
     load();
+  }
+
+  // Modal reutilizable para que el admin cree una transferencia desde cualquier panel
+  // (usado en Movimientos y también disponible para otras secciones)
+  function showAdminTransferModal(onSaved) {
+    // Cargar warehouses y productos en paralelo
+    Promise.all([
+      listWarehouses(),
+      listProducts(),
+    ]).then(([warehouses, products]) => {
+      const activeWarehouses = warehouses.filter((w) => w.active !== false);
+      const close = showModal({
+        title: "Nueva transferencia entre almacenes",
+        body: `
+          <div style="display:flex;flex-direction:column;gap:0.75rem">
+            <div>
+              <label class="label label-xs">Producto *</label>
+              <select class="select" id="admtr-product">
+                <option value="">— Seleccionar producto —</option>
+                ${products.map((p) => `<option value="${p.id}">${esc(p.name)} · ${esc(p.brand || '')}</option>`).join('')}
+              </select>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="label label-xs">Almacén origen *</label>
+                <select class="select" id="admtr-from">
+                  <option value="">— Origen —</option>
+                  ${activeWarehouses.map((w) => `<option value="${w.id}">${esc(w.name)} (${esc(w.code)})</option>`).join('')}
+                </select>
+              </div>
+              <div>
+                <label class="label label-xs">Almacén destino *</label>
+                <select class="select" id="admtr-to">
+                  <option value="">— Destino —</option>
+                  ${activeWarehouses.map((w) => `<option value="${w.id}">${esc(w.name)} (${esc(w.code)})</option>`).join('')}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label class="label label-xs">Cantidad a transferir *</label>
+              <input class="input" type="number" min="1" id="admtr-quantity" value="1" />
+            </div>
+            <div>
+              <label class="label label-xs">Nota (opcional)</label>
+              <input class="input" id="admtr-note" placeholder="Ej: Reparto semanal, pedido de oficina central" />
+            </div>
+            <div style="background: color-mix(in oklab, var(--warning) 8%, transparent); border: 1px solid color-mix(in oklab, var(--warning) 25%, transparent); border-radius: var(--radius); padding: 0.625rem 0.75rem; display:flex;gap:0.5rem;align-items:flex-start">
+              <div style="flex-shrink:0;color:var(--warning);margin-top:0.125rem">${icon("alertTriangle", 14)}</div>
+              <div class="text-xs" style="color:var(--text-soft);line-height:1.5">
+                La transferencia se crea en estado <strong>PENDIENTE</strong>.<br>
+                Desde el panel <strong>Transferencias</strong> podés confirmarla o rechazarla.<br>
+                Al confirmarla, se descuenta del almacén origen y se suma al destino automáticamente.
+              </div>
+            </div>
+            <div style="display:none" id="admtr-validation-error"></div>
+          </div>
+        `,
+        footer: `<button class="btn btn-outline" id="admtr-cancel">Cancelar</button><button class="btn btn-primary" id="admtr-create">${icon("arrowLeftRight", 12)} Crear transferencia</button>`,
+      });
+
+      document.querySelector("#admtr-cancel").addEventListener("click", close);
+
+      // Validar en tiempo real que origen != destino
+      const fromSel = document.querySelector("#admtr-from");
+      const toSel = document.querySelector("#admtr-to");
+      const errEl = document.querySelector("#admtr-validation-error");
+      function validate() {
+        const from = fromSel.value;
+        const to = toSel.value;
+        if (from && to && from === to) {
+          errEl.style.display = 'block';
+          errEl.style.background = 'color-mix(in oklab, var(--danger) 10%, transparent)';
+          errEl.style.border = '1px solid color-mix(in oklab, var(--danger) 30%, transparent)';
+          errEl.style.color = 'var(--danger)';
+          errEl.style.padding = '0.5rem 0.75rem';
+          errEl.style.borderRadius = 'var(--radius)';
+          errEl.style.fontSize = '0.75rem';
+          errEl.innerHTML = `${icon("alertTriangle", 12)} El almacén origen y destino deben ser distintos.`;
+          return false;
+        }
+        errEl.style.display = 'none';
+        return true;
+      }
+      fromSel.addEventListener("change", validate);
+      toSel.addEventListener("change", validate);
+
+      document.querySelector("#admtr-create").addEventListener("click", async () => {
+        if (!validate()) return;
+        const productId = document.querySelector("#admtr-product").value;
+        const fromWarehouseId = document.querySelector("#admtr-from").value;
+        const toWarehouseId = document.querySelector("#admtr-to").value;
+        const quantity = parseInt(document.querySelector("#admtr-quantity").value);
+        const note = document.querySelector("#admtr-note").value.trim() || null;
+
+        if (!productId) { toast("Seleccioná un producto", "error"); return; }
+        if (!fromWarehouseId) { toast("Seleccioná un almacén origen", "error"); return; }
+        if (!toWarehouseId) { toast("Seleccioná un almacén destino", "error"); return; }
+        if (!quantity || quantity < 1) { toast("La cantidad debe ser mayor a 0", "error"); return; }
+
+        const product = products.find((p) => p.id === productId);
+        const user = getStore().getState().currentUser;
+        try {
+          await createStockTransfer({
+            fromWarehouseId,
+            toWarehouseId,
+            productId,
+            productName: product?.name,
+            quantity,
+            note,
+            requestedBy: user?.id,
+            requestedByName: user?.displayName,
+          });
+          toast(`Transferencia creada. Pendiente de confirmación.`, "success", 4000);
+          close();
+          if (onSaved) onSaved();
+        } catch (err) {
+          toast("Error al crear transferencia: " + (err.message || "desconocido"), "error");
+        }
+      });
+    }).catch((err) => {
+      console.error("showAdminTransferModal load failed:", err);
+      toast("Error al cargar datos para la transferencia", "error");
+    });
   }
 
   // ===== WEEKEND (regla de fin de semana) =====
