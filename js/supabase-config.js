@@ -18,7 +18,7 @@
 
 export const supabaseConfig = {
   url: "https://ightajxyvifpekuwamjz.supabase.co",
-  anonKey: "sb_publishable_EKsjjck9MghDFEfw-VCScg_Rt9kqhPn"
+  anonKey: "sb_publishable_F0Y8L3f91V7iFgb7CqeMrQ_i3W9-FFa"
 };
 
 export const isSupabaseConfigured = true;

@@ -31,173 +31,175 @@ export function renderHomeView(navigate) {
 
   return `
     <div class="mobile-shell">
-      <!-- Diagonal background -->
+      <!-- Diagonal background (mantenemos el estilo MANNOL de zona inferior oscura) -->
       <div class="bg-diagonal"></div>
 
-      <!-- Top header -->
-      <header class="app-header" style="background: color-mix(in oklab, var(--bg) 70%, transparent);">
-        <div class="app-header-inner">
-          <div class="flex items-center gap-2">
-            <button class="btn btn-ghost btn-icon" data-action="open-drawer" aria-label="Menú">
-              ${icon("menu", 20)}
-            </button>
-            <div class="flex items-center gap-2 min-w-0">
-              <div class="brand-logo" id="home-logo" style="cursor: pointer; user-select: none;" title="MANNOL" role="button" tabindex="0" aria-label="Logo MANNOL">
-                ${icon("droplet", 18)}
-              </div>
-              <div class="min-w-0" style="leading-tight;">
-                <h1 class="font-bold text-base truncate" style="margin:0">MANNOL</h1>
-                <p class="text-xs text-muted truncate" style="margin:0">
-                  ${user ? `${user.displayName} · ${user.role === 'admin' ? 'Admin' : 'Local'}` : 'Aceites y lubricantes'}
-                </p>
-              </div>
+      <!-- ===== Premium header ===== -->
+      <header class="premium-header">
+        <div class="premium-header-inner">
+          <button class="premium-header-btn" data-action="open-drawer" aria-label="Menú">
+            ${icon("menu", 20)}
+          </button>
+          <div class="flex items-center gap-2 min-w-0">
+            <div class="brand-logo" id="home-logo" style="cursor: pointer; user-select: none;" title="MANNOL" role="button" tabindex="0" aria-label="Logo MANNOL">
+              ${icon("droplet", 18)}
+            </div>
+            <div class="min-w-0">
+              <h1 class="font-bold text-base truncate" style="margin:0;line-height:1.2;letter-spacing:-0.01em">MANNOL</h1>
+              <p class="text-xs text-muted truncate" style="margin:0;line-height:1.2">
+                ${user ? `${esc(user.displayName)}` : 'Aceites y lubricantes'}
+              </p>
             </div>
           </div>
           <div class="flex items-center gap-1">
-            <button class="btn btn-ghost btn-icon" data-action="refresh" aria-label="Refrescar" ${syncing ? "disabled" : ""}>
-              ${icon("refresh", 18)}${syncing ? '<span class="animate-spin" style="position:absolute"></span>' : ''}
+            <button class="premium-header-btn" data-action="refresh" aria-label="Refrescar" ${syncing ? "disabled" : ""}>
+              ${syncing ? `<span class="animate-spin" style="display:inline-block">${icon("refresh", 18)}</span>` : icon("refresh", 18)}
             </button>
-            <button class="btn btn-ghost btn-icon" data-action="toggle-theme" aria-label="Cambiar tema">
+            <button class="premium-header-btn" data-action="toggle-theme" aria-label="Cambiar tema">
               ${state.theme === 'dark' ? icon("sun", 18) : icon("moon", 18)}
             </button>
           </div>
         </div>
       </header>
 
-      <!-- Main content -->
-      <main class="mobile-main" style="display:flex;flex-direction:column;gap:1.25rem">
-        <!-- ===== Setup banner (cuando Supabase no está configurado) ===== -->
+      <!-- ===== Premium main ===== -->
+      <main class="premium-home-main">
+        <!-- ===== Hero section ===== -->
+        <section class="home-hero premium-fade-in">
+          <div class="home-hero-bg"></div>
+          ${user ? `
+            <div class="home-hero-badge">
+              <span class="dot"></span>
+              ${user.role === 'admin' ? 'Panel admin' : user.role === 'gestor' ? 'Gestor' : 'Vendedor'}
+            </div>
+          ` : `
+            <div class="home-hero-badge">
+              <span class="dot"></span>
+              En línea
+            </div>
+          `}
+          <div class="home-hero-logo">${icon("droplet", 32)}</div>
+          <h2 class="home-hero-title">MANNOL POS</h2>
+          <p class="home-hero-subtitle">Aceites y lubricantes · Control de ventas y stock</p>
+        </section>
+
+        <!-- ===== Setup banner (si Supabase no está configurado) ===== -->
         ${!supabaseConfigured ? `
-          <section class="card" style="background: linear-gradient(135deg, color-mix(in oklab, var(--primary) 8%, var(--bg-elevated)), var(--bg-elevated)); border: 1px solid color-mix(in oklab, var(--primary) 30%, transparent);">
-            <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
-              <div style="display:flex;align-items:flex-start;gap:0.625rem">
-                <div style="width:2.5rem;height:2.5rem;background:var(--primary);color:var(--primary-foreground);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-                  ${icon("droplet", 20)}
-                </div>
+          <section class="premium-setup-banner premium-fade-in premium-fade-in-delay-1">
+            <div class="premium-setup-banner-content">
+              <div class="premium-setup-banner-header">
+                <div class="premium-setup-banner-icon">${icon("droplet", 20)}</div>
                 <div style="flex:1;min-width:0">
-                  <h2 class="text-base font-bold" style="margin:0 0 0.25rem;color:var(--primary)">Conecta MANNOL con Supabase</h2>
-                  <p class="text-xs" style="margin:0;color:var(--text-soft);line-height:1.5">
+                  <h3 class="premium-setup-banner-title">Conectá Supabase en este dispositivo</h3>
+                  <p class="premium-setup-banner-desc">
                     Estás en <strong>modo demo</strong>. Los datos no se guardan en la nube.
-                    Conecta tu base de datos Supabase con nuestro asistente paso a paso —
-                    sin tocar código, en 10 minutos.
+                    Conectá tu base de datos Supabase con el asistente — 10 minutos, sin tocar código.
                   </p>
                 </div>
               </div>
-              <a href="./setup.html" class="btn btn-primary btn-block" style="display:flex;align-items:center;justify-content:center;gap:0.5rem;text-decoration:none">
-                ${icon("zap", 16)}
-                Configurar Supabase ahora
-                ${icon("arrowRight", 16)}
+              <a href="./setup.html" class="premium-setup-banner-btn" style="align-self:stretch">
+                ${icon("zap", 16)} Configurar Supabase ahora
               </a>
-              <p class="text-xs text-muted" style="margin:0;text-align:center">
-                ¿Ya tienes Supabase? Solo necesitas tu URL y tu anon key.
-              </p>
+              <p class="premium-setup-banner-hint">¿Ya tenés Supabase? Solo necesitás tu URL y tu anon key.</p>
             </div>
           </section>
         ` : ''}
 
         <!-- ===== Tasas del día ===== -->
-        <section class="card" style="background: var(--bg-elevated);">
-          <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
-            <h2 class="card-title text-sm flex items-center gap-2" style="color: var(--primary)">
-              ${icon("trendingUp", 16)} Tasas del día
-            </h2>
-            <span class="badge ${usdSource === 'api' ? 'badge-accent' : 'badge-warning'}" style="font-size: 0.625rem">
-              ${usdSource === 'api' ? icon("check", 12) : icon("alertTriangle", 12)}
+        <section class="premium-fade-in premium-fade-in-delay-2">
+          <div class="premium-section-header">
+            <h3 class="premium-section-title">Tasas del día</h3>
+            <span class="premium-source-badge ${usdSource === 'api' ? 'api' : 'manual'}">
+              <span class="dot"></span>
               ${usdSource === 'api' ? 'elToque' : 'Manual'}
             </span>
           </div>
-          <div class="card-content">
-            ${usdMarkupPct > 0 ? `
-              <div class="mb-3" style="background: color-mix(in oklab, var(--warning) 10%, transparent); border: 1px solid color-mix(in oklab, var(--warning) 30%, transparent); border-radius: var(--radius); padding: 0.375rem 0.75rem; text-align: center;">
-                <p class="text-xs font-medium" style="color: var(--warning);">
-                  Margen aplicado: <strong>+${usdMarkupPct}%</strong> sobre tasa oficial
-                </p>
+          ${usdMarkupPct > 0 ? `
+            <div class="premium-markup-notice">
+              ${icon("trendingUp", 12)} Margen aplicado: <strong>+${usdMarkupPct}%</strong> sobre tasa oficial
+            </div>
+          ` : ''}
+          <div class="premium-rates">
+            <div class="premium-rate-tile premium-rate-tile-usd">
+              <div class="premium-rate-tile-currency">
+                ${icon("dollar", 14)} USD
+                ${usdMarkupPct > 0 ? `<span class="premium-rate-tile-markup">+${usdMarkupPct}%</span>` : ''}
               </div>
-            ` : ''}
-            <div class="grid grid-cols-2 gap-3">
-              <div class="rate-card rate-card-usd">
-                <div class="flex items-center justify-between mb-1">
-                  <div class="flex items-center gap-1 text-xs text-muted">
-                    ${icon("dollar", 14)} USD
-                  </div>
-                  ${usdMarkupPct > 0 ? `
-                    <span class="badge badge-warning" style="font-size:0.5625rem;height:1rem;padding:0 0.25rem">+${usdMarkupPct}%</span>
-                  ` : ''}
-                </div>
-                <p class="rate-value">
-                  ${usdInMN.toFixed(0)}
-                  <span class="text-xs font-normal text-muted ml-1">MN</span>
-                </p>
-                <p class="rate-sub">1 USD = ${usdInMN.toFixed(0)} MN</p>
+              <div class="premium-rate-tile-value">
+                ${usdInMN.toFixed(0)}<span style="font-size:0.625rem;color:var(--text-muted);font-weight:600;margin-left:0.25rem">MN</span>
               </div>
-              <div class="rate-card rate-card-eur">
-                <div class="flex items-center justify-between mb-1">
-                  <div class="flex items-center gap-1 text-xs text-muted">
-                    ${icon("euro", 14)} EUR
-                  </div>
-                  ${usdMarkupPct > 0 ? `
-                    <span class="badge badge-warning" style="font-size:0.5625rem;height:1rem;padding:0 0.25rem">+${usdMarkupPct}%</span>
-                  ` : ''}
-                </div>
-                <p class="rate-value">
-                  ${eurInMN.toFixed(0)}
-                  <span class="text-xs font-normal text-muted ml-1">MN</span>
-                </p>
-                <p class="rate-sub">1 EUR = ${eurInMN.toFixed(0)} MN</p>
+              <div class="premium-rate-tile-sub">1 USD = ${usdInMN.toFixed(0)} MN</div>
+            </div>
+            <div class="premium-rate-tile premium-rate-tile-eur">
+              <div class="premium-rate-tile-currency">
+                ${icon("euro", 14)} EUR
+                ${usdMarkupPct > 0 ? `<span class="premium-rate-tile-markup">+${usdMarkupPct}%</span>` : ''}
               </div>
+              <div class="premium-rate-tile-value">
+                ${eurInMN.toFixed(0)}<span style="font-size:0.625rem;color:var(--text-muted);font-weight:600;margin-left:0.25rem">MN</span>
+              </div>
+              <div class="premium-rate-tile-sub">1 EUR = ${eurInMN.toFixed(0)} MN</div>
             </div>
           </div>
         </section>
 
         <!-- ===== CTA login sutil ===== -->
         ${!user ? `
-          <div class="text-center">
-            <button class="text-xs text-muted underline" style="background:transparent;border:none;cursor:pointer" data-nav="login" aria-label="Iniciar sesión como administrador o gestor">
-              ¿Eres administrador o gestor? Inicia sesión
+          <a href="#" data-nav="login" class="premium-cta premium-fade-in premium-fade-in-delay-3" style="text-decoration:none;color:inherit">
+            <div>
+              <p class="premium-cta-title">¿Eres administrador o gestor?</p>
+              <p class="premium-cta-desc">Iniciá sesión para acceder al panel de control, gestión de productos y reportes.</p>
+            </div>
+            <button type="button" class="premium-cta-btn">
+              Iniciar sesión ${icon("arrowRight", 14)}
             </button>
-          </div>
+          </a>
         ` : ''}
 
-        <!-- ===== Lista de almacenes ===== -->
-        <section style="display:flex;flex-direction:column;gap:0.75rem">
-          <div class="flex items-center justify-between px-1">
-            <h2 class="text-sm font-semibold text-on-dark flex items-center gap-1.5">
-              ${icon("building", 16)} Almacenes (${warehouses.length})
-            </h2>
+        <!-- ===== Almacenes ===== -->
+        <section class="premium-fade-in premium-fade-in-delay-${Math.min(warehouses.length + 3, 5)}">
+          <div class="premium-section-header">
+            <h3 class="premium-section-title">Almacenes</h3>
+            <span class="premium-section-count">${warehouses.length}</span>
           </div>
-          <div style="display:flex;flex-direction:column;gap:0.625rem">
+          <div style="display:flex;flex-direction:column;gap:0.75rem">
             ${warehouses.length === 0 ? `
-              <div class="card-dark empty-state text-on-dark">
-                No hay almacenes configurados. Inicia sesión como admin para crearlos.
+              <div class="premium-card" style="padding:2rem 1rem;text-align:center">
+                <div class="premium-empty-icon">${icon("building", 24)}</div>
+                <p class="premium-empty-title">Sin almacenes</p>
+                <p class="premium-empty-desc">Iniciá sesión como admin para crear almacenes.</p>
               </div>
-            ` : warehouses.map((w) => {
+            ` : warehouses.map((w, i) => {
               const isOwn = user && user.role === 'warehouse' && user.warehouseId === w.id;
               return `
-                <div class="warehouse-card ${isOwn ? 'warehouse-card-own' : ''}">
-                  <div class="flex items-start justify-between gap-2 mb-2">
-                    <div class="min-w-0" style="flex:1">
-                      <div class="flex items-center gap-2">
-                        <span class="badge badge-dark font-mono" style="font-size: 0.625rem">${esc(w.code)}</span>
-                        <h3 class="font-semibold text-sm truncate text-on-dark" style="margin:0">${esc(w.name)}</h3>
-                        ${isOwn ? '<span class="badge badge-accent" style="font-size: 0.5625rem">Tu local</span>' : ''}
+                <div class="premium-warehouse ${isOwn ? 'warehouse-card-own' : ''}" data-enter-warehouse="${esc(w.id)}" style="cursor:pointer">
+                  <div class="premium-warehouse-header">
+                    <div class="premium-warehouse-icon">${icon("building", 22)}</div>
+                    <div style="flex:1;min-width:0">
+                      <div style="display:flex;align-items:center;gap:0.375rem;flex-wrap:wrap">
+                        <h4 class="premium-warehouse-name">${esc(w.name)}</h4>
+                        ${isOwn ? `<span class="premium-warehouse-own-tag">Tu local</span>` : ''}
                       </div>
-                      ${w.address ? `
-                        <p class="text-xs text-muted-on-dark flex items-start gap-1 mt-1" style="margin:0.25rem 0 0">
-                          ${icon("mapPin", 12)}
-                          <span>${esc(w.address)}</span>
-                        </p>
-                      ` : ''}
+                      <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.25rem">
+                        <span class="premium-warehouse-code">${esc(w.code)}</span>
+                        ${w.address ? `
+                          <span class="premium-warehouse-meta" style="min-width:0;flex:1">
+                            ${icon("mapPin", 12)}
+                            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.address)}</span>
+                          </span>
+                        ` : ''}
+                      </div>
                       ${w.phone ? `
-                        <p class="text-xs text-muted-on-dark flex items-center gap-1" style="margin:0.125rem 0 0">
+                        <div class="premium-warehouse-meta" style="margin-top:0.25rem">
                           ${icon("phone", 12)}
                           ${esc(w.phone)}
-                        </p>
+                        </div>
                       ` : ''}
                     </div>
                   </div>
-                  <button class="btn btn-primary btn-block btn-sm" data-enter-warehouse="${esc(w.id)}" aria-label="Entrar al almacén ${esc(w.name)} con PIN" style="height:2.5rem;font-size:0.75rem">
+                  <button class="premium-cta-btn" style="width:100%" aria-label="Entrar al almacén ${esc(w.name)} con PIN">
                     ${icon("lock", 14)}
-                    Entrar al almacén
+                    <span>Entrar al almacén</span>
                     ${icon("arrowRight", 14)}
                   </button>
                 </div>
@@ -322,13 +324,28 @@ export function mountHomeView(container, navigate) {
       });
     }
 
-    // Enter warehouse → PIN view
-    container.querySelectorAll("[data-enter-warehouse]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const wid = btn.dataset.enterWarehouse;
+    // Enter warehouse → PIN view (click en toda la card o en el botón)
+    container.querySelectorAll("[data-enter-warehouse]").forEach((card) => {
+      card.addEventListener("click", (e) => {
+        // Evitar doble disparo si el click fue en el botón interno
+        if (e.target.closest("button")) return;
+        const wid = card.dataset.enterWarehouse;
         const w = (store.getState()._warehouses || []).find((x) => x.id === wid);
         if (w) {
-          // Stash selected warehouse, navigate to pin
+          store.setState({ _selectedWarehouse: w });
+          navigate("pin");
+        }
+      });
+    });
+    // Click directo en el botón "Entrar al almacén" (cuando el click fue en el botón)
+    container.querySelectorAll(".premium-warehouse button").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const card = btn.closest("[data-enter-warehouse]");
+        if (!card) return;
+        const wid = card.dataset.enterWarehouse;
+        const w = (store.getState()._warehouses || []).find((x) => x.id === wid);
+        if (w) {
           store.setState({ _selectedWarehouse: w });
           navigate("pin");
         }
