@@ -101,36 +101,51 @@ function _isValidConfig(cfg) {
 }
 
 // Lazy-load the config file (optional — falls back to localStorage, then to demo mode)
+// Uses a single inflight promise so parallel callers wait for the same load.
+let _loadPromise = null;
+
 async function loadConfig() {
+  // If a load is already in-flight, wait for it (avoids race condition where
+  // a second caller sees _configLoaded=true but _configured is still the old value)
+  if (_loadPromise) return _loadPromise;
+  // If load already completed, return immediately
   if (_configLoaded) return;
-  _configLoaded = true;
 
-  // 1) Try localStorage first (set by the in-app Setup Wizard).
-  //    This takes precedence over the file because if the user has
-  //    gone through the wizard, that's their most recent intent.
-  const stored = getStoredSupabaseConfig();
-  if (stored && _isValidConfig(stored)) {
-    _config = stored;
-    _configured = true;
-    return;
-  }
+  _loadPromise = (async () => {
+    try {
+      // 1) Try localStorage first (set by the in-app Setup Wizard).
+      //    This takes precedence over the file because if the user has
+      //    gone through the wizard, that's their most recent intent.
+      const stored = getStoredSupabaseConfig();
+      if (stored && _isValidConfig(stored)) {
+        _config = stored;
+        _configured = true;
+        return;
+      }
 
-  // 2) Fall back to js/supabase-config.js (manual file)
-  try {
-    const mod = await import("./supabase-config.js");
-    const fileCfg = mod.supabaseConfig || DEFAULT_CONFIG;
-    if (_isValidConfig(fileCfg) || mod.isSupabaseConfigured === true) {
-      _config = fileCfg;
-      _configured = true;
-      return;
+      // 2) Fall back to js/supabase-config.js (manual file)
+      try {
+        const mod = await import("./supabase-config.js");
+        const fileCfg = mod.supabaseConfig || DEFAULT_CONFIG;
+        if (_isValidConfig(fileCfg) || mod.isSupabaseConfigured === true) {
+          _config = fileCfg;
+          _configured = true;
+          return;
+        }
+      } catch {
+        // File doesn't exist — that's OK, fall through to demo mode.
+      }
+
+      // 3) No config found — demo mode.
+      console.warn("[Supabase] No config found (localStorage or file). Modo demo activo.");
+      _configured = false;
+    } finally {
+      _configLoaded = true;
+      _loadPromise = null;
     }
-  } catch {
-    // File doesn't exist — that's OK, fall through to demo mode.
-  }
+  })();
 
-  // 3) No config found — demo mode.
-  console.warn("[Supabase] No config found (localStorage or file). Modo demo activo.");
-  _configured = false;
+  return _loadPromise;
 }
 
 /**
