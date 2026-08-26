@@ -6,7 +6,7 @@
 import { getStore } from "../store.js";
 import {
   listUsers, saveUser, deleteUser,
-  listWarehouses, saveWarehouse,
+  listWarehouses, saveWarehouse, saveWarehouseWithStock,
   listProducts, saveProduct, deleteProduct,
   listCategories, saveCategory, deleteCategory,
   listManagers, saveManager, deleteManager,
@@ -1770,7 +1770,9 @@ export function mountAdminView(container, navigateOrUser) {
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
     listWarehouses().then((warehouses) => {
       if (gen !== tabGeneration) return;
-      content.innerHTML = `
+      const pinRevealState = new Set(); // IDs de almacenes con PIN visible
+      function render() {
+        content.innerHTML = `
         <div class="card">
           <div class="card-header flex justify-between">
             <h2 class="card-title">Almacenes (${warehouses.length})</h2>
@@ -1778,84 +1780,288 @@ export function mountAdminView(container, navigateOrUser) {
           </div>
           <div class="overflow-x-auto">
             <table class="table">
-              <thead><tr><th>Nombre</th><th>Código</th><th>Dirección</th><th class="text-right">Comisión vendedor</th><th class="text-center">PIN</th><th class="text-right">Acciones</th></tr></thead>
+              <thead><tr><th>Nombre</th><th>Código</th><th>Dirección</th><th class="text-right">Comisión vendedor</th><th class="text-center">PIN de acceso</th><th class="text-right">Acciones</th></tr></thead>
               <tbody>
-                ${warehouses.map((w) => `
+                ${warehouses.map((w) => {
+                  const pinVisible = pinRevealState.has(w.id);
+                  return `
                   <tr>
                     <td class="font-medium">${esc(w.name)}</td>
                     <td><span class="badge badge-outline">${esc(w.code)}</span></td>
                     <td class="text-xs text-muted">${esc(w.address || '—')}</td>
                     <td class="text-right text-xs">${w.sellerCommissionPercent}% ${esc(w.sellerCommissionCurrency || 'USD')}</td>
-                    <td class="text-center">${w.pin ? `<span class="badge badge-accent">Sí</span>` : `<span class="badge">No</span>`}</td>
-                    <td class="text-right"><button class="btn btn-ghost btn-sm" data-edit-wh="${esc(w.id)}">Editar</button></td>
+                    <td class="text-center">
+                      ${w.pin ? `
+                        <div style="display:inline-flex;align-items:center;gap:0.375rem">
+                          <code class="font-mono" style="font-size:0.875rem;font-weight:700;color:var(--primary);background:var(--bg-soft);padding:0.125rem 0.5rem;border-radius:var(--radius-sm)">
+                            ${pinVisible ? esc(w.pin) : '••••'}
+                          </code>
+                          <button class="btn btn-ghost btn-sm" data-reveal-pin="${esc(w.id)}" title="${pinVisible ? 'Ocultar' : 'Revelar'} PIN" style="padding:0.25rem 0.5rem">
+                            ${icon(pinVisible ? "eyeOff" : "eye", 12)}
+                          </button>
+                        </div>
+                      ` : `<span class="badge">Sin PIN (acceso libre)</span>`}
+                    </td>
+                    <td class="text-right">
+                      <div style="display:flex;gap:0.25rem;justify-content:flex-end">
+                        ${w.pin ? `<button class="btn btn-outline btn-sm" data-change-pin="${esc(w.id)}" title="Cambiar PIN">${icon("key", 12)} PIN</button>` : ''}
+                        <button class="btn btn-ghost btn-sm" data-edit-wh="${esc(w.id)}">Editar</button>
+                      </div>
+                    </td>
                   </tr>
-                `).join('')}
+                  `;
+                }).join('')}
               </tbody>
             </table>
           </div>
         </div>
       `;
-      content.querySelector("#new-wh").addEventListener("click", () => showWarehouseDialog(null, () => mountWarehousesPanel(content)));
-      content.querySelectorAll("[data-edit-wh]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const w = warehouses.find((x) => x.id === btn.dataset.editWh);
-          if (w) showWarehouseDialog(w, () => mountWarehousesPanel(content));
+        // Wire buttons
+        content.querySelector("#new-wh").addEventListener("click", () => showWarehouseDialog(null, () => mountWarehousesPanel(content)));
+        content.querySelectorAll("[data-edit-wh]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const w = warehouses.find((x) => x.id === btn.dataset.editWh);
+            if (w) showWarehouseDialog(w, () => mountWarehousesPanel(content));
+          });
         });
-      });
+        content.querySelectorAll("[data-reveal-pin]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const id = btn.dataset.revealPin;
+            if (pinRevealState.has(id)) pinRevealState.delete(id);
+            else pinRevealState.add(id);
+            render();
+          });
+        });
+        content.querySelectorAll("[data-change-pin]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const w = warehouses.find((x) => x.id === btn.dataset.changePin);
+            if (w) showChangePinDialog(w, () => mountWarehousesPanel(content));
+          });
+        });
+      }
+      render();
+    });
+  }
+
+  // Modal: cambiar solo el PIN de un almacén (sin tocar los demás campos)
+  function showChangePinDialog(warehouse, onSaved) {
+    const close = showModal({
+      title: `Cambiar PIN de ${warehouse.name}`,
+      body: `
+        <div style="display:flex;flex-direction:column;gap:0.75rem">
+          <div style="background:var(--bg-soft);padding:0.625rem 0.75rem;border-radius:var(--radius);border:1px solid var(--border)">
+            <div class="text-xs text-muted">PIN actual</div>
+            <code class="font-mono" style="font-size:1.125rem;font-weight:700;color:var(--primary)">${esc(warehouse.pin || '—')}</code>
+          </div>
+          <div>
+            <label class="label label-xs">Nuevo PIN (4-8 dígitos) *</label>
+            <input class="input" id="cp-pin" type="text" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" placeholder="Ej: 1234" autofocus />
+            <p class="text-xs text-muted" style="margin-top:0.25rem">Solo números, entre 4 y 8 dígitos. Los vendedores usan este PIN para entrar al almacén.</p>
+          </div>
+          <div>
+            <label class="label label-xs">Confirmar nuevo PIN</label>
+            <input class="input" id="cp-pin-confirm" type="text" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" placeholder="Repetí el PIN" />
+            <div id="cp-pin-match-error" style="display:none" class="text-xs text-danger" >${"Los PINs no coinciden"}</div>
+          </div>
+          <div style="background: color-mix(in oklab, var(--warning) 8%, transparent); border: 1px solid color-mix(in oklab, var(--warning) 25%, transparent); border-radius: var(--radius); padding: 0.5rem 0.75rem; display:flex;gap:0.375rem;align-items:flex-start">
+            <div style="flex-shrink:0;color:var(--warning);margin-top:0.125rem">${icon("alertTriangle", 14)}</div>
+            <div class="text-xs" style="color:var(--text-soft);line-height:1.5">
+              Al cambiar el PIN, los vendedores que entraban con el PIN anterior no van a poder entrar más. Avisales el nuevo PIN.
+            </div>
+          </div>
+        </div>
+      `,
+      footer: `<button class="btn btn-outline" id="cp-cancel">Cancelar</button><button class="btn btn-primary" id="cp-save">${icon("key", 12)} Guardar nuevo PIN</button>`,
+    });
+    document.querySelector("#cp-cancel").addEventListener("click", close);
+
+    // Validar match en tiempo real
+    const pinInput = document.querySelector("#cp-pin");
+    const confirmInput = document.querySelector("#cp-pin-confirm");
+    const errEl = document.querySelector("#cp-pin-match-error");
+    function validateMatch() {
+      const p1 = pinInput.value.trim();
+      const p2 = confirmInput.value.trim();
+      if (!p2) { errEl.style.display = 'none'; return true; }
+      if (p1 !== p2) {
+        errEl.style.display = 'block';
+        return false;
+      }
+      errEl.style.display = 'none';
+      return true;
+    }
+    confirmInput.addEventListener("input", validateMatch);
+    pinInput.addEventListener("input", validateMatch);
+
+    document.querySelector("#cp-save").addEventListener("click", async () => {
+      const newPin = pinInput.value.trim();
+      const confirm = confirmInput.value.trim();
+      if (!newPin) { toast("Ingresá un PIN nuevo", "error"); return; }
+      if (!/^\d{4,8}$/.test(newPin)) {
+        toast("El PIN debe tener entre 4 y 8 dígitos numéricos", "error");
+        return;
+      }
+      if (newPin !== confirm) {
+        errEl.style.display = 'block';
+        toast("Los PINs no coinciden", "error");
+        return;
+      }
+      try {
+        await saveWarehouse({ ...warehouse, pin: newPin });
+        toast(`PIN de ${warehouse.name} actualizado`, "success");
+        close();
+        onSaved();
+      } catch (err) {
+        toast("Error al actualizar PIN: " + (err.message || "desconocido"), "error");
+      }
     });
   }
 
   function showWarehouseDialog(warehouse, onSaved) {
     const isNew = !warehouse;
     const w = warehouse || {};
-    const close = showModal({
-      title: isNew ? "Nuevo almacén" : "Editar almacén",
-      size: "lg",
-      body: `
-        <div style="display:flex;flex-direction:column;gap:0.75rem">
-          <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Nombre *</label><input class="input" id="w-name" value="${esc(w.name || '')}" /></div>
-            <div><label class="label label-xs">Código *</label><input class="input" id="w-code" value="${esc(w.code || '')}" placeholder="VIB" /></div>
-          </div>
-          <div><label class="label label-xs">Dirección</label><input class="input" id="w-address" value="${esc(w.address || '')}" /></div>
-          <div><label class="label label-xs">Teléfono</label><input class="input" id="w-phone" value="${esc(w.phone || '')}" /></div>
-          <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Comisión vendedor (%)</label><input class="input" type="number" step="0.1" id="w-commission" value="${w.sellerCommissionPercent ?? 3}" /></div>
-            <div><label class="label label-xs">Moneda comisión</label>
-              <select class="select" id="w-currency">
-                <option value="USD" ${w.sellerCommissionCurrency === 'USD' ? 'selected' : ''}>USD</option>
-                <option value="MN" ${w.sellerCommissionCurrency === 'MN' ? 'selected' : ''}>MN</option>
-              </select>
+
+    // Cargar productos y stock actual (si es edición) en paralelo
+    Promise.all([
+      listProducts(),
+      isNew ? Promise.resolve([]) : listStock(w.id),
+    ]).then(([products, currentStock]) => {
+      const stockMap = new Map(currentStock.map((s) => [s.productId, s]));
+
+      const close = showModal({
+        title: isNew ? "Nuevo almacén" : "Editar almacén",
+        size: "lg",
+        body: `
+          <div style="display:flex;flex-direction:column;gap:0.75rem">
+            <div class="grid grid-cols-2 gap-2">
+              <div><label class="label label-xs">Nombre *</label><input class="input" id="w-name" value="${esc(w.name || '')}" /></div>
+              <div><label class="label label-xs">Código *</label><input class="input" id="w-code" value="${esc(w.code || '')}" placeholder="VIB" /></div>
+            </div>
+            <div><label class="label label-xs">Dirección</label><input class="input" id="w-address" value="${esc(w.address || '')}" /></div>
+            <div><label class="label label-xs">Teléfono</label><input class="input" id="w-phone" value="${esc(w.phone || '')}" /></div>
+            <div class="grid grid-cols-2 gap-2">
+              <div><label class="label label-xs">Comisión vendedor (%)</label><input class="input" type="number" step="0.1" id="w-commission" value="${w.sellerCommissionPercent ?? 3}" /></div>
+              <div><label class="label label-xs">Moneda comisión</label>
+                <select class="select" id="w-currency">
+                  <option value="USD" ${w.sellerCommissionCurrency === 'USD' ? 'selected' : ''}>USD</option>
+                  <option value="MN" ${w.sellerCommissionCurrency === 'MN' ? 'selected' : ''}>MN</option>
+                </select>
+              </div>
+            </div>
+            <div><label class="label label-xs">PIN (vacío = acceso libre, mínimo 4 dígitos)</label><input class="input" id="w-pin" value="${esc(w.pin || '')}" placeholder="2025" minlength="4" maxlength="8" pattern="[0-9]{4,8}" inputmode="numeric" /></div>
+
+            <!-- Stock inicial por producto -->
+            <div style="margin-top:0.5rem;padding-top:0.625rem;border-top:1px solid var(--border)">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+                <div>
+                  <p class="text-xs font-semibold" style="margin:0;color:var(--text)">${icon("boxes", 14)} Stock inicial por producto</p>
+                  <p class="text-xs text-muted" style="margin:0.25rem 0 0">
+                    ${isNew
+                      ? "Cargá la cantidad inicial de cada producto. Después podés ajustarlo desde la vista del almacén."
+                      : "Stock actual. Si cambiás una cantidad, se ajustará el stock (se registrará como movimiento de inventario)."}
+                  </p>
+                </div>
+                <button class="btn btn-outline btn-sm" id="w-expand-stock" type="button" style="font-size:0.75rem">
+                  ${icon("chevronDown", 12)} Mostrar productos
+                </button>
+              </div>
+              <div id="w-stock-section" style="display:none;max-height:24rem;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:0.5rem;display:flex;flex-direction:column;gap:0.25rem">
+                ${products.length === 0 ? `
+                  <div class="empty-state text-xs" style="padding:1rem">Sin productos en el catálogo. Creá productos primero desde la sección Productos.</div>
+                ` : products.map((p) => {
+                  const s = stockMap.get(p.id);
+                  const currentQty = s?.quantity ?? 0;
+                  const currentPrice = s?.localPrice ?? p.salePrice ?? '';
+                  return `
+                    <div style="display:flex;align-items:center;gap:0.5rem;padding:0.375rem;border:1px solid var(--border);border-radius:var(--radius)">
+                      <div style="flex:1;min-width:0">
+                        <div class="text-xs font-medium truncate">${esc(p.name)}</div>
+                        <div class="text-xs text-muted">${esc(p.brand || '')}</div>
+                      </div>
+                      <input class="input" type="number" min="0" step="1" id="w-stock-${esc(p.id)}" value="${currentQty}" placeholder="0" style="width:5rem;text-align:right;padding:0.375rem 0.5rem;font-size:0.875rem" />
+                      <input class="input" type="number" min="0" step="0.01" id="w-price-${esc(p.id)}" value="${currentPrice}" placeholder="precio" style="width:6rem;text-align:right;padding:0.375rem 0.5rem;font-size:0.75rem" title="Precio local (opcional)" />
+                    </div>
+                  `;
+                }).join('')}
+              </div>
             </div>
           </div>
-          <div><label class="label label-xs">PIN (vacío = acceso libre, mínimo 4 dígitos)</label><input class="input" id="w-pin" value="${esc(w.pin || '')}" placeholder="2025" minlength="4" maxlength="8" pattern="[0-9]{4,8}" inputmode="numeric" /></div>
-        </div>
-      `,
-      footer: `<button class="btn btn-outline" id="w-cancel">Cancelar</button><button class="btn btn-primary" id="w-save">Guardar</button>`,
-    });
-    document.querySelector("#w-cancel").addEventListener("click", close);
-    document.querySelector("#w-save").addEventListener("click", async () => {
-      const pin = document.querySelector("#w-pin").value.trim();
-      const data = {
-        ...(w.id ? { id: w.id } : {}),
-        name: document.querySelector("#w-name").value.trim(),
-        code: document.querySelector("#w-code").value.trim().toUpperCase(),
-        address: document.querySelector("#w-address").value.trim() || null,
-        phone: document.querySelector("#w-phone").value.trim() || null,
-        sellerCommissionPercent: parseFloat(document.querySelector("#w-commission").value) || 0,
-        sellerCommissionCurrency: document.querySelector("#w-currency").value,
-        pin: pin || null,
-        active: true,
-      };
-      if (!data.name || !data.code) { toast("Nombre y código son obligatorios", "error"); return; }
-      if (data.pin && !/^\d{4,8}$/.test(data.pin)) {
-        toast("El PIN debe tener entre 4 y 8 dígitos numéricos", "error");
-        return;
-      }
-      await saveWarehouse(data);
-      toast("Almacén guardado", "success");
-      close();
-      onSaved();
+        `,
+        footer: `<button class="btn btn-outline" id="w-cancel">Cancelar</button><button class="btn btn-primary" id="w-save">Guardar</button>`,
+      });
+
+      document.querySelector("#w-cancel").addEventListener("click", close);
+
+      // Toggle expandir/contraer sección de stock
+      const expandBtn = document.querySelector("#w-expand-stock");
+      const stockSection = document.querySelector("#w-stock-section");
+      let stockExpanded = false;
+      expandBtn.addEventListener("click", () => {
+        stockExpanded = !stockExpanded;
+        stockSection.style.display = stockExpanded ? 'flex' : 'none';
+        expandBtn.innerHTML = stockExpanded
+          ? `${icon("chevronUp", 12)} Ocultar productos`
+          : `${icon("chevronDown", 12)} Mostrar productos`;
+      });
+
+      document.querySelector("#w-save").addEventListener("click", async () => {
+        const pin = document.querySelector("#w-pin").value.trim();
+        const data = {
+          ...(w.id ? { id: w.id } : {}),
+          name: document.querySelector("#w-name").value.trim(),
+          code: document.querySelector("#w-code").value.trim().toUpperCase(),
+          address: document.querySelector("#w-address").value.trim() || null,
+          phone: document.querySelector("#w-phone").value.trim() || null,
+          sellerCommissionPercent: parseFloat(document.querySelector("#w-commission").value) || 0,
+          sellerCommissionCurrency: document.querySelector("#w-currency").value,
+          pin: pin || null,
+          active: true,
+          _createdBy: getStore().getState().currentUser,
+        };
+        if (!data.name || !data.code) { toast("Nombre y código son obligatorios", "error"); return; }
+        if (data.pin && !/^\d{4,8}$/.test(data.pin)) {
+          toast("El PIN debe tener entre 4 y 8 dígitos numéricos", "error");
+          return;
+        }
+
+        // Recoger el stock inicial de los productos (solo los que tienen cantidad > 0 o que cambiaron)
+        const stockItems = [];
+        if (stockExpanded) {
+          for (const p of products) {
+            const qtyInput = document.querySelector(`#w-stock-${CSS.escape(p.id)}`);
+            const priceInput = document.querySelector(`#w-price-${CSS.escape(p.id)}`);
+            if (!qtyInput) continue;
+            const qty = parseInt(qtyInput.value) || 0;
+            const price = priceInput ? parseFloat(priceInput.value) : null;
+            const existing = stockMap.get(p.id);
+            // Solo incluir si hay cantidad o si cambió respecto al stock actual
+            if (qty > 0 || (existing && existing.quantity !== qty)) {
+              stockItems.push({
+                productId: p.id,
+                quantity: qty,
+                localPrice: price,
+              });
+            }
+          }
+        }
+
+        try {
+          // Si hay stock inicial, usar saveWarehouseWithStock; si no, saveWarehouse
+          if (stockItems.length > 0) {
+            await saveWarehouseWithStock(data, stockItems);
+          } else {
+            await saveWarehouse(data);
+          }
+          toast("Almacén guardado" + (stockItems.length > 0 ? ` · ${stockItems.length} productos con stock` : ""), "success");
+          close();
+          onSaved();
+        } catch (err) {
+          toast("Error al guardar almacén: " + (err.message || "desconocido"), "error");
+        }
+      });
+    }).catch((err) => {
+      console.error("showWarehouseDialog load failed:", err);
+      toast("Error al cargar datos del almacén", "error");
     });
   }
 

@@ -4,7 +4,7 @@
 // =====================================================
 
 import { getStore } from "../store.js";
-import { subscribeSales, subscribeStock, listProducts, listWarehouses, listAllStockAcrossWarehouses, listStockForProductInAllWarehouses, createStockTransfer, listStockTransfers, processStockTransfer } from "../db.js";
+import { subscribeSales, subscribeStock, listProducts, listWarehouses, listAllStockAcrossWarehouses, listStockForProductInAllWarehouses } from "../db.js";
 import { formatMoney, formatDate } from "../currency.js";
 import { icon, esc, toast, showModal, closeModal, confirmDialog } from "../ui.js";
 
@@ -16,10 +16,9 @@ export function mountWarehouseInterior(container, navigate) {
   let products = [];
   let period = "today";
   let search = "";
-  let inventoryTab = "stock"; // "stock" | "others" | "transfers"
+  let inventoryTab = "stock"; // "stock" | "others"  (sin "transfers" — solo admin transfiere)
   let otherWarehousesStock = []; // stock en otros almacenes
-  let allWarehouses = []; // lista de almacenes (para transferencias)
-  let transfers = []; // transferencias pendientes y procesadas
+  let allWarehouses = []; // lista de almacenes
 
   if (!warehouse) {
     container.innerHTML = `<div class="empty-state">Selecciona un almacén</div>`;
@@ -42,17 +41,6 @@ export function mountWarehouseInterior(container, navigate) {
   async function loadOtherStock() {
     const allStock = await listAllStockAcrossWarehouses();
     otherWarehousesStock = allStock.filter((s) => s.warehouseId !== warehouse.id);
-    render();
-  }
-
-  // Cargar transferencias del almacén (entrantes y salientes)
-  async function loadTransfers() {
-    const [incoming, outgoing] = await Promise.all([
-      listStockTransfers({ toWarehouseId: warehouse.id }),
-      listStockTransfers({ fromWarehouseId: warehouse.id }),
-    ]);
-    // Merge y ordenar por fecha
-    transfers = [...incoming, ...outgoing].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     render();
   }
 
@@ -199,7 +187,6 @@ export function mountWarehouseInterior(container, navigate) {
           <div style="display:flex;gap:0.25rem;padding:0 0.5rem 0.5rem">
             <button class="btn ${inventoryTab === 'stock' ? 'btn-primary' : 'btn-outline'} btn-sm" data-inv-tab="stock" style="flex:1;font-size:0.75rem">${icon("boxes", 12)} Stock</button>
             <button class="btn ${inventoryTab === 'others' ? 'btn-primary' : 'btn-outline'} btn-sm" data-inv-tab="others" style="flex:1;font-size:0.75rem">${icon("mapPin", 12)} Otros almacenes</button>
-            <button class="btn ${inventoryTab === 'transfers' ? 'btn-primary' : 'btn-outline'} btn-sm" data-inv-tab="transfers" style="flex:1;font-size:0.75rem">${icon("arrowLeftRight", 12)} Transferir</button>
           </div>
 
           <div class="card-content" style="padding:0.5rem">
@@ -271,9 +258,6 @@ export function mountWarehouseInterior(container, navigate) {
                             <div class="text-xs font-medium truncate">${esc(product.name)}</div>
                             <div class="text-xs text-muted">${esc(product.brand)} · Total otros: <strong>${totalQty}</strong></div>
                           </div>
-                          <button class="btn btn-primary btn-sm" data-request-transfer="${esc(product.id)}" title="Pedir desde otro almacén" style="padding:0.25rem 0.625rem;font-size:0.6875rem">
-                            ${icon("arrowLeftRight", 12)} Pedir
-                          </button>
                         </div>
                         <div style="display:flex;flex-wrap:wrap;gap:0.25rem">
                           ${items.sort((a, b) => b.quantity - a.quantity).map((i) => `
@@ -287,62 +271,6 @@ export function mountWarehouseInterior(container, navigate) {
                   </div>
                 `;
               })()}
-            ` : ''}
-
-            ${inventoryTab === 'transfers' ? `
-              <!-- Tab: Transferencias entre almacenes -->
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;flex-wrap:wrap;gap:0.5rem">
-                <h4 class="text-sm font-semibold">Transferencias (${transfers.length})</h4>
-                <button class="btn btn-primary btn-sm" id="new-transfer-btn" style="font-size:0.75rem">${icon("plus", 12)} Nueva transferencia</button>
-              </div>
-              ${transfers.length === 0 ? `
-                <div class="empty-state text-xs">
-                  <div class="empty-state-icon">${icon("arrowLeftRight", 24)}</div>
-                  <p class="empty-state-title">Sin transferencias</p>
-                  <p class="empty-state-desc">Creá una transferencia para pedir mercancía de otro almacén.</p>
-                </div>
-              ` : `
-                <div style="max-height:20rem;overflow-y:auto;display:flex;flex-direction:column;gap:0.375rem">
-                  ${transfers.map((t) => {
-                    const isIncoming = t.toWarehouseId === warehouse.id;
-                    const isPending = t.status === "PENDING";
-                    const statusBadge = { PENDING: 'badge-warning', COMPLETED: 'badge-accent', REJECTED: 'badge-danger', CANCELLED: '' }[t.status] || '';
-                    const statusLabel = { PENDING: 'Pendiente', COMPLETED: 'Completada', REJECTED: 'Rechazada', CANCELLED: 'Cancelada' }[t.status] || t.status;
-                    const otherWh = isIncoming ? allWarehouses.find((w) => w.id === t.fromWarehouseId) : allWarehouses.find((w) => w.id === t.toWarehouseId);
-                    const arrow = isIncoming ? '←' : '→';
-                    return `
-                      <div style="padding:0.5rem;border:1px solid var(--border);border-radius:var(--radius)">
-                        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem">
-                          <div style="flex:1;min-width:0">
-                            <div class="text-xs font-medium truncate">
-                              <span style="color:${isIncoming ? 'var(--primary)' : 'var(--text-soft)'};font-weight:700">${arrow}</span>
-                              ${esc(t.productName || 'Producto')} · <strong>${t.quantity} u</strong>
-                            </div>
-                            <div class="text-xs text-muted" style="margin-top:0.125rem">
-                              ${isIncoming ? 'Desde' : 'Hacia'}: ${esc(otherWh?.name || '—')} (${esc(otherWh?.code || '—')})
-                              ${t.code ? ` · ${esc(t.code)}` : ''}
-                            </div>
-                            <div class="text-xs text-muted">${formatDate(t.createdAt)}${t.requestedByName ? ' · ' + esc(t.requestedByName) : ''}</div>
-                          </div>
-                          <div style="display:flex;flex-direction:column;gap:0.25rem;align-items:flex-end">
-                            <span class="badge ${statusBadge}" style="font-size:0.5625rem">${statusLabel}</span>
-                            ${isIncoming && isPending ? `
-                              <div style="display:flex;gap:0.25rem">
-                                <button class="btn btn-primary btn-sm" data-confirm-transfer="${esc(t.id)}" style="padding:0.25rem 0.5rem;font-size:0.625rem">Recibir</button>
-                                <button class="btn btn-outline btn-sm text-danger" data-reject-transfer="${esc(t.id)}" style="padding:0.25rem 0.5rem;font-size:0.625rem">Rechazar</button>
-                              </div>
-                            ` : ''}
-                            ${!isIncoming && isPending ? `
-                              <button class="btn btn-outline btn-sm text-danger" data-cancel-transfer="${esc(t.id)}" style="padding:0.25rem 0.5rem;font-size:0.625rem">Cancelar</button>
-                            ` : ''}
-                          </div>
-                        </div>
-                        ${t.note ? `<div class="text-xs text-muted" style="margin-top:0.375rem;font-style:italic">"${esc(t.note)}"</div>` : ''}
-                      </div>
-                    `;
-                  }).join('')}
-                </div>
-              `}
             ` : ''}
           </div>
         </div>
@@ -376,15 +304,12 @@ export function mountWarehouseInterior(container, navigate) {
       btn.addEventListener("click", () => { period = btn.dataset.period; render(); });
     });
 
-    // Tabs del inventario (Stock / Otros almacenes / Transferencias)
+    // Tabs del inventario (Stock / Otros almacenes — solo 2 tabs, transferencias solo en admin)
     container.querySelectorAll("[data-inv-tab]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         inventoryTab = btn.dataset.invTab;
-        // Cargar datos según el tab activo
         if (inventoryTab === "others" && otherWarehousesStock.length === 0) {
           await loadOtherStock();
-        } else if (inventoryTab === "transfers" && transfers.length === 0) {
-          await loadTransfers();
         } else {
           render();
         }
@@ -405,77 +330,11 @@ export function mountWarehouseInterior(container, navigate) {
       });
     });
 
-    // Botón "Pedir" (en el tab otros almacenes) → crear transferencia
-    container.querySelectorAll("[data-request-transfer]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const productId = btn.dataset.requestTransfer;
-        const product = products.find((p) => p.id === productId);
-        if (!product) return;
-        showCreateTransferModal(product);
-      });
-    });
-
-    // Botón "Nueva transferencia" (en el tab transferencias)
-    const newTransferBtn = container.querySelector("#new-transfer-btn");
-    if (newTransferBtn) {
-      newTransferBtn.addEventListener("click", () => showCreateTransferModal(null));
-    }
-
-    // Botones de procesar transferencias (recibir / rechazar / cancelar)
-    container.querySelectorAll("[data-confirm-transfer]").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        const transferId = btn.dataset.confirmTransfer;
-        const user = store.getState().currentUser;
-        try {
-          await processStockTransfer(transferId, "COMPLETED", user);
-          toast("Transferencia recibida. Stock actualizado.", "success");
-          await loadTransfers();
-        } catch (err) {
-          toast("Error al procesar: " + (err.message || "desconocido"), "error");
-        }
-      });
-    });
-    container.querySelectorAll("[data-reject-transfer]").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        const transferId = btn.dataset.rejectTransfer;
-        const user = store.getState().currentUser;
-        try {
-          await processStockTransfer(transferId, "REJECTED", user);
-          toast("Transferencia rechazada", "info");
-          await loadTransfers();
-        } catch (err) {
-          toast("Error al rechazar: " + (err.message || "desconocido"), "error");
-        }
-      });
-    });
-    container.querySelectorAll("[data-cancel-transfer]").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        const transferId = btn.dataset.cancelTransfer;
-        const user = store.getState().currentUser;
-        try {
-          await processStockTransfer(transferId, "CANCELLED", user);
-          toast("Transferencia cancelada", "info");
-          await loadTransfers();
-        } catch (err) {
-          toast("Error al cancelar: " + (err.message || "desconocido"), "error");
-        }
-      });
-    });
-
     // Búsqueda en tab "otros"
     const othersSearch = container.querySelector("#others-search");
     if (othersSearch) {
       othersSearch.addEventListener("input", () => {
-        // Filter the displayed list
         const term = othersSearch.value.toLowerCase().trim();
-        // Re-render con filtro
-        const allStock = otherWarehousesStock;
-        // Use the existing render but filtered — actually, the render uses otherWarehousesStock
-        // directly, so we need to re-filter. For simplicity, just re-render.
         render();
         const newInput = container.querySelector("#others-search");
         if (newInput) { newInput.focus(); newInput.setSelectionRange(term.length, term.length); }
@@ -552,82 +411,6 @@ export function mountWarehouseInterior(container, navigate) {
     }).catch(() => {
       const listEl = document.querySelector("#modal-availability-list");
       if (listEl) listEl.innerHTML = '<div class="empty-state text-xs">Error al cargar disponibilidad.</div>';
-    });
-  }
-
-  // Modal: crear una nueva transferencia
-  function showCreateTransferModal(product) {
-    const p = product || null;
-    const close = showModal({
-      title: p ? `Pedir "${esc(p.name)}" desde otro almacén` : "Nueva transferencia",
-      body: `
-        <div style="display:flex;flex-direction:column;gap:0.75rem">
-          <div>
-            <label class="label label-xs">Producto *</label>
-            ${p ? `
-              <input class="input" id="tr-product-name" value="${esc(p.name)}" readonly />
-            ` : `
-              <select class="select" id="tr-product-id">
-                <option value="">— Seleccionar producto —</option>
-                ${products.map((prod) => `<option value="${prod.id}">${esc(prod.name)} · ${esc(prod.brand || '')}</option>`).join('')}
-              </select>
-            `}
-          </div>
-          <div>
-            <label class="label label-xs">Almacén origen *</label>
-            <select class="select" id="tr-from-warehouse">
-              <option value="">— Seleccionar origen —</option>
-              ${allWarehouses.map((w) => `<option value="${w.id}">${esc(w.name)} (${esc(w.code)})</option>`).join('')}
-            </select>
-          </div>
-          <div>
-            <label class="label label-xs">Cantidad *</label>
-            <input class="input" type="number" min="1" id="tr-quantity" value="1" />
-          </div>
-          <div>
-            <label class="label label-xs">Nota (opcional)</label>
-            <input class="input" id="tr-note" placeholder="Ej: Pedido urgente, cliente lo espera" />
-          </div>
-          <div class="text-xs text-muted" style="background:var(--bg-soft);padding:0.5rem;border-radius:var(--radius);line-height:1.5">
-            La transferencia queda en estado <strong>Pendiente</strong>. El almacén origen debe confirmarla.
-            Al confirmar, se descuenta el stock del origen y se suma a <strong>${esc(warehouse.name)}</strong> automáticamente.
-          </div>
-        </div>
-      `,
-      footer: `<button class="btn btn-outline" id="tr-cancel">Cancelar</button><button class="btn btn-primary" id="tr-create">Crear transferencia</button>`,
-    });
-
-    document.querySelector("#tr-cancel").addEventListener("click", close);
-    document.querySelector("#tr-create").addEventListener("click", async () => {
-      const productId = p?.id || document.querySelector("#tr-product-id")?.value;
-      const productName = p?.name || products.find((pr) => pr.id === productId)?.name;
-      const fromWarehouseId = document.querySelector("#tr-from-warehouse").value;
-      const quantity = parseInt(document.querySelector("#tr-quantity").value);
-      const note = document.querySelector("#tr-note").value.trim() || null;
-
-      if (!productId) { toast("Seleccioná un producto", "error"); return; }
-      if (!fromWarehouseId) { toast("Seleccioná un almacén origen", "error"); return; }
-      if (!quantity || quantity < 1) { toast("La cantidad debe ser mayor a 0", "error"); return; }
-
-      const user = store.getState().currentUser;
-      try {
-        await createStockTransfer({
-          fromWarehouseId,
-          toWarehouseId: warehouse.id,
-          productId,
-          productName,
-          quantity,
-          note,
-          requestedBy: user?.id,
-          requestedByName: user?.displayName,
-        });
-        toast("Transferencia creada. Espera confirmación del origen.", "success");
-        close();
-        inventoryTab = "transfers";
-        await loadTransfers();
-      } catch (err) {
-        toast("Error al crear transferencia: " + (err.message || "desconocido"), "error");
-      }
     });
   }
 

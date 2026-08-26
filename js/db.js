@@ -547,6 +547,81 @@ export async function saveWarehouse(w) {
 }
 
 /**
+ * Crea o actualiza un almacén Y carga el stock inicial de varios productos.
+ * Si es un almacén nuevo: inserta + ajusta stock de cada producto a la cantidad dada.
+ * Si es un almacén existente: actualiza + ajusta solo los productos que cambiaron.
+ *
+ * @param {Object} warehouse - datos del almacén (igual que saveWarehouse)
+ * @param {Array<{productId, quantity, localPrice?}>} stockItems - stock inicial por producto
+ *   - Si quantity > 0 y el producto no tiene stock en ese almacén → ajusta a ese valor (INVENTARIO inicial)
+ *   - Si quantity = 0 → no hace nada (omite el producto)
+ *   - Si es edición y el producto ya tiene stock → no se modifica (salvo que se cambie el quantity)
+ * @returns {Promise<string>} - id del almacén
+ */
+export async function saveWarehouseWithStock(warehouse, stockItems = []) {
+  // 1) Guardar el almacén (crear o actualizar)
+  const warehouseId = await saveWarehouse(warehouse);
+  if (!warehouseId || warehouseId === "demo-id") return warehouseId;
+
+  // 2) Para cada producto con stock inicial, ajustar el stock
+  const s = await sb();
+  if (!s) return warehouseId;
+
+  // 3) Si es edición, obtener el stock actual del almacén para no sobreescribir
+  let existingStockMap = new Map();
+  if (warehouse.id) {
+    try {
+      const { data, error } = await s.from("stock").select("*").eq("warehouse_id", warehouseId);
+      if (!error && data) {
+        for (const row of data) {
+          existingStockMap.set(row.product_id, Number(row.quantity) || 0);
+        }
+      }
+    } catch (err) {
+      console.warn("[saveWarehouseWithStock] No se pudo cargar stock existente:", err);
+    }
+  }
+
+  // 4) Ajustar cada producto
+  for (const item of stockItems) {
+    if (!item.productId || !item.quantity || item.quantity < 0) continue;
+    const existingQty = existingStockMap.get(item.productId) || 0;
+    if (warehouse.id && existingQty === item.quantity) continue; // no cambió, omitir
+
+    // Calcular delta: si es nuevo o el producto no estaba, delta = quantity total
+    // Si existía, delta = diferencia (nuevo - actual)
+    const delta = warehouse.id ? (item.quantity - existingQty) : item.quantity;
+    if (delta === 0) continue;
+
+    try {
+      // Usar adjustStock que inserta/atualiza stock + registra el movimiento
+      await adjustStock(
+        warehouseId,
+        item.productId,
+        delta,
+        "INVENTARIO",
+        `Stock inicial — ${warehouse.name || 'almacén'}`,
+        warehouse._createdBy?.id,
+        warehouse._createdBy?.displayName
+      );
+
+      // Si viene localPrice, actualizarlo (adjustStock no lo maneja)
+      if (item.localPrice != null) {
+        const stockId = `${warehouseId}_${item.productId}`;
+        await s.from("stock").update({
+          local_price: item.localPrice,
+          updated_at: new Date().toISOString(),
+        }).eq("id", stockId);
+      }
+    } catch (err) {
+      console.error(`[saveWarehouseWithStock] Error ajustando ${item.productId}:`, err);
+    }
+  }
+
+  return warehouseId;
+}
+
+/**
  * @param {string} id - warehouse id
  * @returns {Promise<void>}
  */
