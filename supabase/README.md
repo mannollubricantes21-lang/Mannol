@@ -52,6 +52,8 @@ Script de mantenimiento manual/ejecutable vía `pg_cron` (plan Pro):
 | `schema.sql` | 14 tablas + índices + 3 RPCs + campos mayorista | **Instalación nueva** |
 | `policies.sql` | RLS + buckets Storage + grants + funciones seguridad | **Instalación nueva** |
 | `seed.sql` | Datos demo + productos con tiers mayorista | **Instalación nueva** |
+| `migration-v5.1-update.sql` | **Todo-en-uno e idempotente** (columnas de productos + motivos de transferencia + realtime) | **⚠️ EJECUTAR en una BD existente para pasar a la v5.1** |
+| `migration-v4-transfer-reasons.sql` | Solo motivos de transferencia | Alternativa mínima (incluida en la v5.1) |
 | `lifecycle-cleanup.sql` | Mantenimiento periódico | Cada 3-6 meses |
 
 > ⚠️ Si tuvieras archivos `migration-v2.sql` o `migration-v3.sql` de una versión anterior,
