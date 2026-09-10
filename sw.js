@@ -4,7 +4,7 @@
 // Bump CACHE_VERSION on every release to force clients to refresh.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v8";
+const CACHE_VERSION = "mannol-pos-supabase-v9";
 const STATIC_ASSETS = [
   "./",
   "./index.html",
@@ -23,6 +23,8 @@ const STATIC_ASSETS = [
   "./js/demo-data.js",
   "./js/offline-sync.js",
   "./js/image-upload.js",
+  "./js/github-storage.js",
+  "./js/github-config.example.js",
   "./js/csv-export.js",
   "./js/charts.js",
   "./js/push-notify.js",

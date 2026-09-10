@@ -171,7 +171,7 @@ create table if not exists public.stock_movements (
   warehouse_id uuid not null references public.warehouses(id) on delete cascade,
   product_id uuid not null references public.products(id) on delete cascade,
   delta numeric not null,
-  reason text not null check (reason in ('AJUSTE_MANUAL','INVENTARIO','MERMA','DEVOLUCION','VENTA','CANCELACION','REABRIR')),
+  reason text not null check (reason in ('AJUSTE_MANUAL','INVENTARIO','MERMA','DEVOLUCION','VENTA','CANCELACION','REABRIR','TRANSFERENCIA_SALIDA','TRANSFERENCIA_ENTRADA')),
   note text,
   user_id uuid,
   user_name text,

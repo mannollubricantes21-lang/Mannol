@@ -137,11 +137,12 @@ export function mountSalesView(container, navigate) {
         ${saleType === "WHOLESALE" ? renderWholesaleSection() : `
         <div>
           <label class="label">Gestor que refirió (opcional)</label>
-          <input class="input" id="manager-code" value="${selectedManagerCode}" placeholder="SIGLA: CM, AR, JP, MG... (dejar vacío si no hay)" autocomplete="off" />
-          ${selectedManager ? `<p class="text-xs text-muted mt-1">${esc(selectedManager.name)} · ${esc(selectedManager.phone || '')}</p>` : ''}
+          <select class="select" id="manager-code">
+            <option value="">— Sin gestor —</option>
+            ${managers.filter((m) => m.active !== false).sort((a, b) => (a.name || "").localeCompare(b.name || "")).map((m) => `<option value="${esc(m.id)}" ${selectedManager?.id === m.id ? 'selected' : ''}>${esc(m.name)}${m.code ? ` (${esc(m.code)})` : ''}</option>`).join("")}
+          </select>
+          ${selectedManager ? `<p class="text-xs text-muted mt-1">${esc(selectedManager.name)}${selectedManager.code ? ` · Código: ${esc(selectedManager.code)}` : ''}${selectedManager.phone ? ` · ${esc(selectedManager.phone)}` : ''}</p>` : ''}
         </div>
-
-        <!-- Productos de la venta -->
         <div>
           <label class="label flex items-center gap-1">${icon("boxes", 14)} Productos de la venta</label>
           ${cart.length === 0 ? `
@@ -290,8 +291,11 @@ export function mountSalesView(container, navigate) {
       <!-- Gestor -->
       <div>
         <label class="label">Gestor que refirió (opcional)</label>
-        <input class="input" id="manager-code" value="${esc(selectedManagerCode)}" placeholder="SIGLA: CM, AR, JP, MG... (dejar vacío si no hay)" autocomplete="off" />
-        ${selectedManager ? `<p class="text-xs text-muted mt-1">${esc(selectedManager.name)} · ${esc(selectedManager.phone || '')}</p>` : ''}
+        <select class="select" id="manager-code">
+          <option value="">— Sin gestor —</option>
+          ${managers.filter((m) => m.active !== false).sort((a, b) => (a.name || "").localeCompare(b.name || "")).map((m) => `<option value="${esc(m.id)}" ${selectedManager?.id === m.id ? 'selected' : ''}>${esc(m.name)}${m.code ? ` (${esc(m.code)})` : ''}</option>`).join("")}
+        </select>
+        ${selectedManager ? `<p class="text-xs text-muted mt-1">${esc(selectedManager.name)}${selectedManager.code ? ` · Código: ${esc(selectedManager.code)}` : ''}${selectedManager.phone ? ` · ${esc(selectedManager.phone)}` : ''}</p>` : ''}
       </div>
 
       <!-- Producto mayorista -->
@@ -460,15 +464,14 @@ export function mountSalesView(container, navigate) {
       });
     }
 
-    // Gestor
-    const managerInput = container.querySelector("#manager-code");
-    if (managerInput) {
-      managerInput.addEventListener("input", (e) => {
-        selectedManagerCode = e.target.value.toUpperCase().trim();
-        selectedManager = managers.find((m) => m.code.toUpperCase() === selectedManagerCode) || null;
+    // Gestor (desplegable con nombres)
+    const managerSelect = container.querySelector("#manager-code");
+    if (managerSelect) {
+      managerSelect.addEventListener("change", (e) => {
+        const val = e.target.value;
+        selectedManager = val ? managers.find((m) => m.id === val) || null : null;
+        selectedManagerCode = selectedManager?.code || "";
         render();
-        const newInput = container.querySelector("#manager-code");
-        if (newInput) { newInput.focus(); newInput.setSelectionRange(selectedManagerCode.length, selectedManagerCode.length); }
       });
     }
 

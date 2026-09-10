@@ -56,3 +56,104 @@ Probado con navegador headless (agent-browser):
 - `wizard-mobile-iphone.png`, `wizard-mobile-sql.png` (responsive móvil)
 - `app-home-banner-shown.png` (banner en home sin configurar)
 - `app-home-after-config.png` (home con Supabase configurado, sin banner)
+
+---
+
+# 🚀 v5.1.0 — Mejoras de usabilidad + imágenes en GitHub
+
+## 🐛 Fixes
+
+### 1. Agregar un producto se quedaba cargando y no guardaba (CRÍTICO)
+**Causa raíz (2 bugs combinados):**
+- El diálogo "Nuevo producto" del **Catálogo** no enviaba el campo `brand`
+  (es `NOT NULL` en la BD → el INSERT fallaba con error de constraint).
+- El diálogo de **Productos del admin** enviaba campos legacy
+  (`commission`, `commissionCurrency`) que **no existen** en la tabla
+  `products` → error PGRST204 de PostgREST.
+- `saveProduct()` **tragaba** ambos errores en silencio: la UI mostraba
+  "Producto guardado" pero nada se guardaba.
+
+**Solución:**
+| Archivo | Cambio |
+|---|---|
+| `js/db.js` | `saveProduct()` ahora sanitiza el payload contra la lista real de columnas (`PRODUCT_COLUMNS`), completa `brand` con "MANNOL" si falta, y **lanza el error real** en vez de tragárselo. |
+| `js/views/catalog.js` | Campo "Marca" en el diálogo (default MANNOL), botón con estado "Guardando…", y el error real se muestra en un toast. |
+| `js/views/admin.js` | Quitados los campos legacy del payload; botón con estado de guardado; errores visibles. |
+
+### 2. Confirmar transferencias fallaba (bug oculto encontrado)
+El constraint de `stock_movements.reason` no incluía los motivos
+`TRANSFERENCIA_SALIDA` / `TRANSFERENCIA_ENTRADA`, así que al confirmar
+una transferencia el INSERT de auditoría fallaba y el stock no se movía.
+
+**→ Ejecutar `supabase/migration-v4-transfer-reasons.sql` en el SQL Editor
+de Supabase (es idempotente, se puede correr varias veces).**
+También corregido en `schema.sql` para instalaciones nuevas.
+
+## ✨ Mejoras
+
+### 3. Gestor que refirió = desplegable con nombres (Registrar venta)
+Antes había que escribir la SIGLA a mano (CM, AR…). Ahora es un
+`<select>` con todos los gestores activos: "Nombre (SIGLA)", opción
+"— Sin gestor —", y debajo muestra teléfono/código del gestor elegido.
+Aplica a ventas retail y mayorista. Archivo: `js/views/sales.js`.
+
+### 4. Nueva sección "Stock general" en el Admin
+Admin → Gestión → **Stock general**:
+- 4 tarjetas globales: unidades totales, con stock, bajo mínimo, agotados.
+- **Stock separado por almacén (local)**: una tarjeta por almacén con su
+  listado de productos y cantidades.
+- **Matriz producto × almacén**: filas = productos, columnas = cada local,
+  con Total, mínimo y estado (OK / Bajo / Agotado).
+- Filtros: búsqueda, por almacén, "solo bajo mínimo/agotados", "solo agotados".
+- Exportar CSV.
+Archivo: `js/views/admin.js` (`mountStockPanel`).
+
+### 5. Transferencias multi-producto desde Movimientos
+Admin → Movimientos → "Nueva transferencia": ahora elegís **almacén origen
+y destino** y aparece un **desplegable/lista con TODOS los productos** con el
+stock disponible en el origen, donde podés **escribir la cantidad a mover de
+cada uno** (0 = no mover). Valida que no muevas más del stock disponible y
+crea las transferencias en lote (cada producto = una transferencia
+pendiente en el panel Transferencias). Archivo: `js/views/admin.js`.
+
+### 6. Imágenes de productos guardadas en GitHub 🆕
+Las imágenes son lo que más pesa y agotaban el free tier de Supabase (1 GB).
+Ahora las imágenes se suben **a tu repo de GitHub** vía la API de Contents y
+se sirven desde `raw.githubusercontent.com` (o el CDN que configures).
+
+- **Nuevo archivo:** `js/github-storage.js` (subida/borrado/test de conexión).
+- **Nuevo panel:** Admin → Sistema → **Almacenamiento**: configuras owner,
+  repo, rama, carpeta y token (fine-grained con permiso *Contents: Read and
+  write*). El token se guarda solo en el dispositivo (localStorage), nunca
+  se sube al repo. Guía paso a paso incluida en el panel.
+- **Prioridad de subida:** GitHub → (si falla) Supabase → (modo demo) dataURL.
+  Nunca se pierde una imagen.
+- Al reemplazar/borrar un producto, la imagen anterior se intenta borrar
+  del repo automáticamente.
+- Archivo de ejemplo: `js/github-config.example.js` (opcional, para
+  preconfigurar owner/repo sin token).
+
+### 7. Alineación, tipografía y anti-desborde (CSS)
+Bloque de fixes al final de `css/styles.css`:
+- Tablas: textos con corte limpio, celdas numéricas alineadas y con
+  números tabulares; sin carteles fuera de lugar.
+- Badges con elipsis, títulos con `overflow-wrap`, hijos de flex/grid con
+  `min-width:0` (fix clásico de desborde), selects/inputs dentro de su
+  columna, toasts y modales adaptados a pantallas angostas,
+  nav del admin con elipsis, imágenes acotadas a su contenedor.
+
+## 🔄 Otros cambios
+- `sw.js`: `CACHE_VERSION` → `mannol-pos-supabase-v9` (fuerza refresco de
+  la PWA) + nuevos archivos en la precache.
+- `js/types.js`: etiquetas de los motivos de transferencia.
+- `package.json`: versión 5.1.0.
+
+## 📋 Pasos posteriores a la subida
+1. Subir todos los archivos del zip al repo (reemplazando los existentes).
+2. **Supabase → SQL Editor → ejecutar `supabase/migration-v4-transfer-reasons.sql`.**
+3. En la app: Admin → Sistema → **Almacenamiento** → configurar GitHub
+   (owner `mannollubricantes21-lang`, repo `Mannol`, rama `main`,
+   carpeta `product-images`) + token fine-grained con
+   *Contents: Read and write* → "Probar conexión".
+4. Cerrar y reabrir la app dos veces para que el Service Worker
+   actualice la caché (o limpiar datos del navegador).

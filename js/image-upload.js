@@ -13,6 +13,7 @@
 
 import { getSupabase } from "./supabase.js";
 import { toast } from "./ui.js";
+import { isGitHubConfigured, uploadImageToGitHub } from "./github-storage.js";
 
 const MAX_WIDTH = 1200;
 const MAX_HEIGHT = 1200;
@@ -113,12 +114,26 @@ export async function uploadImageAsWebP(file, bucket = "products") {
 
   // 2. Generar nombre único: {timestamp}-{random}.webp
   const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.webp`;
-  const fullPath = `${filename}`;
 
-  // 3. Intentar subir a Supabase Storage
+  // 3. PRIORIDAD: GitHub (no agota el espacio de Supabase).
+  //    Configurable en Admin → Sistema → Almacenamiento.
+  if (await isGitHubConfigured()) {
+    try {
+      const result = await uploadImageToGitHub(webpBlob, filename);
+      console.info(`[ImageUpload] Subido a GitHub: ${result.path} (${formatSize(webpSize)})`);
+      return { url: result.url, originalSize, webpSize, savedPct, storage: "github" };
+    } catch (err) {
+      // Si GitHub falla (token, red, permiso) cae a Supabase para no bloquear la carga
+      console.warn("[ImageUpload] GitHub falló, usando Supabase Storage:", err);
+      toast("GitHub falló (" + (err.message || "error") + "). Se subió a Supabase.", "warning", 5000);
+    }
+  }
+
+  // 4. Supabase Storage (fallback)
   const s = await getSupabase();
   if (s && s.storage) {
     try {
+      const fullPath = `${filename}`;
       const { error: uploadError } = await s.storage
         .from(bucket)
         .upload(fullPath, webpBlob, {
@@ -133,17 +148,17 @@ export async function uploadImageAsWebP(file, bucket = "products") {
       if (!url) throw new Error("No se pudo obtener URL pública");
 
       console.info(`[ImageUpload] Subido a Supabase Storage: ${bucket}/${fullPath} (${formatSize(webpSize)})`);
-      return { url, originalSize, webpSize, savedPct };
+      return { url, originalSize, webpSize, savedPct, storage: "supabase" };
     } catch (err) {
       console.error("[ImageUpload] Error subiendo a Storage:", err);
       throw new Error("Error al subir imagen a Supabase Storage: " + (err.message || err));
     }
   }
 
-  // 4. Modo demo: convertir a data URL (base64)
+  // 5. Modo demo: convertir a data URL (base64)
   const dataUrl = await blobToDataURL(webpBlob);
   console.info(`[ImageUpload] Modo demo — data URL (${formatSize(webpSize)})`);
-  return { url: dataUrl, originalSize, webpSize, savedPct };
+  return { url: dataUrl, originalSize, webpSize, savedPct, storage: "dataurl" };
 }
 
 function blobToDataURL(blob) {

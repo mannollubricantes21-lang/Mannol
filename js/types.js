@@ -27,6 +27,8 @@ export const STOCK_REASON_LABELS = {
   VENTA: "Venta",
   CANCELACION: "Cancelación",
   REABRIR: "Reabrir",
+  TRANSFERENCIA_SALIDA: "Transferencia salida",
+  TRANSFERENCIA_ENTRADA: "Transferencia entrada",
 };
 export const CATEGORY_COLORS = [
   "slate", "amber", "blue", "emerald", "cyan", "violet",

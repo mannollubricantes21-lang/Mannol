@@ -2255,3 +2255,104 @@ kbd {
     margin: 1.5cm;
   }
 }
+
+/* =====================================================
+   v5.1 — Fixes de alineación, overflow y tipografía
+   Evita que textos/carteles se salgan de su lugar:
+   tablas, badges, stats, títulos, selects, modales, toasts.
+   ===================================================== */
+
+/* 1. Nada de texto desbordado en celdas de tablas */
+.table th,
+.table td {
+  overflow-wrap: break-word;
+  word-break: normal;
+  vertical-align: middle;
+}
+.table td.text-right,
+.table th.text-right { white-space: nowrap; }
+
+/* 2. Los hijos de flex/grid pueden encoger (fix clásico de overflow) */
+.flex > *,
+.grid > * {
+  min-width: 0;
+}
+
+/* 3. truncate exige que el contenedor flex permita encoger */
+.flex .truncate,
+.grid .truncate {
+  min-width: 0;
+}
+
+/* 4. Títulos y párrafos: cortar palabras largas (URLs, SKUs) en vez de salirse */
+h1, h2, h3, h4, p, .card-title, .modal-title, .empty-state-title, .empty-state-desc {
+  overflow-wrap: anywhere;
+}
+h1.text-2xl { font-size: clamp(1.125rem, 1rem + 1.5vw, 1.5rem); line-height: 1.25; }
+
+/* 5. Stats: valores largos sin romper el layout */
+.stat-card { min-width: 0; }
+.stat-value { overflow-wrap: anywhere; line-height: 1.15; }
+.stat-label { min-width: 0; }
+.stat-label span,
+.stat-label svg { flex-shrink: 0; }
+
+/* 6. Badges: no estiran la celda ni el contenedor */
+.badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  display: inline-block;
+}
+
+/* 7. Inputs y selects: nunca más anchos que su columna */
+.input, .select, .textarea { min-width: 0; max-width: 100%; }
+.select { text-overflow: ellipsis; }
+
+/* 8. Imágenes: nunca se salen de su contenedor */
+img { max-width: 100%; }
+
+/* 9. Toasts en pantallas angostas */
+@media (max-width: 480px) {
+  .toast { min-width: 0; max-width: 100%; }
+  .toast-container { left: 0.5rem; right: 0.5rem; max-width: none; }
+}
+
+/* 10. Modal: título flexible y body con scroll seguro */
+.modal-header { min-width: 0; }
+.modal-title { min-width: 0; overflow-wrap: anywhere; padding-right: 0.5rem; }
+.modal { width: 100%; }
+@media (max-width: 480px) {
+  .modal-overlay { padding: 0.5rem; }
+  .modal-body { padding: 1rem; }
+  .modal-footer { flex-wrap: wrap; }
+  .modal-footer .btn { flex: 1 1 auto; }
+}
+
+/* 11. Tablas dentro de cards: scroll horizontal ya existe (.overflow-x-auto);
+      evitar que la tabla empuje el card más allá del contenedor */
+.card { min-width: 0; }
+.card .overflow-x-auto { max-width: 100%; }
+
+/* 12. Nav del admin: etiquetas largas con elipsis */
+.admin-nav-item > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* 13. Botones: texto centrado sin desbordes */
+.btn { min-width: 0; }
+.btn > span { min-width: 0; }
+
+/* 14. Cart items y catálogo: contenidos flexibles */
+.cart-item, .catalog-item { min-width: 0; }
+
+/* 15. Monospace para códigos (V-xxxxx, TR-xxxxx) alineado y sin salto */
+.font-mono { font-variant-numeric: tabular-nums; }
+
+/* 16. Números tabulares en montos y cantidades (mejor alineación en tablas) */
+.table td { font-variant-numeric: tabular-nums; }

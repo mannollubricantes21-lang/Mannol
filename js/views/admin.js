@@ -28,6 +28,7 @@ import { CURRENCIES, CATEGORY_COLORS, STOCK_REASONS, STOCK_REASON_LABELS } from 
 import { uploadImageAsWebP, pickImageFile } from "../image-upload.js";
 import { lineChart, barChart, COLORS } from "../charts.js";
 import { exportToCSV, exportMultipleCSVs } from "../csv-export.js";
+import { getGitHubConfig, saveGitHubConfig, testGitHubConnection, isGitHubConfigured } from "../github-storage.js";
 
 // Secciones agrupadas por categoría para mejor organización
 const NAV_SECTIONS = [
@@ -39,6 +40,7 @@ const NAV_SECTIONS = [
       { id: "products", label: "Productos", icon: "tags" },
       { id: "categories", label: "Categorías", icon: "tags" },
       { id: "warehouses", label: "Almacenes", icon: "store" },
+      { id: "stock", label: "Stock general", icon: "boxes" },
       { id: "managers", label: "Gestores", icon: "users" },
       { id: "cards", label: "Tarjetas", icon: "creditCard" },
     ],
@@ -56,6 +58,7 @@ const NAV_SECTIONS = [
     items: [
       { id: "transfers", label: "Transferencias", icon: "arrowLeftRight" },
       { id: "movements", label: "Movimientos", icon: "listTree" },
+      { id: "storage", label: "Almacenamiento", icon: "cloud" },
       { id: "weekend", label: "Fin de semana", icon: "calendar" },
       { id: "audit", label: "Auditoría", icon: "receipt" },
     ],
@@ -617,12 +620,14 @@ export function mountAdminView(container, navigateOrUser) {
       case "products": mountProductsPanel(content, myGen); break;
       case "categories": mountCategoriesPanel(content, myGen); break;
       case "warehouses": mountWarehousesPanel(content, myGen); break;
+      case "stock": mountStockPanel(content, myGen); break;
       case "managers": mountManagersPanel(content, myGen); break;
       case "cards": mountCardsPanel(content, myGen); break;
       case "warehouseCommissions": mountWarehouseCommissionsPanel(content, myGen); break;
       case "weekend": mountWeekendPanel(content, myGen); break;
       case "transfers": mountTransfersPanel(content, myGen); break;
       case "movements": mountMovementsPanel(content, myGen); break;
+      case "storage": mountStoragePanel(content, myGen); break;
       case "rates": mountRatesPanel(content, myGen); break;
       case "profit": mountProfitPanel(content, myGen); break;
       case "audit": mountAuditPanel(content, myGen); break;
@@ -1631,9 +1636,6 @@ export function mountAdminView(container, navigateOrUser) {
         gestorCommissionCurrency: document.querySelector("#p-gestorCommissionCurrency").value,
         vendorCommission: parseFloat(document.querySelector("#p-vendorCommission").value) || 0,
         vendorCommissionCurrency: document.querySelector("#p-vendorCommissionCurrency").value,
-        // Backwards compat (legacy single commission = gestor)
-        commission: parseFloat(document.querySelector("#p-gestorCommission").value) || 0,
-        commissionCurrency: document.querySelector("#p-gestorCommissionCurrency").value,
         // Mayorista
         unitsPerBox: unitsPerBoxVal ? parseInt(unitsPerBoxVal) : null,
         wholesaleTiers: wholesaleTiers,
@@ -1646,10 +1648,24 @@ export function mountAdminView(container, navigateOrUser) {
         toast("Para usar tiers mayorista, define 'pomos por caja'", "error");
         return;
       }
-      await saveProduct(data);
-      toast("Producto guardado", "success");
-      close();
-      onSaved();
+      // Estado de guardado + error real en pantalla (antes fallaba en silencio)
+      const saveBtn = document.querySelector("#p-save");
+      const cancelBtn = document.querySelector("#p-cancel");
+      saveBtn.disabled = true;
+      cancelBtn.disabled = true;
+      saveBtn.innerHTML = `<div class="spinner spinner-sm"></div> Guardando...`;
+      try {
+        await saveProduct(data);
+        toast("Producto guardado", "success");
+        close();
+        onSaved();
+      } catch (err) {
+        console.error("Error al guardar producto:", err);
+        toast("No se pudo guardar: " + (err.message || "error desconocido"), "error", 6000);
+        saveBtn.disabled = false;
+        cancelBtn.disabled = false;
+        saveBtn.innerHTML = `${icon("save", 14)} Guardar`;
+      }
     });
   }
 
@@ -2435,6 +2451,286 @@ export function mountAdminView(container, navigateOrUser) {
     });
   }
 
+  // ===== STOCK GENERAL (vista global + separada por almacén) =====
+  function mountStockPanel(content, gen) {
+    content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+    let allWarehouses = [];
+    let allProducts = [];
+    let allStock = [];
+    let search = "";
+    let whFilter = "";
+    let onlyLow = false;
+    let onlyOutOfStock = false;
+
+    async function load() {
+      try {
+        const [warehouses, products, stock] = await Promise.all([
+          listWarehouses(),
+          listProducts(),
+          listAllStockAcrossWarehouses(),
+        ]);
+        if (gen !== tabGeneration) return;
+        allWarehouses = warehouses;
+        allProducts = products;
+        allStock = stock;
+        render();
+      } catch (err) {
+        console.error("mountStockPanel load failed:", err);
+        if (gen !== tabGeneration) return;
+        content.innerHTML = `<div class="empty-state text-danger">Error al cargar stock: ${esc(err.message || 'desconocido')}</div>`;
+      }
+    }
+
+    function render() {
+      const activeWhs = allWarehouses.filter((w) => w.active !== false);
+
+      // Mapa cantidad: productId -> { warehouseId: qty }
+      const qtyMap = new Map();
+      for (const r of allStock) {
+        if (!qtyMap.has(r.productId)) qtyMap.set(r.productId, {});
+        const m = qtyMap.get(r.productId);
+        m[r.warehouseId] = (m[r.warehouseId] || 0) + (Number(r.quantity) || 0);
+      }
+
+      // Totales por almacén y global
+      const totalsByWh = {};
+      for (const w of activeWhs) totalsByWh[w.id] = 0;
+      let grandTotal = 0;
+      let productsWithStock = 0;
+      let productsOut = 0;
+      let productsLow = 0;
+
+      const prodRows = allProducts.map((p) => {
+        const m = qtyMap.get(p.id) || {};
+        const byWh = {};
+        let total = 0;
+        for (const w of activeWhs) {
+          const q = m[w.id] || 0;
+          byWh[w.id] = q;
+          total += q;
+        }
+        // Si hay un almacén filtrado, el "total efectivo" es solo el de ese local
+        const effTotal = whFilter ? (byWh[whFilter] || 0) : total;
+        const minStock = p.minStock ?? 0;
+        let status = "ok";
+        if (effTotal <= 0) status = "out";
+        else if (minStock > 0 && effTotal <= minStock) status = "low";
+        return { p, byWh, total, effTotal, status, minStock };
+      });
+
+      for (const r of prodRows) {
+        if (!r.p.active && r.effTotal <= 0) continue; // inactivos sin stock no cuentan
+        grandTotal += r.effTotal;
+        if (r.effTotal > 0) productsWithStock++;
+        for (const w of activeWhs) totalsByWh[w.id] += r.byWh[w.id] || 0;
+        if (r.status === "out") productsOut++;
+        else if (r.status === "low") productsLow++;
+      }
+
+      // Filtros
+      let filtered = prodRows;
+      if (search) {
+        const q = search.toLowerCase();
+        filtered = filtered.filter((r) =>
+          (r.p.name || "").toLowerCase().includes(q) ||
+          (r.p.sku || "").toLowerCase().includes(q) ||
+          (r.p.brand || "").toLowerCase().includes(q));
+      }
+      if (onlyLow) filtered = filtered.filter((r) => r.status === "low" || r.status === "out");
+      if (onlyOutOfStock) filtered = filtered.filter((r) => r.status === "out");
+      // Ordenar: primero problemáticos, luego alfabético
+      filtered.sort((a, b) => {
+        const rank = { out: 0, low: 1, ok: 2 };
+        if (rank[a.status] !== rank[b.status]) return rank[a.status] - rank[b.status];
+        return (a.p.name || "").localeCompare(b.p.name || "");
+      });
+
+      const statusBadge = (status) => status === "out"
+        ? `<span class="badge badge-danger" style="font-size:0.625rem">Agotado</span>`
+        : status === "low"
+          ? `<span class="badge badge-warning" style="font-size:0.625rem">${icon("alertTriangle", 10)} Bajo</span>`
+          : `<span class="badge badge-accent" style="font-size:0.625rem">OK</span>`;
+
+      content.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:1rem">
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <div style="min-width:0">
+              <h1 class="text-2xl font-bold flex items-center gap-2">${icon("boxes", 24)} Stock general</h1>
+              <p class="text-sm text-muted">Visión global y por almacén (local) de todo el inventario.</p>
+            </div>
+            <button class="btn btn-outline btn-sm" id="stk-export-csv">${icon("download", 12)} Exportar CSV</button>
+          </div>
+
+          <!-- Stats globales -->
+          <div class="grid md:grid-cols-4 gap-3">
+            <div class="stat-card">
+              <div class="stat-label">${icon("boxes", 14)} Unidades totales</div>
+              <div class="stat-value">${grandTotal}</div>
+              <div class="stat-sub">${whFilter ? 'en el almacén seleccionado' : 'sumando todos los almacenes'}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label" style="color:var(--accent)">${icon("check", 14)} Con stock</div>
+              <div class="stat-value text-accent">${productsWithStock}</div>
+              <div class="stat-sub">productos disponibles</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label" style="color:var(--warning)">${icon("alertTriangle", 14)} Bajo mínimo</div>
+              <div class="stat-value text-warning">${productsLow}</div>
+              <div class="stat-sub">conviene reponer</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label" style="color:var(--danger)">${icon("x", 14)} Agotados</div>
+              <div class="stat-value text-danger">${productsOut}</div>
+              <div class="stat-sub">sin unidades en ningún local</div>
+            </div>
+          </div>
+
+          <!-- Stock separado por almacén -->
+          <div>
+            <h2 class="text-base font-semibold flex items-center gap-2" style="margin:0 0 0.5rem">${icon("store", 16)} Stock por almacén (local)</h2>
+            <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
+              ${activeWhs.map((w) => `
+                <div class="card" style="min-width:0">
+                  <div class="card-header flex justify-between items-center">
+                    <h3 class="card-title text-sm flex items-center gap-2" style="min-width:0">
+                      <span class="truncate">${esc(w.name)}</span>
+                      <span class="badge badge-outline" style="font-size:0.5625rem;flex-shrink:0">${esc(w.code)}</span>
+                    </h3>
+                    <span class="badge badge-accent" style="flex-shrink:0">${totalsByWh[w.id] || 0} u.</span>
+                  </div>
+                  <div class="card-content" style="padding:0.75rem;max-height:16rem;overflow-y:auto">
+                    ${(() => {
+                      const items = prodRows.filter((r) => (r.byWh[w.id] || 0) > 0).sort((a, b) => b.byWh[w.id] - a.byWh[w.id]);
+                      if (items.length === 0) return `<div class="text-xs text-muted">Sin stock en este local.</div>`;
+                      return items.map((r) => `
+                        <div class="flex items-center justify-between gap-2" style="padding:0.25rem 0;border-bottom:1px solid var(--border)">
+                          <span class="text-xs truncate" style="min-width:0" title="${esc(r.p.name)}">${esc(r.p.name)}</span>
+                          <span class="text-xs font-bold ${r.byWh[w.id] <= (r.minStock || 0) ? 'text-warning' : ''}" style="flex-shrink:0">${r.byWh[w.id]}</span>
+                        </div>
+                      `).join("");
+                    })()}
+                  </div>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+
+          <!-- Filtros -->
+          <div class="card">
+            <div class="card-content" style="padding:0.875rem;display:flex;flex-direction:column;gap:0.625rem">
+              <div class="grid grid-cols-1 md:grid-cols-4 gap-2">
+                <div style="position:relative">
+                  <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)">${icon("search", 14)}</span>
+                  <input class="input" id="stk-search" placeholder="Buscar producto, SKU, marca..." value="${esc(search)}" style="padding-left:2.25rem" />
+                </div>
+                <div>
+                  <select class="select" id="stk-warehouse">
+                    <option value="">Todos los almacenes</option>
+                    ${activeWhs.map((w) => `<option value="${esc(w.id)}" ${whFilter === w.id ? 'selected' : ''}>${esc(w.name)} (${esc(w.code)})</option>`).join('')}
+                  </select>
+                </div>
+                <label class="flex items-center gap-2 text-sm" style="cursor:pointer">
+                  <input type="checkbox" id="stk-only-low" ${onlyLow ? 'checked' : ''} />
+                  Solo bajo mínimo / agotados
+                </label>
+                <label class="flex items-center gap-2 text-sm" style="cursor:pointer">
+                  <input type="checkbox" id="stk-only-out" ${onlyOutOfStock ? 'checked' : ''} />
+                  Solo agotados
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Matriz producto × almacén -->
+          <div class="card">
+            <div class="card-header flex justify-between">
+              <h2 class="card-title">Detalle por producto (${filtered.length})</h2>
+            </div>
+            <div class="overflow-x-auto">
+              ${filtered.length === 0 ? `
+                <div class="empty-state" style="padding:2rem">
+                  <div class="empty-state-icon">${icon("boxes", 24)}</div>
+                  <p class="empty-state-title">Sin productos</p>
+                  <p class="empty-state-desc">No hay productos que coincidan con los filtros.</p>
+                </div>
+              ` : `
+                <table class="table">
+                  <thead><tr>
+                    <th>Producto</th>
+                    ${activeWhs.map((w) => `<th class="text-center">${esc(w.code)}</th>`).join('')}
+                    <th class="text-center">Total</th>
+                    <th class="text-center">Mín.</th>
+                    <th class="text-center">Estado</th>
+                  </tr></thead>
+                  <tbody>
+                    ${filtered.map((r) => `
+                      <tr>
+                        <td style="max-width:16rem">
+                          <div class="font-medium text-sm truncate" title="${esc(r.p.name)}">${esc(r.p.name)}</div>
+                          <div class="text-xs text-muted truncate">${esc(r.p.brand || '')}${r.p.sku ? ` · ${esc(r.p.sku)}` : ''}</div>
+                        </td>
+                        ${activeWhs.map((w) => {
+                          const q = r.byWh[w.id] || 0;
+                          const cls = q <= 0 ? 'text-muted' : q <= (r.minStock || 0) ? 'text-warning' : '';
+                          return `<td class="text-center font-semibold ${cls}">${q > 0 ? q : '·'}</td>`;
+                        }).join('')}
+                        <td class="text-center font-bold">${r.effTotal}</td>
+                        <td class="text-center text-xs text-muted">${r.minStock || '—'}</td>
+                        <td class="text-center">${statusBadge(r.status)}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              `}
+            </div>
+          </div>
+        </div>
+      `;
+
+      const searchInput = content.querySelector("#stk-search");
+      searchInput.addEventListener("input", (e) => {
+        search = e.target.value;
+        render();
+        const newInput = content.querySelector("#stk-search");
+        if (newInput) { newInput.focus(); newInput.setSelectionRange(search.length, search.length); }
+      });
+      content.querySelector("#stk-warehouse").addEventListener("change", (e) => {
+        whFilter = e.target.value;
+        // Filtrar por almacén: la columna Total pasa a mostrar solo ese almacén
+        render();
+      });
+      content.querySelector("#stk-only-low").addEventListener("change", (e) => {
+        onlyLow = e.target.checked;
+        render();
+      });
+      content.querySelector("#stk-only-out").addEventListener("change", (e) => {
+        onlyOutOfStock = e.target.checked;
+        render();
+      });
+
+      // Export CSV
+      content.querySelector("#stk-export-csv").addEventListener("click", () => {
+        const rowsOut = filtered.map((r) => {
+          const row = {
+            producto: r.p.name,
+            marca: r.p.brand || '',
+            sku: r.p.sku || '',
+          };
+          for (const w of activeWhs) row[`stock_${(w.code || w.name).toLowerCase()}`] = r.byWh[w.id] || 0;
+          row.total = r.effTotal;
+          row.total_global = r.total;
+          row.minimo = r.minStock || 0;
+          row.estado = r.status === 'out' ? 'AGOTADO' : r.status === 'low' ? 'BAJO' : 'OK';
+          return row;
+        });
+        exportToCSV('stock-general', rowsOut);
+        toast(`${rowsOut.length} productos exportados`, "success");
+      });
+    }
+
+    load();
+  }
+
   // ===== MOVIMENTS (historial de movimientos de stock — vista admin) =====
   function mountMovementsPanel(content, gen) {
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
@@ -2698,24 +2994,30 @@ export function mountAdminView(container, navigateOrUser) {
 
   // Modal reutilizable para que el admin cree una transferencia desde cualquier panel
   // (usado en Movimientos y también disponible para otras secciones)
+  // v5.1: permite elegir VARIOS productos con cantidad individual antes de transferir.
   function showAdminTransferModal(onSaved) {
-    // Cargar warehouses y productos en paralelo
+    // Cargar warehouses, productos y stock de todos los almacenes en paralelo
     Promise.all([
       listWarehouses(),
       listProducts(),
-    ]).then(([warehouses, products]) => {
+      listAllStockAcrossWarehouses(),
+    ]).then(([warehouses, products, allStock]) => {
       const activeWarehouses = warehouses.filter((w) => w.active !== false);
+      const activeProducts = products.filter((p) => p.active !== false);
+
+      // Mapa stock: productId -> { warehouseId: qty }
+      const stockMap = new Map();
+      for (const r of allStock) {
+        if (!stockMap.has(r.productId)) stockMap.set(r.productId, {});
+        const m = stockMap.get(r.productId);
+        m[r.warehouseId] = (m[r.warehouseId] || 0) + (Number(r.quantity) || 0);
+      }
+
       const close = showModal({
         title: "Nueva transferencia entre almacenes",
+        size: "lg",
         body: `
           <div style="display:flex;flex-direction:column;gap:0.75rem">
-            <div>
-              <label class="label label-xs">Producto *</label>
-              <select class="select" id="admtr-product">
-                <option value="">— Seleccionar producto —</option>
-                ${products.map((p) => `<option value="${p.id}">${esc(p.name)} · ${esc(p.brand || '')}</option>`).join('')}
-              </select>
-            </div>
             <div class="grid grid-cols-2 gap-2">
               <div>
                 <label class="label label-xs">Almacén origen *</label>
@@ -2732,10 +3034,21 @@ export function mountAdminView(container, navigateOrUser) {
                 </select>
               </div>
             </div>
-            <div>
-              <label class="label label-xs">Cantidad a transferir *</label>
-              <input class="input" type="number" min="1" id="admtr-quantity" value="1" />
+            <div style="display:none" id="admtr-validation-error"></div>
+
+            <!-- Productos con cantidades -->
+            <div id="admtr-products-block" style="display:none;flex-direction:column;gap:0.5rem">
+              <div style="position:relative">
+                <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)">${icon("search", 14)}</span>
+                <input class="input" id="admtr-search" placeholder="Buscar producto..." style="padding-left:2.25rem" />
+              </div>
+              <div class="text-xs text-muted">Escribe la cantidad a mover de cada producto (0 o vacío = no mover). Hay ${activeProducts.length} productos en los almacenes.</div>
+              <div id="admtr-product-list" style="display:flex;flex-direction:column;gap:0.375rem;max-height:18rem;overflow-y:auto;padding-right:0.25rem"></div>
+              <div class="flex justify-between items-center" style="background:var(--bg-soft);border-radius:var(--radius);padding:0.5rem 0.75rem">
+                <span class="text-xs text-muted" id="admtr-summary">Seleccionados: Ninguno</span>
+              </div>
             </div>
+
             <div>
               <label class="label label-xs">Nota (opcional)</label>
               <input class="input" id="admtr-note" placeholder="Ej: Reparto semanal, pedido de oficina central" />
@@ -2748,74 +3061,335 @@ export function mountAdminView(container, navigateOrUser) {
                 Al confirmarla, se descuenta del almacén origen y se suma al destino automáticamente.
               </div>
             </div>
-            <div style="display:none" id="admtr-validation-error"></div>
           </div>
         `,
-        footer: `<button class="btn btn-outline" id="admtr-cancel">Cancelar</button><button class="btn btn-primary" id="admtr-create">${icon("arrowLeftRight", 12)} Crear transferencia</button>`,
+        footer: `<button class="btn btn-outline" id="admtr-cancel">Cancelar</button><button class="btn btn-primary" id="admtr-create" disabled>${icon("arrowLeftRight", 12)} Crear transferencia</button>`,
       });
 
       document.querySelector("#admtr-cancel").addEventListener("click", close);
 
-      // Validar en tiempo real que origen != destino
       const fromSel = document.querySelector("#admtr-from");
       const toSel = document.querySelector("#admtr-to");
       const errEl = document.querySelector("#admtr-validation-error");
-      function validate() {
-        const from = fromSel.value;
-        const to = toSel.value;
-        if (from && to && from === to) {
-          errEl.style.display = 'block';
-          errEl.style.background = 'color-mix(in oklab, var(--danger) 10%, transparent)';
-          errEl.style.border = '1px solid color-mix(in oklab, var(--danger) 30%, transparent)';
-          errEl.style.color = 'var(--danger)';
-          errEl.style.padding = '0.5rem 0.75rem';
-          errEl.style.borderRadius = 'var(--radius)';
-          errEl.style.fontSize = '0.75rem';
-          errEl.innerHTML = `${icon("alertTriangle", 12)} El almacén origen y destino deben ser distintos.`;
-          return false;
-        }
-        errEl.style.display = 'none';
-        return true;
+      const productsBlock = document.querySelector("#admtr-products-block");
+      const productListEl = document.querySelector("#admtr-product-list");
+      const createBtn = document.querySelector("#admtr-create");
+      let search = "";
+
+      // Estado: cantidades elegidas por producto { productId: qty }
+      const quantities = {};
+
+      function showError(msg) {
+        if (!msg) { errEl.style.display = "none"; return; }
+        errEl.style.display = "block";
+        errEl.style.background = 'color-mix(in oklab, var(--danger) 10%, transparent)';
+        errEl.style.border = '1px solid color-mix(in oklab, var(--danger) 30%, transparent)';
+        errEl.style.color = 'var(--danger)';
+        errEl.style.padding = '0.5rem 0.75rem';
+        errEl.style.borderRadius = 'var(--radius)';
+        errEl.style.fontSize = '0.75rem';
+        errEl.innerHTML = `${icon("alertTriangle", 12)} ${esc(msg)}`;
       }
-      fromSel.addEventListener("change", validate);
-      toSel.addEventListener("change", validate);
 
-      document.querySelector("#admtr-create").addEventListener("click", async () => {
-        if (!validate()) return;
-        const productId = document.querySelector("#admtr-product").value;
-        const fromWarehouseId = document.querySelector("#admtr-from").value;
-        const toWarehouseId = document.querySelector("#admtr-to").value;
-        const quantity = parseInt(document.querySelector("#admtr-quantity").value);
-        const note = document.querySelector("#admtr-note").value.trim() || null;
+      function stockInOrigin(productId) {
+        const from = fromSel.value;
+        if (!from) return 0;
+        return (stockMap.get(productId) || {})[from] || 0;
+      }
 
-        if (!productId) { toast("Seleccioná un producto", "error"); return; }
-        if (!fromWarehouseId) { toast("Seleccioná un almacén origen", "error"); return; }
-        if (!toWarehouseId) { toast("Seleccioná un almacén destino", "error"); return; }
-        if (!quantity || quantity < 1) { toast("La cantidad debe ser mayor a 0", "error"); return; }
+      function updateSummary() {
+        const summary = document.querySelector("#admtr-summary");
+        if (!summary) return;
+        const entries = Object.entries(quantities).filter(([, q]) => q > 0);
+        if (entries.length === 0) {
+          summary.textContent = "Seleccionados: Ninguno";
+          createBtn.disabled = true;
+        } else {
+          const units = entries.reduce((s, [, q]) => s + q, 0);
+          summary.textContent = `Seleccionados: ${entries.length} producto(s) · ${units} unidad(es)`;
+          createBtn.disabled = false;
+        }
+      }
 
-        const product = products.find((p) => p.id === productId);
-        const user = getStore().getState().currentUser;
-        try {
-          await createStockTransfer({
-            fromWarehouseId,
-            toWarehouseId,
-            productId,
-            productName: product?.name,
-            quantity,
-            note,
-            requestedBy: user?.id,
-            requestedByName: user?.displayName,
+      function renderProductList() {
+        if (!productListEl) return;
+        const from = fromSel.value;
+        let list = activeProducts.map((p) => ({
+          p,
+          stock: (stockMap.get(p.id) || {})[from] || 0,
+        }));
+        if (search) {
+          const q = search.toLowerCase();
+          list = list.filter((r) =>
+            (r.p.name || "").toLowerCase().includes(q) ||
+            (r.p.brand || "").toLowerCase().includes(q) ||
+            (r.p.sku || "").toLowerCase().includes(q));
+        }
+        // Con stock primero
+        list.sort((a, b) => b.stock - a.stock || (a.p.name || "").localeCompare(b.p.name || ""));
+
+        productListEl.innerHTML = list.length === 0
+          ? `<div class="text-xs text-muted" style="padding:0.5rem">Sin productos que coincidan.</div>`
+          : list.map(({ p, stock }) => {
+              const q = quantities[p.id] || 0;
+              const out = stock <= 0;
+              return `
+                <div class="catalog-item ${out ? "opacity-60" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-elevated)">
+                  <div style="flex:1;min-width:0">
+                    <div class="text-sm font-medium truncate" title="${esc(p.name)}">${esc(p.name)}</div>
+                    <div class="text-xs ${out ? 'text-danger' : 'text-muted'}">
+                      ${out ? 'Sin stock en origen' : `Stock en origen: ${stock}`}
+                      ${p.sku ? ` · ${esc(p.sku)}` : ''}
+                    </div>
+                  </div>
+                  <input class="input" type="number" min="0" max="${stock}" step="1" data-admtr-qty="${esc(p.id)}" value="${q > 0 ? q : ''}" placeholder="0" ${out ? 'disabled' : ''} style="width:5.5rem;flex-shrink:0;text-align:center" />
+                </div>
+              `;
+            }).join("");
+
+        // Cablear inputs de cantidad
+        productListEl.querySelectorAll("[data-admtr-qty]").forEach((input) => {
+          input.addEventListener("input", () => {
+            const pid = input.dataset.admtrQty;
+            const max = parseInt(input.max) || 0;
+            let v = parseInt(input.value);
+            if (isNaN(v) || v < 0) v = 0;
+            if (v > max) {
+              v = max;
+              input.value = max;
+              toast(`Solo hay ${max} unidades en el almacén origen`, "warning", 2000);
+            }
+            if (v > 0) quantities[pid] = v;
+            else delete quantities[pid];
+            updateSummary();
           });
-          toast(`Transferencia creada. Pendiente de confirmación.`, "success", 4000);
+        });
+      }
+
+      function refreshProductsVisibility() {
+        const hasBoth = fromSel.value && toSel.value && fromSel.value !== toSel.value;
+        productsBlock.style.display = hasBoth ? "flex" : "none";
+        renderProductList();
+        updateSummary();
+      }
+
+      fromSel.addEventListener("change", () => {
+        if (fromSel.value && toSel.value && fromSel.value === toSel.value) {
+          showError("El almacén origen y destino deben ser distintos.");
+        } else {
+          showError(null);
+        }
+        // Al cambiar origen, limpiar cantidades (el stock cambió)
+        Object.keys(quantities).forEach((k) => delete quantities[k]);
+        refreshProductsVisibility();
+      });
+      toSel.addEventListener("change", () => {
+        if (fromSel.value && toSel.value && fromSel.value === toSel.value) {
+          showError("El almacén origen y destino deben ser distintos.");
+        } else {
+          showError(null);
+        }
+        refreshProductsVisibility();
+      });
+
+      const searchInput = document.querySelector("#admtr-search");
+      if (searchInput) {
+        searchInput.addEventListener("input", (e) => {
+          search = e.target.value;
+          renderProductList();
+        });
+      }
+
+      createBtn.addEventListener("click", async () => {
+        if (!validateSelection()) return;
+        const entries = Object.entries(quantities).filter(([, q]) => q > 0);
+        if (entries.length === 0) { toast("Escribe la cantidad de al menos un producto", "error"); return; }
+
+        const fromWarehouseId = fromSel.value;
+        const toWarehouseId = toSel.value;
+        const note = document.querySelector("#admtr-note").value.trim() || null;
+        const user = getStore().getState().currentUser;
+
+        createBtn.disabled = true;
+        createBtn.innerHTML = `<div class="spinner spinner-sm"></div> Creando...`;
+
+        let created = 0;
+        const errors = [];
+        for (const [productId, qty] of entries) {
+          const product = products.find((p) => p.id === productId);
+          try {
+            await createStockTransfer({
+              fromWarehouseId,
+              toWarehouseId,
+              productId,
+              productName: product?.name,
+              quantity: qty,
+              note,
+              requestedBy: user?.id,
+              requestedByName: user?.displayName,
+            });
+            created++;
+          } catch (err) {
+            console.error("createStockTransfer failed:", err);
+            errors.push(`${product?.name || "producto"}: ${err.message || "error"}`);
+          }
+        }
+
+        if (created > 0 && errors.length === 0) {
+          toast(`${created} transferencia(s) creada(s). Pendientes de confirmación.`, "success", 4000);
           close();
           if (onSaved) onSaved();
-        } catch (err) {
-          toast("Error al crear transferencia: " + (err.message || "desconocido"), "error");
+        } else if (created > 0) {
+          toast(`${created} creada(s), ${errors.length} con error. Revisá el panel Transferencias.`, "warning", 6000);
+          close();
+          if (onSaved) onSaved();
+        } else {
+          toast("Error al crear transferencia: " + (errors[0] || "desconocido"), "error", 6000);
+          createBtn.disabled = false;
+          createBtn.innerHTML = `${icon("arrowLeftRight", 12)} Crear transferencia`;
         }
       });
+
+      function validateSelection() {
+        const from = fromSel.value;
+        const to = toSel.value;
+        if (!from) { showError("Seleccioná el almacén origen."); return false; }
+        if (!to) { showError("Seleccioná el almacén destino."); return false; }
+        if (from === to) { showError("El almacén origen y destino deben ser distintos."); return false; }
+        showError(null);
+        return true;
+      }
     }).catch((err) => {
       console.error("showAdminTransferModal load failed:", err);
       toast("Error al cargar datos para la transferencia", "error");
+    });
+  }
+
+  // ===== STORAGE (imágenes de productos en GitHub) =====
+  async function mountStoragePanel(content, gen) {
+    content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+    const cfg = await getGitHubConfig();
+    const configured = await isGitHubConfigured();
+
+    content.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:1rem">
+        <div>
+          <h1 class="text-2xl font-bold flex items-center gap-2">${icon("cloud", 24)} Almacenamiento de imágenes</h1>
+          <p class="text-sm text-muted">Guarda las imágenes de productos en GitHub para no agotar el espacio de Supabase.</p>
+        </div>
+
+        <div class="grid md:grid-cols-2 gap-3">
+          <div class="stat-card">
+            <div class="stat-label">${icon("image", 14)} Destino actual de las imágenes</div>
+            <div class="stat-value" style="font-size:1.25rem">${configured ? "GitHub" : "Supabase Storage"}</div>
+            <div class="stat-sub">${configured
+              ? `github.com/${esc(cfg.owner)}/${esc(cfg.repo)} · carpeta ${esc(cfg.path || "raíz")}`
+              : "Configura GitHub abajo para liberar espacio en Supabase"}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">${icon("info", 14)} ¿Por qué?</div>
+            <div class="stat-value" style="font-size:1.25rem">Free tier Supabase = 1 GB</div>
+            <div class="stat-sub">las imágenes son lo que más pesa. En GitHub no cuentan contra ese límite y se sirven via raw.githubusercontent.com</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">Configuración de GitHub</h2></div>
+          <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="label label-xs">Usuario / Organización (owner) *</label>
+                <input class="input" id="gh-owner" value="${esc(cfg.owner || "")}" placeholder="mannollubricantes21-lang" />
+              </div>
+              <div>
+                <label class="label label-xs">Repositorio *</label>
+                <input class="input" id="gh-repo" value="${esc(cfg.repo || "")}" placeholder="Mannol" />
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-2">
+              <div>
+                <label class="label label-xs">Rama</label>
+                <input class="input" id="gh-branch" value="${esc(cfg.branch || "main")}" placeholder="main" />
+              </div>
+              <div>
+                <label class="label label-xs">Carpeta destino</label>
+                <input class="input" id="gh-path" value="${esc(cfg.path || "product-images")}" placeholder="product-images" />
+              </div>
+              <div>
+                <label class="label label-xs">CDN base (opcional)</label>
+                <input class="input" id="gh-cdn" value="${esc(cfg.cdnBase || "")}" placeholder="https://cdn.jsdelivr.net/gh/..." />
+              </div>
+            </div>
+            <div>
+              <label class="label label-xs">Token de acceso (fine-grained) *</label>
+              <input class="input" id="gh-token" type="password" value="${esc(cfg.token || "")}" placeholder="github_pat_..." autocomplete="off" />
+              <p class="text-xs text-muted" style="margin-top:0.375rem">Se guarda solo en este dispositivo (localStorage), nunca se sube al repo ni a Supabase.</p>
+            </div>
+
+            <div style="background: color-mix(in oklab, var(--info) 8%, var(--bg-elevated)); border: 1px solid color-mix(in oklab, var(--info) 25%, transparent); border-radius: var(--radius); padding: 0.75rem 1rem">
+              <p class="text-xs font-semibold" style="margin:0 0 0.375rem">Cómo crear el token (1 minuto):</p>
+              <ol class="text-xs text-muted" style="margin:0;padding-left:1.25rem;line-height:1.7">
+                <li>Entra a GitHub → <strong>Settings</strong> → <strong>Developer settings</strong> → <strong>Personal access tokens → Fine-grained tokens</strong></li>
+                <li><strong>Generate new token</strong> → nombre "MANNOL POS"</li>
+                <li><strong>Repository access</strong>: Only select repositories → elige tu repo</li>
+                <li><strong>Permissions</strong> → Repository permissions → <strong>Contents: Read and write</strong></li>
+                <li>Genera, copia el token (empieza con <code>github_pat_</code>) y pégalo arriba</li>
+              </ol>
+            </div>
+
+            <div class="flex gap-2 flex-wrap">
+              <button class="btn btn-primary" id="gh-save">${icon("save", 14)} Guardar configuración</button>
+              <button class="btn btn-outline" id="gh-test">${icon("check", 14)} Probar conexión</button>
+            </div>
+            <div id="gh-test-result" class="text-sm" style="display:none"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-content" style="display:flex;flex-direction:column;gap:0.5rem">
+            <h3 class="text-sm font-semibold" style="margin:0">Cómo funciona</h3>
+            <ul class="text-xs text-muted" style="margin:0;padding-left:1.25rem;line-height:1.8">
+              <li>Cuando subes una imagen a un producto, se convierte a WebP (más liviana) y se commitea a la carpeta del repo con un nombre único.</li>
+              <li>El producto guarda la URL pública de la imagen (raw.githubusercontent.com), que funciona igual que antes en toda la app.</li>
+              <li>Si GitHub no responde o falla el token, la imagen se sube a Supabase como respaldo — nunca se pierde.</li>
+              <li>Al reemplazar la imagen de un producto, la anterior se intenta borrar del repo automáticamente.</li>
+              <li>Recomendación: usa el mismo repo de la app (así todo vive junto) o crea uno aparte solo para imágenes.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    `;
+
+    content.querySelector("#gh-save").addEventListener("click", async () => {
+      const owner = content.querySelector("#gh-owner").value.trim();
+      const repo = content.querySelector("#gh-repo").value.trim();
+      const branch = content.querySelector("#gh-branch").value.trim() || "main";
+      const path = content.querySelector("#gh-path").value.trim() || "product-images";
+      const cdnBase = content.querySelector("#gh-cdn").value.trim();
+      const token = content.querySelector("#gh-token").value.trim();
+      if (!owner || !repo) { toast("Owner y repositorio son obligatorios", "error"); return; }
+      await saveGitHubConfig({ owner, repo, branch, path, cdnBase, token });
+      toast("Configuración guardada", "success");
+      mountStoragePanel(content, gen);
+    });
+
+    content.querySelector("#gh-test").addEventListener("click", async () => {
+      // Probar con lo que hay en el formulario (sin necesidad de guardar antes)
+      const resultEl = content.querySelector("#gh-test-result");
+      resultEl.style.display = "block";
+      resultEl.innerHTML = `<div class="spinner spinner-sm" style="display:inline-block"></div> Probando conexión...`;
+      await saveGitHubConfig({
+        owner: content.querySelector("#gh-owner").value.trim(),
+        repo: content.querySelector("#gh-repo").value.trim(),
+        branch: content.querySelector("#gh-branch").value.trim() || "main",
+        path: content.querySelector("#gh-path").value.trim() || "product-images",
+        cdnBase: content.querySelector("#gh-cdn").value.trim(),
+        token: content.querySelector("#gh-token").value.trim(),
+      });
+      const res = await testGitHubConnection();
+      resultEl.innerHTML = res.ok
+        ? `<span style="color:${res.canPush ? 'var(--accent)' : 'var(--warning)'}">✅ ${esc(res.message)}</span>`
+        : `<span style="color:var(--danger)">❌ ${esc(res.message)}</span>`;
     });
   }
 

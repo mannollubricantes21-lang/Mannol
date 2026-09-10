@@ -214,20 +214,23 @@ export function mountCatalogView(container, navigate) {
             <div><label class="label label-xs">SKU *</label><input class="input" id="p-sku" value="${esc(p.sku || "")}" /></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
+            <div><label class="label label-xs">Marca *</label><input class="input" id="p-brand" value="${esc(p.brand || "MANNOL")}" /></div>
             <div><label class="label label-xs">Categoría *</label>
               <select class="select" id="p-category">${categories.map((c) => `<option value="${esc(c.id)}" ${p.categoryId === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>
             </div>
-            <div><label class="label label-xs">Subcategoría</label>
-              <select class="select" id="p-subcategory"><option value="">(opcional)</option>${subcategories.filter((s) => s.categoryId === p.categoryId).map((s) => `<option value="${esc(s.id)}" ${p.subcategoryId === s.id ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>
-            </div>
           </div>
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Precio USD *</label><input class="input" type="number" step="0.01" id="p-price" value="${p.salePrice || p.priceUSD || ""}" /></div>
+            <div><label class="label label-xs">Subcategoría</label>
+              <select class="select" id="p-subcategory"><option value="">(opcional)</option>${subcategories.filter((s) => s.categoryId === (p.categoryId || (categories[0] || {}).id)).map((s) => `<option value="${esc(s.id)}" ${p.subcategoryId === s.id ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>
+            </div>
             <div><label class="label label-xs">Estado</label>
               <select class="select" id="p-active"><option value="true" ${p.active !== false ? "selected" : ""}>Activo</option><option value="false" ${p.active === false ? "selected" : ""}>Inactivo</option></select>
             </div>
           </div>
-          <div><label class="label label-xs">Descripción</label><input class="input" id="p-description" value="${esc(p.description || "")}" /></div>
+          <div class="grid grid-cols-2 gap-2">
+            <div><label class="label label-xs">Precio USD *</label><input class="input" type="number" step="0.01" id="p-price" value="${p.salePrice || p.priceUSD || ""}" /></div>
+            <div><label class="label label-xs">Descripción</label><input class="input" id="p-description" value="${esc(p.description || "")}" /></div>
+          </div>
           <div>
             <label class="label label-xs">Imagen del producto</label>
             <div style="display:flex;gap:0.5rem;align-items:center">
@@ -245,7 +248,7 @@ export function mountCatalogView(container, navigate) {
       `,
       footer: `
         <button class="btn btn-outline" id="p-cancel">Cancelar</button>
-        <button class="btn btn-primary" id="p-save">Guardar</button>
+        <button class="btn btn-primary" id="p-save">${icon("save", 14)} Guardar</button>
       `,
     });
     document.querySelector("#p-cancel").addEventListener("click", close);
@@ -288,21 +291,35 @@ export function mountCatalogView(container, navigate) {
       const name = document.querySelector("#p-name").value.trim();
       const sku = document.querySelector("#p-sku").value.trim();
       const categoryId = document.querySelector("#p-category").value;
+      const brand = document.querySelector("#p-brand").value.trim() || "MANNOL";
       if (!name || !sku || !categoryId) {
         toast("Nombre, SKU y categoría son obligatorios", "error");
         return;
       }
-      await saveProduct({
-        ...(p.id ? { id: p.id } : {}),
-        name, sku, categoryId,
-        subcategoryId: document.querySelector("#p-subcategory").value || null,
-        description: document.querySelector("#p-description").value,
-        salePrice: parseFloat(document.querySelector("#p-price").value) || 0,
-        imageUrl: document.querySelector("#p-image").value || null,
-        active: document.querySelector("#p-active").value === "true",
-      });
-      toast("Producto guardado", "success");
-      close();
+      const saveBtn = document.querySelector("#p-save");
+      const cancelBtn = document.querySelector("#p-cancel");
+      saveBtn.disabled = true;
+      cancelBtn.disabled = true;
+      saveBtn.innerHTML = `<div class="spinner spinner-sm"></div> Guardando...`;
+      try {
+        await saveProduct({
+          ...(p.id ? { id: p.id } : {}),
+          name, sku, brand, categoryId,
+          subcategoryId: document.querySelector("#p-subcategory").value || null,
+          description: document.querySelector("#p-description").value,
+          salePrice: parseFloat(document.querySelector("#p-price").value) || 0,
+          imageUrl: document.querySelector("#p-image").value || null,
+          active: document.querySelector("#p-active").value === "true",
+        });
+        toast("Producto guardado", "success");
+        close();
+      } catch (err) {
+        console.error("Error al guardar producto:", err);
+        toast("No se pudo guardar: " + (err.message || "error desconocido"), "error", 6000);
+        saveBtn.disabled = false;
+        cancelBtn.disabled = false;
+        saveBtn.innerHTML = `${icon("save", 14)} Guardar`;
+      }
     });
   }
 

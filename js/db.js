@@ -888,8 +888,35 @@ export function subscribeProducts(cb) {
   return () => unsub();
 }
 
+// Columnas reales de la tabla `products` (schema.sql). Cualquier campo extra
+// que envíe la UI se descarta aquí para evitar el error PGRST204
+// ("Could not find the 'X' column of 'products' in the schema cache"),
+// que antes dejaba el guardado colgado sin guardar ni avisar.
+const PRODUCT_COLUMNS = new Set([
+  "id", "name", "brand", "sku", "viscosity", "volume_liters",
+  "category_id", "category_name", "subcategory_id", "description",
+  "cost_price", "sale_price", "min_stock",
+  "gestor_commission", "gestor_commission_currency",
+  "vendor_commission", "vendor_commission_currency",
+  "image_url", "active", "units_per_box", "wholesale_tiers", "created_at",
+]);
+
+function sanitizeProductRow(r) {
+  const out = {};
+  for (const [k, v] of Object.entries(r)) {
+    if (PRODUCT_COLUMNS.has(k)) out[k] = v;
+  }
+  // `brand` es NOT NULL en la BD — el catálogo antiguo no lo pedía
+  if (!out.brand || String(out.brand).trim() === "") out.brand = "MANNOL";
+  if (!out.name || String(out.name).trim() === "") {
+    throw new Error("El nombre del producto es obligatorio");
+  }
+  return out;
+}
+
 /**
  * Save a product. Replaces old image in storage if URL changes.
+ * Lanza el error real (no lo traga) para que la UI pueda mostrarlo.
  * @param {Partial<Product>} p
  * @returns {Promise<string>} product id
  */
@@ -909,7 +936,7 @@ export async function saveProduct(p) {
       }
     }
 
-    const r = toRow({ ...p, createdAt: p.createdAt || Date.now() });
+    const r = sanitizeProductRow(toRow({ ...p, createdAt: p.createdAt || Date.now() }));
     if (p.id) {
       const { error } = await s.from("products").update(r).eq("id", p.id);
       if (error) throw error;
@@ -920,7 +947,9 @@ export async function saveProduct(p) {
     return data.id;
   } catch (err) {
     console.error("saveProduct failed:", err);
-    return "demo-id";
+    // Propagar el error real (RLS, columna inválida, red, etc.) para que
+    // el usuario lo vea en pantalla en vez de un guardado infinito.
+    throw new Error(err.message || "No se pudo guardar el producto");
   }
 }
 
@@ -958,6 +987,19 @@ export async function deleteProduct(id) {
  */
 async function deleteStorageImageByUrl(s, imageUrl) {
   if (!imageUrl || typeof imageUrl !== "string") return;
+
+  // Imágenes en GitHub (raw.githubusercontent / jsDelivr) — best-effort
+  if (imageUrl.includes("githubusercontent.com") || imageUrl.includes("cdn.jsdelivr.net/gh/")) {
+    try {
+      const { deleteImageFromGitHub } = await import("./github-storage.js");
+      const ok = await deleteImageFromGitHub(imageUrl);
+      if (ok) console.info("[deleteStorageImage] Removed from GitHub:", imageUrl);
+    } catch (err) {
+      console.warn("[deleteStorageImage] GitHub delete failed:", err?.message || err);
+    }
+    return;
+  }
+
   if (!imageUrl.includes("/storage/v1/object/")) return; // URL externa, ignorar
   if (!imageUrl.includes("/products/")) return; // no es del bucket products, ignorar
 
