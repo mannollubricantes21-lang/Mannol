@@ -12,7 +12,7 @@ import {
   listManagers, saveManager, deleteManager,
   listCards, saveCard, deleteCard,
   listWarehouseCommissions,
-  listStock, listSales,
+  listStock, listSales, adjustStock,
   getRateConfig, saveRateConfig, syncRatesFromElToque,
   listStockMovements,
   getSettings, saveSettings,
@@ -1295,6 +1295,7 @@ export function mountAdminView(container, navigateOrUser) {
 
   // ===== USERS =====
   function mountUsersPanel(content, gen) {
+    gen = gen ?? tabGeneration;
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
     listUsers().then((users) => {
       if (gen !== tabGeneration) return;
@@ -1326,11 +1327,11 @@ export function mountAdminView(container, navigateOrUser) {
           </div>
         </div>
       `;
-      content.querySelector("#new-user").addEventListener("click", () => showUserDialog(null, () => mountUsersPanel(content)));
+      content.querySelector("#new-user").addEventListener("click", () => showUserDialog(null, () => mountUsersPanel(content, tabGeneration)));
       content.querySelectorAll("[data-edit-user]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const u = users.find((x) => x.id === btn.dataset.editUser);
-          if (u) showUserDialog(u, () => mountUsersPanel(content));
+          if (u) showUserDialog(u, () => mountUsersPanel(content, tabGeneration));
         });
       });
       content.querySelectorAll("[data-delete-user]").forEach((btn) => {
@@ -1408,6 +1409,7 @@ export function mountAdminView(container, navigateOrUser) {
 
   // ===== PRODUCTS =====
   function mountProductsPanel(content, gen) {
+    gen = gen ?? tabGeneration;
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
     Promise.all([listProducts(), listCategories()]).then(([products, categories]) => {
       if (gen !== tabGeneration) return;
@@ -1433,6 +1435,7 @@ export function mountAdminView(container, navigateOrUser) {
                     </td>
                     <td class="text-center">${p.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
                     <td class="text-right">
+                      <button class="btn btn-ghost btn-sm" data-stock-product="${esc(p.id)}" title="Añadir / ajustar stock por almacén">${icon("boxes", 12)}</button>
                       <button class="btn btn-ghost btn-sm" data-edit-product="${esc(p.id)}">Editar</button>
                       <button class="btn btn-ghost btn-sm text-danger" data-delete-product="${esc(p.id)}" title="Eliminar producto y su imagen">${icon("trash", 12)}</button>
                     </td>
@@ -1443,11 +1446,23 @@ export function mountAdminView(container, navigateOrUser) {
           </div>
         </div>
       `;
-      content.querySelector("#new-product").addEventListener("click", () => showProductDialog(null, categories, () => mountProductsPanel(content)));
+      content.querySelector("#new-product").addEventListener("click", () => showProductDialog(null, categories, () => mountProductsPanel(content, tabGeneration)));
       content.querySelectorAll("[data-edit-product]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const p = products.find((x) => x.id === btn.dataset.editProduct);
-          if (p) showProductDialog(p, categories, () => mountProductsPanel(content));
+          if (p) showProductDialog(p, categories, () => mountProductsPanel(content, tabGeneration));
+        });
+      });
+      content.querySelectorAll("[data-stock-product]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          listWarehouses().then((whs) => {
+            showStockEntryDialog({
+              products,
+              warehouses: whs,
+              presetProductId: btn.dataset.stockProduct,
+              onSaved: () => mountProductsPanel(content, tabGeneration),
+            });
+          });
         });
       });
       content.querySelectorAll("[data-delete-product]").forEach((btn) => {
@@ -1671,6 +1686,7 @@ export function mountAdminView(container, navigateOrUser) {
 
   // ===== CATEGORIES =====
   function mountCategoriesPanel(content, gen) {
+    gen = gen ?? tabGeneration;
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
     listCategories().then((categories) => {
       if (gen !== tabGeneration) return;
@@ -1714,11 +1730,11 @@ export function mountAdminView(container, navigateOrUser) {
           </div>
         </div>
       `;
-      content.querySelector("#new-cat").addEventListener("click", () => showCategoryDialog(null, () => mountCategoriesPanel(content)));
+      content.querySelector("#new-cat").addEventListener("click", () => showCategoryDialog(null, () => mountCategoriesPanel(content, tabGeneration)));
       content.querySelectorAll("[data-edit-cat]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const c = categories.find((x) => x.id === btn.dataset.editCat);
-          if (c) showCategoryDialog(c, () => mountCategoriesPanel(content));
+          if (c) showCategoryDialog(c, () => mountCategoriesPanel(content, tabGeneration));
         });
       });
       content.querySelectorAll("[data-delete-cat]").forEach((btn) => {
@@ -1734,7 +1750,7 @@ export function mountAdminView(container, navigateOrUser) {
         btn.addEventListener("click", async () => {
           await deleteCategory(btn.dataset.deleteSub);
           toast("Subcategoría eliminada", "success");
-          mountCategoriesPanel(content);
+          mountCategoriesPanel(content, tabGeneration);
         });
       });
     });
@@ -1783,6 +1799,7 @@ export function mountAdminView(container, navigateOrUser) {
 
   // ===== WAREHOUSES =====
   function mountWarehousesPanel(content, gen) {
+    gen = gen ?? tabGeneration;
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
     listWarehouses().then((warehouses) => {
       if (gen !== tabGeneration) return;
@@ -1833,11 +1850,11 @@ export function mountAdminView(container, navigateOrUser) {
         </div>
       `;
         // Wire buttons
-        content.querySelector("#new-wh").addEventListener("click", () => showWarehouseDialog(null, () => mountWarehousesPanel(content)));
+        content.querySelector("#new-wh").addEventListener("click", () => showWarehouseDialog(null, () => mountWarehousesPanel(content, tabGeneration)));
         content.querySelectorAll("[data-edit-wh]").forEach((btn) => {
           btn.addEventListener("click", () => {
             const w = warehouses.find((x) => x.id === btn.dataset.editWh);
-            if (w) showWarehouseDialog(w, () => mountWarehousesPanel(content));
+            if (w) showWarehouseDialog(w, () => mountWarehousesPanel(content, tabGeneration));
           });
         });
         content.querySelectorAll("[data-reveal-pin]").forEach((btn) => {
@@ -1851,7 +1868,7 @@ export function mountAdminView(container, navigateOrUser) {
         content.querySelectorAll("[data-change-pin]").forEach((btn) => {
           btn.addEventListener("click", () => {
             const w = warehouses.find((x) => x.id === btn.dataset.changePin);
-            if (w) showChangePinDialog(w, () => mountWarehousesPanel(content));
+            if (w) showChangePinDialog(w, () => mountWarehousesPanel(content, tabGeneration));
           });
         });
       }
@@ -2083,6 +2100,7 @@ export function mountAdminView(container, navigateOrUser) {
 
   // ===== MANAGERS =====
   function mountManagersPanel(content, gen) {
+    gen = gen ?? tabGeneration;
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
     listManagers().then((managers) => {
       if (gen !== tabGeneration) return;
@@ -2120,11 +2138,11 @@ export function mountAdminView(container, navigateOrUser) {
           </div>
         </div>
       `;
-      content.querySelector("#new-mg").addEventListener("click", () => showManagerDialog(null, () => mountManagersPanel(content)));
+      content.querySelector("#new-mg").addEventListener("click", () => showManagerDialog(null, () => mountManagersPanel(content, tabGeneration)));
       content.querySelectorAll("[data-edit-mg]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const m = managers.find((x) => x.id === btn.dataset.editMg);
-          if (m) showManagerDialog(m, () => mountManagersPanel(content));
+          if (m) showManagerDialog(m, () => mountManagersPanel(content, tabGeneration));
         });
       });
     });
@@ -2451,6 +2469,116 @@ export function mountAdminView(container, navigateOrUser) {
     });
   }
 
+  // ===== ENTRADA / AJUSTE DE STOCK (diálogo compartido) =====
+  // Permite sumar (o restar con negativo) stock de un producto en un almacén.
+  // Usado desde: panel Stock general y panel Productos.
+  function showStockEntryDialog({ products, warehouses, presetProductId = "", presetWarehouseId = "", onSaved }) {
+    const activeProducts = (products || []).filter((p) => p.active !== false);
+    const activeWhs = (warehouses || []).filter((w) => w.active !== false);
+    if (activeProducts.length === 0 || activeWhs.length === 0) {
+      toast("Necesitas al menos un producto y un almacén activos", "warning");
+      return;
+    }
+
+    const close = showModal({
+      title: "Entrada / ajuste de stock",
+      body: `
+        <div style="display:flex;flex-direction:column;gap:0.75rem">
+          <div>
+            <label class="label label-xs">Producto *</label>
+            <select class="select" id="se-product">
+              ${activeProducts.map((p) => `<option value="${esc(p.id)}" ${p.id === presetProductId ? "selected" : ""}>${esc(p.name)}${p.sku ? ` (${esc(p.sku)})` : ""}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label class="label label-xs">Almacén (local) *</label>
+            <select class="select" id="se-warehouse">
+              ${activeWhs.map((w) => `<option value="${esc(w.id)}" ${w.id === presetWarehouseId ? "selected" : ""}>${esc(w.name)} (${esc(w.code)})</option>`).join("")}
+            </select>
+          </div>
+          <div class="text-sm" style="background:var(--bg-soft);padding:0.5rem 0.75rem;border-radius:var(--radius)" id="se-current">Stock actual: —</div>
+          <div>
+            <label class="label label-xs">Cantidad a añadir * <span class="text-muted">(usa negativo para restar)</span></label>
+            <input class="input" id="se-qty" type="number" step="any" placeholder="0" style="font-variant-numeric:tabular-nums" />
+            <div style="display:flex;gap:0.375rem;flex-wrap:wrap;margin-top:0.5rem">
+              ${["-1", "+1", "+6", "+12", "+24"].map((v) => `<button type="button" class="btn btn-outline btn-xs" data-se-chip="${v}">${v}</button>`).join("")}
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="label label-xs">Motivo</label>
+              <select class="select" id="se-reason">
+                ${STOCK_REASONS.map((r) => `<option value="${r}" ${r === "AJUSTE_MANUAL" ? "selected" : ""}>${STOCK_REASON_LABELS[r] || r}</option>`).join("")}
+              </select>
+            </div>
+            <div>
+              <label class="label label-xs">Nota (opcional)</label>
+              <input class="input" id="se-note" placeholder="Factura #, proveedor..." />
+            </div>
+          </div>
+        </div>
+      `,
+      footer: `<button class="btn btn-outline" id="se-cancel">Cancelar</button><button class="btn btn-primary" id="se-save">${icon("check", 14)} Aplicar</button>`,
+    });
+
+    let currentQty = 0;
+    async function refreshCurrent() {
+      const pid = document.querySelector("#se-product")?.value;
+      const wid = document.querySelector("#se-warehouse")?.value;
+      const el = document.querySelector("#se-current");
+      if (!el) return;
+      if (!pid || !wid) { el.textContent = "Stock actual: —"; return; }
+      currentQty = 0;
+      el.textContent = "Stock actual: cargando…";
+      try {
+        const stockRows = await listStock(wid);
+        const r = stockRows.find((s) => s.productId === pid);
+        currentQty = r ? Number(r.quantity) || 0 : 0;
+        if (el) el.innerHTML = `Stock actual: <strong style="font-variant-numeric:tabular-nums">${currentQty}</strong> uds`;
+      } catch {
+        if (el) el.textContent = "Stock actual: —";
+      }
+    }
+    setTimeout(refreshCurrent, 0);
+    document.querySelector("#se-product").addEventListener("change", refreshCurrent);
+    document.querySelector("#se-warehouse").addEventListener("change", refreshCurrent);
+
+    document.querySelectorAll("[data-se-chip]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const input = document.querySelector("#se-qty");
+        const v = (parseFloat(input.value) || 0) + parseFloat(chip.dataset.seChip);
+        input.value = String(Math.round(v * 100) / 100);
+      });
+    });
+
+    document.querySelector("#se-cancel").addEventListener("click", close);
+    document.querySelector("#se-save").addEventListener("click", async () => {
+      const productId = document.querySelector("#se-product").value;
+      const warehouseId = document.querySelector("#se-warehouse").value;
+      const qty = parseFloat(document.querySelector("#se-qty").value);
+      const reason = document.querySelector("#se-reason").value;
+      const note = document.querySelector("#se-note").value.trim() || null;
+      if (!productId || !warehouseId) { toast("Elige producto y almacén", "warning"); return; }
+      if (!qty || qty === 0) { toast("La cantidad no puede ser 0", "warning"); return; }
+
+      const saveBtn = document.querySelector("#se-save");
+      saveBtn.disabled = true;
+      saveBtn.innerHTML = `<div class="spinner spinner-sm"></div> Aplicando…`;
+      try {
+        const user = getStore().getState().currentUser;
+        await adjustStock(warehouseId, productId, qty, reason, note, user?.id, user?.displayName);
+        toast(`Stock actualizado: ${currentQty} → ${currentQty + qty} uds`, "success");
+        close();
+        onSaved?.();
+      } catch (err) {
+        console.error("stock entry failed:", err);
+        toast("No se pudo ajustar el stock: " + (err.message || "error desconocido"), "error", 6000);
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = `${icon("check", 14)} Aplicar`;
+      }
+    });
+  }
+
   // ===== STOCK GENERAL (vista global + separada por almacén) =====
   function mountStockPanel(content, gen) {
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
@@ -2643,8 +2771,9 @@ export function mountAdminView(container, navigateOrUser) {
 
           <!-- Matriz producto × almacén -->
           <div class="card">
-            <div class="card-header flex justify-between">
+            <div class="card-header flex justify-between" style="gap:0.5rem">
               <h2 class="card-title">Detalle por producto (${filtered.length})</h2>
+              <button class="btn btn-primary btn-sm" id="stk-new-entry" style="white-space:nowrap">${icon("plus", 14)} Entrada de stock</button>
             </div>
             <div class="overflow-x-auto">
               ${filtered.length === 0 ? `
@@ -2661,6 +2790,7 @@ export function mountAdminView(container, navigateOrUser) {
                     <th class="text-center">Total</th>
                     <th class="text-center">Mín.</th>
                     <th class="text-center">Estado</th>
+                    <th class="text-right">Acciones</th>
                   </tr></thead>
                   <tbody>
                     ${filtered.map((r) => `
@@ -2677,6 +2807,9 @@ export function mountAdminView(container, navigateOrUser) {
                         <td class="text-center font-bold">${r.effTotal}</td>
                         <td class="text-center text-xs text-muted">${r.minStock || '—'}</td>
                         <td class="text-center">${statusBadge(r.status)}</td>
+                        <td class="text-right">
+                          <button class="btn btn-outline btn-sm" data-stk-adjust="${esc(r.p.id)}" title="Añadir / ajustar stock de este producto">${icon("boxes", 12)} Ajustar</button>
+                        </td>
                       </tr>
                     `).join('')}
                   </tbody>
@@ -2706,6 +2839,27 @@ export function mountAdminView(container, navigateOrUser) {
       content.querySelector("#stk-only-out").addEventListener("change", (e) => {
         onlyOutOfStock = e.target.checked;
         render();
+      });
+
+      // Añadir / ajustar stock
+      content.querySelector("#stk-new-entry").addEventListener("click", () => {
+        showStockEntryDialog({
+          products: allProducts,
+          warehouses: activeWhs,
+          presetWarehouseId: whFilter || "",
+          onSaved: () => load(),
+        });
+      });
+      content.querySelectorAll("[data-stk-adjust]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          showStockEntryDialog({
+            products: allProducts,
+            warehouses: activeWhs,
+            presetProductId: btn.dataset.stkAdjust,
+            presetWarehouseId: whFilter || "",
+            onSaved: () => load(),
+          });
+        });
       });
 
       // Export CSV
@@ -3515,6 +3669,7 @@ export function mountAdminView(container, navigateOrUser) {
 
   // ===== CARDS =====
   function mountCardsPanel(content, gen) {
+    gen = gen ?? tabGeneration;
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
     Promise.all([
       listCardsWithBalances(),
@@ -3628,12 +3783,12 @@ export function mountAdminView(container, navigateOrUser) {
           });
         });
 
-        content.querySelector("#new-card").addEventListener("click", () => showCardDialog(null, () => mountCardsPanel(content)));
+        content.querySelector("#new-card").addEventListener("click", () => showCardDialog(null, () => mountCardsPanel(content, tabGeneration)));
         content.querySelectorAll("[data-edit-card]").forEach((btn) => {
           btn.addEventListener("click", (e) => {
             e.stopPropagation();
             const c = cards.find((x) => x.id === btn.dataset.editCard);
-            if (c) showCardDialog(c, () => mountCardsPanel(content));
+            if (c) showCardDialog(c, () => mountCardsPanel(content, tabGeneration));
           });
         });
         content.querySelectorAll("[data-delete-card]").forEach((btn) => {
@@ -3650,14 +3805,14 @@ export function mountAdminView(container, navigateOrUser) {
           btn.addEventListener("click", (e) => {
             e.stopPropagation();
             const c = cards.find((x) => x.id === btn.dataset.depositCard);
-            if (c) showCardMovementDialog(c, "DEPOSIT", () => mountCardsPanel(content));
+            if (c) showCardMovementDialog(c, "DEPOSIT", () => mountCardsPanel(content, tabGeneration));
           });
         });
         content.querySelectorAll("[data-withdraw-card]").forEach((btn) => {
           btn.addEventListener("click", (e) => {
             e.stopPropagation();
             const c = cards.find((x) => x.id === btn.dataset.withdrawCard);
-            if (c) showCardMovementDialog(c, "WITHDRAW", () => mountCardsPanel(content));
+            if (c) showCardMovementDialog(c, "WITHDRAW", () => mountCardsPanel(content, tabGeneration));
           });
         });
       }

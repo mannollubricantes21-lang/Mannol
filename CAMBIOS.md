@@ -162,3 +162,9 @@ Bloque de fixes al final de `css/styles.css`:
 - FIX: el pie del menú decía "MANNOL Supabase v4" (etiqueta antigua hardcodeada que confundía al verificar la versión). Ahora usa js/version.js (única fuente de verdad): "MANNOL POS v5.1.1 · build 2026-09-11".
 - sw.js: cache v10 (fuerza actualización de clientes al publicar).
 - Añadido INSTALACION_SUPABASE.md: guía paso a paso para saber qué SQL ejecutar en Supabase según el estado de tu BD.
+
+## v5.1.2 (2026-09-11)
+- FIX CRÍTICO: spinner infinito en el panel de Productos del admin al añadir/editar un producto (el producto SÍ se guardaba, pero la lista no se volvía a renderizar). Causa: se llamaba a mountProductsPanel(content) sin el parámetro `gen`, por lo que el guard `gen !== tabGeneration` abortaba el render. Corregido en 16 llamadas (Usuarios, Productos, Categorías, Almacenes, Gestores, Tarjetas) + guard defensivo `gen = gen ?? tabGeneration` en cada panel.
+- NUEVO: Entrada / ajuste de stock por almacén. Nuevo diálogo desde Admin → Stock (botón "Entrada de stock" y botón "Ajustar" por producto) y desde Admin → Productos (icono de cajas por producto). Elige producto + almacén, muestra el stock actual, chips rápidos (+1/+6/+12/+24, -1), motivo y nota. Usa la RPC atómica adjust_stock y registra auditoría en stock_movements.
+- db.js: adjustStock ahora propaga el error real (antes lo tragaba en silencio).
+- sw.js: caché v11.

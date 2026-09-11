@@ -1164,6 +1164,8 @@ export async function adjustStock(warehouseId, productId, delta, reason = "AJUST
     if (error) throw error;
   } catch (err) {
     console.error("adjustStock failed:", err);
+    // Propagar para que la UI pueda mostrar el error real (RLS, red, etc.)
+    throw err instanceof Error ? err : new Error(String(err?.message || "No se pudo ajustar el stock"));
   }
 }
 
