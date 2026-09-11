@@ -157,3 +157,8 @@ Bloque de fixes al final de `css/styles.css`:
    *Contents: Read and write* → "Probar conexión".
 4. Cerrar y reabrir la app dos veces para que el Service Worker
    actualice la caché (o limpiar datos del navegador).
+
+## v5.1.1 (2026-09-11)
+- FIX: el pie del menú decía "MANNOL Supabase v4" (etiqueta antigua hardcodeada que confundía al verificar la versión). Ahora usa js/version.js (única fuente de verdad): "MANNOL POS v5.1.1 · build 2026-09-11".
+- sw.js: cache v10 (fuerza actualización de clientes al publicar).
+- Añadido INSTALACION_SUPABASE.md: guía paso a paso para saber qué SQL ejecutar en Supabase según el estado de tu BD.

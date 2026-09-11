@@ -4,6 +4,7 @@
 // =====================================================
 
 import { getStore } from "../store.js";
+import { APP_LABEL } from "../version.js";
 import { subscribeSales, listWarehouses, listManagers, listCards, listCategories } from "../db.js";
 import { logout } from "../auth.js";
 import { formatMoney, formatDate, formatDateShort, skeletonCard, skeletonStatCard } from "../currency.js";
@@ -214,7 +215,7 @@ export function mountDashboardView(container, navigate) {
         </div>
         <div class="drawer-footer">
           <button class="btn btn-ghost btn-block" id="logout-btn" aria-label="Cerrar sesión" style="justify-content:flex-start;color:var(--danger)">${icon("logout", 14)} Cerrar sesión</button>
-          <p class="text-xs text-muted text-center mt-2" style="margin-top:0.5rem">MANNOL Supabase v4 · Acceso por PIN de almacén</p>
+          <p class="text-xs text-muted text-center mt-2" style="margin-top:0.5rem">${esc(APP_LABEL)} · Acceso por PIN de almacén</p>
           <div style="margin-top:0.75rem;padding:0.5rem 0.75rem;background:var(--bg-soft);border-radius:var(--radius);font-size:0.625rem;color:var(--text-muted);display:flex;flex-direction:column;gap:0.25rem">
             <div style="font-weight:600;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.25rem">Atajos</div>
             <div style="display:flex;justify-content:space-between"><span>Buscar</span><span><kbd>Ctrl</kbd>+<kbd>K</kbd></span></div>
