@@ -60,7 +60,17 @@ function renderView(container, view, navigate) {
   const user = store.getState().currentUser;
 
   // Redirect logic
-  if (user && (view === "home" || view === "pin" || view === "login")) {
+  // v5.1.4: el admin YA NO es expulsado del index. El dueño también usa el
+  // acceso por PIN (interior de almacén) en este dispositivo, así que:
+  //  - admin + home  → home (hub: PIN + botón "Abrir panel admin")
+  //  - admin + pin   → pin (flujo normal del almacén)
+  //  - admin + login → dashboard (ya tiene sesión; el login no aplica)
+  //  - otros roles con sesión → dashboard (comportamiento original)
+  const isAdmin = user?.role === "admin";
+  if (user && !isAdmin && (view === "home" || view === "pin" || view === "login")) {
+    view = "dashboard";
+  }
+  if (isAdmin && view === "login") {
     view = "dashboard";
   }
   if (!user && view === "dashboard") {
@@ -122,22 +132,20 @@ function init() {
     renderView(container, view, navigate);
   };
 
-  // Si el usuario es admin, redirigir automáticamente al panel admin dedicado
-  // (admin.html) en lugar de mostrar la app de vendedores.
-  const currentUser = store.getState().currentUser;
-  if (currentUser && currentUser.role === "admin") {
-    // No redirigir si ya estamos en admin.html (evitar loop)
-    if (!window.location.pathname.endsWith("admin.html")) {
-      window.location.replace("./admin.html");
-      return;
-    }
-  }
+  // v5.1.4: se ELIMINA la redirección automática index → admin.html.
+  // Antes: con una sesión de admin guardada en el dispositivo, el index
+  // rebotaba SIEMPRE a admin.html y el dueño no podía entrar por PIN a sus
+  // almacenes (tampoco podía verificar el stock como empleado).
+  // Ahora el index es el hub de entrada (PIN + botón "Abrir panel admin")
+  // y admin.html sigue funcionando de forma independiente.
 
   // Initial view
   let initialView = getViewFromUrl();
   if (!initialView) {
     const user = store.getState().currentUser;
-    initialView = user ? "dashboard" : "home";
+    // v5.1.4: el admin aterriza en el home-hub (PIN + acceso al panel);
+    // el resto de roles con sesión, en su dashboard.
+    initialView = user && user.role !== "admin" ? "dashboard" : "home";
   }
 
   console.info("[App] rendering initial view:", initialView);
@@ -150,13 +158,15 @@ function init() {
     if (configured) {
       // Subscribe to auth changes only if Supabase is available
       subscribeAuth((user) => {
+        // v5.1.4: si en este dispositivo hay una sesión PIN activa, manda
+        // el perfil del almacén; la sesión de Supabase (admin) NO la
+        // sobrescribe al recargar la página.
+        if (store.getState().authMode === "pin") return;
         if (user) {
           store.setUser(user);
           store.setAuthMode("user");
         } else {
-          if (store.getState().authMode !== "pin") {
-            store.setUser(null);
-          }
+          store.setUser(null);
         }
       });
     } else {

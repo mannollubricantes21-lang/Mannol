@@ -89,6 +89,17 @@ export function renderHomeView(navigate) {
           <p class="home-hero-subtitle">Aceites y lubricantes · Control de ventas y stock</p>
         </section>
 
+        <!-- ===== Acceso rápido al panel admin (v5.1.4, solo admin) ===== -->
+        ${user && user.role === 'admin' ? `
+          <section class="premium-fade-in premium-fade-in-delay-1">
+            <a href="./admin.html" class="premium-cta-btn" style="display:flex;align-items:center;justify-content:center;gap:0.5rem;width:100%;text-decoration:none;font-weight:700">
+              ${icon("shield", 16)}
+              <span>Abrir panel admin</span>
+              ${icon("arrowRight", 14)}
+            </a>
+          </section>
+        ` : ''}
+
         <!-- ===== Setup banner (si Supabase no está configurado) ===== -->
         ${!supabaseConfigured ? `
           <section class="premium-setup-banner premium-fade-in premium-fade-in-delay-1">

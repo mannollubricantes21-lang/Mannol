@@ -175,6 +175,16 @@ Bloque de fixes al final de `css/styles.css`:
 - CSS v5.1.3: bloque anti-desborde extra en admin (badges, tablas, KPIs, toasts, grid).
 - sw.js: caché v12.
 
+## v5.1.4 (2026-09-12) — FIX: el index rebotaba al admin y no dejaba entrar por PIN
+- CAUSA: `app.js` redirigía automáticamente index → admin.html siempre que hubiera una sesión de admin guardada en el dispositivo (`localStorage`), y además `subscribeAuth` restauraba el admin en cada carga aunque el dispositivo estuviera en sesión PIN. El dueño no podía abrir la app de almacenes ni verificar el stock como empleado.
+- FIX: eliminada la redirección automática. El index vuelve a ser el hub de entrada:
+  - El admin aterriza en el home (tasas + almacenes + PIN) con un nuevo botón **"Abrir panel admin"** (solo visible con rol admin).
+  - El admin puede entrar por PIN al interior de sus almacenes como antes.
+  - La sesión PIN ya no es sobrescrita por la sesión de Supabase al recargar.
+  - El resto de roles (gestor/vendedor) mantienen el comportamiento original (dashboard al abrir).
+- `admin.html` sigue funcionando igual (acceso directo o desde el botón del home).
+- sw.js: caché v14. package.json 5.1.4.
+
 ## v5.1.3b (2026-09-12) — FIX DE BASE DE DATOS: stock invisible para accesos por PIN
 - CAUSA RAÍZ confirmada con la BD real: el acceso por PIN de almacén no crea sesión de Supabase (rol `anon`) y las políticas RLS de `stock` solo permitían lectura a `authenticated`. El interior del almacén veía SIEMPRE 0 filas (stock añadido invisible + "Otros almacenes" vacío/cargando).
 - NUEVO `supabase/migration-v5.1.3-pin-stock.sql`: política `stock_read_pin` (lectura anon de stock, solo lectura; escribir sigue exigiendo admin/gestor) + verificaciones automáticas + secciones opcionales (movimientos por PIN, asignar almacenes al usuario yandriel).
