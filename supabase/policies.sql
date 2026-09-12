@@ -347,6 +347,16 @@ drop policy if exists "sales_delete_admin_gestor" on public.sales;
 create policy "sales_delete_admin_gestor" on public.sales
   for delete to authenticated using (public.is_admin_or_gestor());
 
+-- Accesos por PIN (rol anon): registrar ventas desde el local y leerlas.
+-- Sin estas políticas la venta queda "pendiente" y nunca se sube (v5.1.6).
+drop policy if exists "sales_insert_pin" on public.sales;
+create policy "sales_insert_pin" on public.sales
+  for insert to anon with check (true);
+
+drop policy if exists "sales_read_pin" on public.sales;
+create policy "sales_read_pin" on public.sales
+  for select to anon using (true);
+
 -- =====================================================
 -- 14. commission_payouts — lectura filtrada, escritura admin
 -- =====================================================

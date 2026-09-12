@@ -175,6 +175,25 @@ Bloque de fixes al final de `css/styles.css`:
 - CSS v5.1.3: bloque anti-desborde extra en admin (badges, tablas, KPIs, toasts, grid).
 - sw.js: caché v12.
 
+## v5.1.6 (2026-09-12) — FIX: las ventas ya no se quedan "pendientes" + viscosidad automática
+
+### 1) Ventas pendientes que nunca se subían (FIX CRÍTICO, requiere SQL)
+- SÍNTOMA: al registrar una venta desde un acceso por PIN, quedaba en la cola ("1 venta(s) pendiente(s)") para siempre y el admin nunca la veía.
+- CAUSA RAÍZ confirmada contra la BD real: el PIN no crea sesión de Supabase (rol `anon`) y las políticas RLS de `sales` solo permitían INSERT/SELECT a `authenticated`. Cada intento fallaba con `42501 new row violates row-level security policy for table "sales"`.
+- FIX (SQL): NUEVO `supabase/migration-v5.1.6-sales-pin.sql` con 2 políticas:
+  - `sales_insert_pin` — permite registrar ventas desde sesiones PIN.
+  - `sales_read_pin` — permite ver las ventas (dashboard del vendedor, historial) y evita duplicados en la resincronización.
+- Editar/cancelar sigue por la RPC `update_sale_status` (security definer), que ya funcionaba con PIN.
+- `policies.sql` incluye ambas políticas para instalaciones nuevas.
+- ⚠️ ** Hay que ejecutar el SQL en Supabase (SQL Editor) — la app sola no basta.**
+
+### 2) Productos: la viscosidad se rellena sola desde el nombre
+- El nombre ya trae la viscosidad ("MANNOL 5W-30 Longlife") — ya no hay que escribirla dos veces.
+- NUEVO `js/viscosity.js`: detecta 5W-30 / 10W40 / 15W/40 / SAE 30 / ISO VG 46 / ATF / DOT 4 dentro del nombre.
+- Admin → Nuevo/Editar producto: al escribir el nombre, el campo Viscosidad se rellena automáticamente (editable, nunca pisa un valor escrito a mano). El campo sigue siendo opcional.
+- tests/viscosity.test.js: 15 tests.
+- sw.js: caché v16. package.json 5.1.6.
+
 ## v5.1.5 (2026-09-12) — NUEVO: añadir stock a cada almacén por separado (Admin → Stock)
 - La sección "Stock por almacén (local)" ahora tiene entrada directa por local:
   - Botón **+** en la cabecera de cada tarjeta de almacén → abre el diálogo de entrada con ESE almacén ya preseleccionado.

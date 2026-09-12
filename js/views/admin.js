@@ -29,6 +29,7 @@ import { uploadImageAsWebP, pickImageFile } from "../image-upload.js";
 import { lineChart, barChart, COLORS } from "../charts.js";
 import { exportToCSV, exportMultipleCSVs } from "../csv-export.js";
 import { getGitHubConfig, saveGitHubConfig, testGitHubConnection, isGitHubConfigured } from "../github-storage.js";
+import { detectViscosityFromName } from "../viscosity.js";
 
 // Secciones agrupadas por categoría para mejor organización
 const NAV_SECTIONS = [
@@ -1493,7 +1494,7 @@ export function mountAdminView(container, navigateOrUser) {
           </div>
           <div class="grid grid-cols-2 gap-2">
             <div><label class="label label-xs">SKU</label><input class="input" id="p-sku" value="${esc(p.sku || '')}" /></div>
-            <div><label class="label label-xs">Viscosidad</label><input class="input" id="p-viscosity" value="${esc(p.viscosity || '')}" placeholder="5W-30" /></div>
+            <div><label class="label label-xs">Viscosidad</label><input class="input" id="p-viscosity" value="${esc(p.viscosity || '')}" placeholder="5W-30" /><p class="text-xs text-muted" style="margin:0.2rem 0 0">Se rellena sola desde el nombre (editable)</p></div>
           </div>
           <div><label class="label label-xs">Categoría</label>
             <select class="select" id="p-category">
@@ -1572,6 +1573,28 @@ export function mountAdminView(container, navigateOrUser) {
       footer: `<button class="btn btn-outline" id="p-cancel">Cancelar</button><button class="btn btn-primary" id="p-save">Guardar</button>`,
     });
     document.querySelector("#p-cancel").addEventListener("click", close);
+
+    // ===== Auto-detectar viscosidad desde el nombre =====
+    // El nombre del producto ya suele traer la viscosidad ("MANNOL 5W-30...").
+    // Se extrae automáticamente para no escribirla dos veces. El campo sigue
+    // siendo editable: solo se rellena si está vacío o si el último valor
+    // fue autocompletado (nunca pisa un valor escrito a mano).
+    const nameInput = document.querySelector("#p-name");
+    const viscInput = document.querySelector("#p-viscosity");
+    let lastAutoViscosity = null;
+    if (nameInput && viscInput) {
+      nameInput.addEventListener("input", () => {
+        const detected = detectViscosityFromName(nameInput.value);
+        if (!detected) return;
+        const current = viscInput.value.trim();
+        if (!current || current === lastAutoViscosity) {
+          if (current !== detected) {
+            viscInput.value = detected;
+          }
+          lastAutoViscosity = detected;
+        }
+      });
+    }
 
     // ===== Upload de imagen con conversión a WebP =====
     const uploadBtn = document.querySelector("#p-upload-btn");

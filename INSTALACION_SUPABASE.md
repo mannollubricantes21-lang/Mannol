@@ -64,7 +64,7 @@ asistente para guardar la configuración en cada dispositivo.
 
 ## Paso B — Tu BD ya existe (alguien ya ejecutó schema/policies)
 
-Necesitas DOS scripts (en este orden):
+Necesitas TRES scripts (en este orden):
 
 1. **`supabase/migration-v5.1-update.sql`** → SQL Editor → pegar todo → Run.
    - Al terminar debe aparecer: `MIGRACIÓN v5.1 COMPLETADA`.
@@ -72,6 +72,11 @@ Necesitas DOS scripts (en este orden):
    - Al terminar verás 3 resultados: la lista de políticas de `stock`
      (debe incluir `stock_read_pin`), el total de filas de stock y el
      resumen almacén/producto/cantidad.
+3. **`supabase/migration-v5.1.6-sales-pin.sql`** → SQL Editor → pegar todo → Run.
+   - Necesario para que las ventas registradas por PIN se suban
+     (si no, quedan "pendientes" para siempre). Al terminar verás las
+     políticas de `sales` (deben incluir `sales_insert_pin` y
+     `sales_read_pin`), el total de ventas y las últimas 5 ventas.
 
 Los demás archivos no se tocan (`schema.sql`, `policies.sql`, `seed.sql`
 ya están aplicados; `seed.sql` NO lo repitas para no duplicar datos demo).
@@ -108,6 +113,21 @@ order by w.name, p.name;
 > ese usuario no tiene almacenes asignados. Solo afecta a sesiones con
 > email + contraseña; para asignárselos ejecuta la sección opcional 3
 > del script `migration-v5.1.3-pin-stock.sql`.
+
+---
+
+## Problema: registro una venta y se queda "pendiente", nunca se sube
+
+**Causa:** exactamente la misma que el stock invisible — el acceso por
+PIN no crea sesión de Supabase (rol `anon`) y la tabla `sales` solo
+dejaría INSERTAR/LEER a usuarios autenticados. La app reintenta
+subir la venta cada 30 segundos y falla en silencio con
+`42501 new row violates row-level security policy for table "sales"`.
+
+**Solución:** ejecuta `supabase/migration-v5.1.6-sales-pin.sql`
+(Paso B, script 3). Da a las sesiones PIN permiso para registrar y
+leer ventas. Las ventas que estaban atascadas en la cola se suben
+solas en menos de 1 minuto tras ejecutar el SQL (la app reintenta sola).
 
 ---
 
