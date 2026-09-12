@@ -18,6 +18,7 @@ export function mountWarehouseInterior(container, navigate) {
   let search = "";
   let inventoryTab = "stock"; // "stock" | "others"  (sin "transfers" — solo admin transfiere)
   let otherWarehousesStock = []; // stock en otros almacenes
+  let othersState = "idle"; // "idle" | "loading" | "ready" | "error"
   let allWarehouses = []; // lista de almacenes
 
   if (!warehouse) {
@@ -39,8 +40,17 @@ export function mountWarehouseInterior(container, navigate) {
 
   // Cargar stock de otros almacenes (para el tab "Otros almacenes")
   async function loadOtherStock() {
-    const allStock = await listAllStockAcrossWarehouses();
-    otherWarehousesStock = allStock.filter((s) => s.warehouseId !== warehouse.id);
+    othersState = "loading";
+    render();
+    try {
+      const allStock = await listAllStockAcrossWarehouses();
+      otherWarehousesStock = allStock.filter((s) => s.warehouseId !== warehouse.id);
+      othersState = "ready";
+    } catch (err) {
+      console.error("loadOtherStock failed:", err);
+      otherWarehousesStock = [];
+      othersState = "error";
+    }
     render();
   }
 
@@ -227,12 +237,33 @@ export function mountWarehouseInterior(container, navigate) {
                   <input class="input" id="others-search" placeholder="Buscar producto en otros almacenes..." style="padding-left:2rem;font-size:0.8125rem;height:2.25rem;width:100%" />
                 </span>
               </div>
-              ${otherWarehousesStock.length === 0 ? `
-                <div class="empty-state text-xs">
-                  <div class="empty-state-icon">${icon("mapPin", 24)}</div>
-                  Cargando stock de otros almacenes...
-                </div>
-              ` : (() => {
+              ${otherWarehousesStock.length === 0 ? (() => {
+                if (othersState === "loading") {
+                  return `
+                    <div class="empty-state text-xs">
+                      <div class="spinner spinner-lg"></div>
+                      Cargando stock de otros almacenes...
+                    </div>
+                  `;
+                }
+                if (othersState === "error") {
+                  return `
+                    <div class="empty-state text-xs">
+                      <div class="empty-state-icon">${icon("alertTriangle", 24)}</div>
+                      No se pudo cargar el stock de otros almacenes.
+                      <button class="btn btn-outline btn-sm" data-others-retry style="margin:0.5rem auto 0">Reintentar</button>
+                    </div>
+                  `;
+                }
+                return `
+                  <div class="empty-state text-xs">
+                    <div class="empty-state-icon">${icon("mapPin", 24)}</div>
+                    <div class="font-medium" style="margin-bottom:0.25rem">Sin stock visible en otros almacenes</div>
+                    <div class="text-muted" style="font-size:0.6875rem;line-height:1.4">O no hay mercancía fuera de este local, o tu usuario no tiene acceso a esos almacenes (permisos por almacén). Contacta al administrador si te falta stock.</div>
+                    <button class="btn btn-outline btn-sm" data-others-retry style="margin:0.5rem auto 0">Reintentar</button>
+                  </div>
+                `;
+              })() : (() => {
                 // Agrupar por producto
                 const byProduct = new Map();
                 otherWarehousesStock.forEach((s) => {
@@ -308,10 +339,9 @@ export function mountWarehouseInterior(container, navigate) {
     container.querySelectorAll("[data-inv-tab]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         inventoryTab = btn.dataset.invTab;
-        if (inventoryTab === "others" && otherWarehousesStock.length === 0) {
+        render(); // pinta el tab ya (con su estado de carga)
+        if (inventoryTab === "others" && otherWarehousesStock.length === 0 && othersState !== "loading") {
           await loadOtherStock();
-        } else {
-          render();
         }
       });
     });
@@ -325,7 +355,10 @@ export function mountWarehouseInterior(container, navigate) {
         if (!product) return;
         // Cambiar al tab "otros" y mostrar el modal con detalle
         inventoryTab = "others";
-        await loadOtherStock();
+        render();
+        if (otherWarehousesStock.length === 0 && othersState !== "loading") {
+          await loadOtherStock();
+        }
         showProductAvailabilityModal(product);
       });
     });
@@ -340,6 +373,11 @@ export function mountWarehouseInterior(container, navigate) {
         if (newInput) { newInput.focus(); newInput.setSelectionRange(term.length, term.length); }
       });
     }
+
+    // Reintentar carga de otros almacenes
+    container.querySelectorAll("[data-others-retry]").forEach((btn) => {
+      btn.addEventListener("click", () => loadOtherStock());
+    });
 
     const registerBtn = container.querySelector("#register-sale-btn");
     if (registerBtn) {

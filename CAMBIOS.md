@@ -168,3 +168,9 @@ Bloque de fixes al final de `css/styles.css`:
 - NUEVO: Entrada / ajuste de stock por almacén. Nuevo diálogo desde Admin → Stock (botón "Entrada de stock" y botón "Ajustar" por producto) y desde Admin → Productos (icono de cajas por producto). Elige producto + almacén, muestra el stock actual, chips rápidos (+1/+6/+12/+24, -1), motivo y nota. Usa la RPC atómica adjust_stock y registra auditoría en stock_movements.
 - db.js: adjustStock ahora propaga el error real (antes lo tragaba en silencio).
 - sw.js: caché v11.
+
+## v5.1.3 (2026-09-11)
+- FIX: tab "Otros almacenes" (interior de almacén) mostraba "Cargando..." eterno. Ahora distingue cargando / error / vacío, muestra explicación de permisos por almacén y botón Reintentar.
+- Stock panel (admin): aviso amarillo si no hay ninguna fila de stock visible (permisos RLS por almacén / rol del usuario).
+- CSS v5.1.3: bloque anti-desborde extra en admin (badges, tablas, KPIs, toasts, grid).
+- sw.js: caché v12.

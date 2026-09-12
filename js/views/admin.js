@@ -2771,6 +2771,12 @@ export function mountAdminView(container, navigateOrUser) {
 
           <!-- Matriz producto × almacén -->
           <div class="card">
+            ${allStock.length === 0 ? `
+              <div style="margin:0.75rem;padding:0.625rem 0.75rem;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.45);border-radius:var(--radius);font-size:0.75rem;color:var(--text-soft);display:flex;gap:0.5rem;align-items:flex-start">
+                <span style="flex-shrink:0">${icon("alertTriangle", 14)}</span>
+                <div>No hay ninguna fila de stock visible para tu usuario. Si acabas de añadir stock y no aparece, tu usuario quizá no tenga rol <strong>admin</strong> o no tenga asignado ese almacén (permisos por almacén). Ejecuta el SQL de verificación de <strong>INSTALACION_SUPABASE.md</strong> (tabla public.users → role, warehouse_ids).</div>
+              </div>
+            ` : ''}
             <div class="card-header flex justify-between" style="gap:0.5rem">
               <h2 class="card-title">Detalle por producto (${filtered.length})</h2>
               <button class="btn btn-primary btn-sm" id="stk-new-entry" style="white-space:nowrap">${icon("plus", 14)} Entrada de stock</button>
