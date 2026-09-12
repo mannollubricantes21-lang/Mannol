@@ -175,6 +175,31 @@ Bloque de fixes al final de `css/styles.css`:
 - CSS v5.1.3: bloque anti-desborde extra en admin (badges, tablas, KPIs, toasts, grid).
 - sw.js: caché v12.
 
+## v5.1.9 (2026-09-12) — FIX 22P02: el id "pin-..." rompía la subida de ventas
+
+### Cómo se encontró (gracias al banner de errores de v5.1.8)
+El banner mostró el error real: `[22P02] invalid input syntax for type uuid: "pin-1789088327857"`.
+Las sesiones por PIN generan ids de usuario `pin-<timestamp>` (js/views/pin-login.js).
+Ese valor viajaba a `sales.user_id`, que en la BD es columna **uuid** → Postgres
+rechazaba la venta. Lo mismo rompía en silencio:
+- `adjust_stock(p_user_id uuid)` → **el stock de las ventas nunca se descontaba**.
+- `card_movements.user_id` / `card_movements.sale_id` (sale_id es uuid y sale.id es "S-...").
+- `update_sale_status(p_user_id uuid)` al cancelar.
+
+### FIX APP — sanitizado de UUIDs en TODAS las escrituras (db.js)
+- Nuevos `isUuid()` / `nullIfNotUuid()` exportados.
+- `sanitizeSaleRow`: las 6 columnas uuid de `sales` (warehouse_id, user_id,
+  manager_id, card_id, original_warehouse_id, weekend_warehouse_id) ahora
+  descartan valores no-uuid → la venta sube con esos campos en null y el
+  nombre del usuario (text) se conserva. Las ventas atascadas suben solas.
+- `adjustStock` / `updateSaleStatus`: parámetros uuid sanitizados → el stock
+  vuelve a descontarse aunque el usuario sea PIN.
+- `recordCardMovementForSale`: sale_id y user_id sanitizados.
+- `sanitizeSettingsRow`: weekend_warehouse_id sintético descartado.
+- tests/sale-row.test.js: +6 casos uuid (incluye el caso real "pin-1789088327857").
+  Verificación end-to-end contra la BD real: fila con id "S-..." y sin user_id → **201 Created**.
+- sw.js: caché v19. package.json 5.1.9.
+
 ## v5.1.8 (2026-09-12) — El banner muestra el error real de sincronización
 
 ### Diagnóstico confirmado (probes REST contra la BD real)

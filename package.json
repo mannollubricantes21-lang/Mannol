@@ -1,6 +1,6 @@
 {
   "name": "mannol-pos",
-  "version": "5.1.8",
+  "version": "5.1.9",
   "description": "MANNOL POS — Sistema de control de ventas y stock multi-almacén con Supabase",
   "type": "module",
   "scripts": {

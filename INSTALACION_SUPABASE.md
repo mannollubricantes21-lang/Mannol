@@ -138,7 +138,14 @@ Además, desde la app v5.1.7 el guardado descarta cualquier campo que no
 sea columna real (antes las ventas encoladas fallaban por un campo
 interno `_sync_attempts` que no existe en la BD).
 
-Tras ejecutar AMBOS scripts y abrir la app (versión v5.1.7 o superior),
+**Tercera causa (fix en v5.1.9, no requiere SQL):** las sesiones por PIN
+usan ids de usuario `pin-<timestamp>` y la BD espera un **uuid** en
+`sales.user_id` (fallaba `22P02 invalid input syntax for type uuid`).
+Desde v5.1.9 la app convierte esos ids en null automáticamente antes de
+guardar — también en el descuento de stock, tarjetas y cancelaciones.
+Si ves ese error en el banner, solo actualiza la app a v5.1.9 o superior.
+
+Tras ejecutar AMBOS scripts y abrir la app (versión v5.1.9 o superior),
 las ventas atascadas se suben solas en menos de 1 minuto. Puedes
 forzarlo con el botón **Sincronizar** del aviso verde.
 

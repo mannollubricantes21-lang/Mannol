@@ -1152,13 +1152,15 @@ export async function adjustStock(warehouseId, productId, delta, reason = "AJUST
   if (!s) return;
   try {
     // Use atomic RPC to avoid race conditions
+    // (p_warehouse_id/p_product_id/p_user_id son uuid: si llega un id
+    // sintético tipo "pin-..." se envía null para no romper la RPC con 22P02)
     const { error } = await s.client.rpc("adjust_stock", {
-      p_warehouse_id: warehouseId,
-      p_product_id: productId,
+      p_warehouse_id: nullIfNotUuid(warehouseId),
+      p_product_id: nullIfNotUuid(productId),
       p_delta: delta,
       p_reason: reason,
       p_note: note,
-      p_user_id: userId,
+      p_user_id: nullIfNotUuid(userId),
       p_user_name: userName,
     });
     if (error) throw error;
@@ -1335,10 +1337,35 @@ export const SALE_COLUMNS = new Set([
   "created_at", "synced_at",
 ]);
 
+// Columnas de `sales` que son tipo uuid en la BD. Ojo: `id` y `client_ref`
+// son TEXT (la app genera ids "S-..." y clientRefs uuid con fallback).
+export const SALE_UUID_COLUMNS = new Set([
+  "warehouse_id", "user_id", "manager_id", "card_id",
+  "original_warehouse_id", "weekend_warehouse_id",
+]);
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** ¿Es un UUID válido? (las sesiones PIN usan ids "pin-...", las ventas "S-...") */
+export function isUuid(v) {
+  return typeof v === "string" && UUID_RE.test(v);
+}
+
+/** Devuelve el valor si es UUID válido; si no, null (para parámetros/columnas uuid). */
+export function nullIfNotUuid(v) {
+  if (v == null) return null;
+  return isUuid(String(v)) ? v : null;
+}
+
 export function sanitizeSaleRow(r) {
   const out = {};
   for (const [k, v] of Object.entries(r)) {
-    if (SALE_COLUMNS.has(k)) out[k] = v;
+    if (!SALE_COLUMNS.has(k)) continue;
+    // Columnas uuid: si el valor no es un UUID válido (ej. "pin-1789..." de una
+    // sesión PIN o "S-169..." de generateSaleId), se omite para evitar el error
+    // 22P02 "invalid input syntax for type uuid" que dejaba la venta pendiente.
+    if (SALE_UUID_COLUMNS.has(k) && v != null && !isUuid(String(v))) continue;
+    out[k] = v;
   }
   return out;
 }
@@ -1355,7 +1382,10 @@ export const SETTINGS_COLUMNS = new Set([
 export function sanitizeSettingsRow(r) {
   const out = {};
   for (const [k, v] of Object.entries(r)) {
-    if (SETTINGS_COLUMNS.has(k)) out[k] = v;
+    if (!SETTINGS_COLUMNS.has(k)) continue;
+    // weekend_warehouse_id es uuid en la BD: descartar ids sintéticos (22P02)
+    if (k === "weekend_warehouse_id" && v != null && !isUuid(String(v))) continue;
+    out[k] = v;
   }
   return out;
 }
@@ -1411,7 +1441,7 @@ export async function updateSaleStatus(saleId, newStatus, reason = null, userId 
       p_sale_id: saleId,
       p_new_status: newStatus,
       p_reason: reason,
-      p_user_id: userId,
+      p_user_id: nullIfNotUuid(userId),
       p_user_name: userName,
     });
     if (error) throw error;
@@ -2453,6 +2483,10 @@ async function recordCardMovementForSale(sale) {
       userName: sale.userName,
       createdAt: Date.now(),
     });
+    // card_movements.sale_id y .user_id son uuid en la BD; sale.id es "S-..."
+    // y sale.userId puede ser "pin-..." → enviar null en vez de romper (22P02).
+    r.sale_id = nullIfNotUuid(r.sale_id);
+    r.user_id = nullIfNotUuid(r.user_id);
     const { error } = await s.from("card_movements").insert(r);
     if (error) throw error;
   } catch (err) {

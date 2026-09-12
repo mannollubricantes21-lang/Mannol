@@ -4,7 +4,7 @@
 // Bump CACHE_VERSION on every release to force clients to refresh.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v18";
+const CACHE_VERSION = "mannol-pos-supabase-v19";
 const STATIC_ASSETS = [
   "./",
   "./index.html",
