@@ -28,7 +28,7 @@ archivo y pulsa **Run**. Uno a la vez, en este orden:
 | # | Archivo | Qué hace |
 |---|---------|----------|
 | 1 | `supabase/schema.sql` | Crea las 14 tablas + índices + RPCs (ya incluye los motivos de transferencia) |
-| 2 | `supabase/policies.sql` | Activa RLS, buckets de Storage y funciones de seguridad |
+| 2 | `supabase/policies.sql` | Activa RLS, buckets de Storage y funciones de seguridad (incluye lectura de stock para PIN) |
 | 3 | `supabase/seed.sql` | Datos iniciales: 4 almacenes, gestores de ejemplo (los del desplegable de ventas), tarjetas |
 
 > `seed.sql` es opcional, pero **recomendado**: si no lo ejecutas, el
@@ -64,13 +64,50 @@ asistente para guardar la configuración en cada dispositivo.
 
 ## Paso B — Tu BD ya existe (alguien ya ejecutó schema/policies)
 
-Solo necesitas **UN** script:
+Necesitas DOS scripts (en este orden):
 
-- **`supabase/migration-v5.1-update.sql`** → SQL Editor → pegar todo → Run.
-- Al terminar debe aparecer: `MIGRACIÓN v5.1 COMPLETADA`.
+1. **`supabase/migration-v5.1-update.sql`** → SQL Editor → pegar todo → Run.
+   - Al terminar debe aparecer: `MIGRACIÓN v5.1 COMPLETADA`.
+2. **`supabase/migration-v5.1.3-pin-stock.sql`** → SQL Editor → pegar todo → Run.
+   - Al terminar verás 3 resultados: la lista de políticas de `stock`
+     (debe incluir `stock_read_pin`), el total de filas de stock y el
+     resumen almacén/producto/cantidad.
 
 Los demás archivos no se tocan (`schema.sql`, `policies.sql`, `seed.sql`
 ya están aplicados; `seed.sql` NO lo repitas para no duplicar datos demo).
+
+---
+
+## Problema: añadí stock y NO aparece / "Otros almacenes" carga eterno
+
+**Causa:** los accesos por PIN de almacén no crean sesión de Supabase
+(rol `anon`) y la tabla `stock` solo era legible para usuarios
+autenticados. Es un problema de PERMISOS de la base de datos, no de la app.
+
+**Solución:** ejecuta `supabase/migration-v5.1.3-pin-stock.sql`
+(Paso B, script 2). Da lectura de stock a las sesiones PIN; modificar
+stock sigue exigiendo admin/gestor.
+
+**Diagnóstico extra (si tras el SQL sigues sin ver stock):**
+
+```sql
+select w.name as almacen, p.name as producto, s.quantity
+from public.stock s
+join public.warehouses w on w.id = s.warehouse_id
+join public.products p on p.id = s.product_id
+order by w.name, p.name;
+```
+
+- Devuelve filas → el stock existe; actualiza la app (dos veces) y entra de
+  nuevo por PIN.
+- Devuelve 0 filas → la entrada nunca llegó a guardarse (revisa que la
+  usaste desde Admin → Stock → "Entrada de stock" con el toast de confirmación).
+
+> Nota sobre usuarios de tipo "warehouse" (p. ej. `yandriel`): si en
+> Table Editor ves su columna `warehouse_id = NULL` y `warehouse_ids = []`,
+> ese usuario no tiene almacenes asignados. Solo afecta a sesiones con
+> email + contraseña; para asignárselos ejecuta la sección opcional 3
+> del script `migration-v5.1.3-pin-stock.sql`.
 
 ---
 

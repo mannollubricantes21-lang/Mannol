@@ -296,6 +296,13 @@ create policy "stock_delete_active" on public.stock
     public.is_admin() or public.user_can_access_warehouse(warehouse_id)
   );
 
+-- Lectura de stock para sesiones PIN (el acceso por PIN de almacén
+-- no crea sesión de Supabase → rol anon). SOLO LECTURA; escribir
+-- stock sigue exigiendo admin/gestor autenticado.
+drop policy if exists "stock_read_pin" on public.stock;
+create policy "stock_read_pin" on public.stock
+  for select to anon using (true);
+
 -- =====================================================
 -- 12. stock_movements — filtrado por almacén
 -- =====================================================

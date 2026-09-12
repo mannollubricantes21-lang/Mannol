@@ -169,8 +169,15 @@ Bloque de fixes al final de `css/styles.css`:
 - db.js: adjustStock ahora propaga el error real (antes lo tragaba en silencio).
 - sw.js: caché v11.
 
-## v5.1.3 (2026-09-11)
+## v5.1.3 (2026-09-11 / build 2026-09-12)
 - FIX: tab "Otros almacenes" (interior de almacén) mostraba "Cargando..." eterno. Ahora distingue cargando / error / vacío, muestra explicación de permisos por almacén y botón Reintentar.
 - Stock panel (admin): aviso amarillo si no hay ninguna fila de stock visible (permisos RLS por almacén / rol del usuario).
 - CSS v5.1.3: bloque anti-desborde extra en admin (badges, tablas, KPIs, toasts, grid).
 - sw.js: caché v12.
+
+## v5.1.3b (2026-09-12) — FIX DE BASE DE DATOS: stock invisible para accesos por PIN
+- CAUSA RAÍZ confirmada con la BD real: el acceso por PIN de almacén no crea sesión de Supabase (rol `anon`) y las políticas RLS de `stock` solo permitían lectura a `authenticated`. El interior del almacén veía SIEMPRE 0 filas (stock añadido invisible + "Otros almacenes" vacío/cargando).
+- NUEVO `supabase/migration-v5.1.3-pin-stock.sql`: política `stock_read_pin` (lectura anon de stock, solo lectura; escribir sigue exigiendo admin/gestor) + verificaciones automáticas + secciones opcionales (movimientos por PIN, asignar almacenes al usuario yandriel).
+- `policies.sql`: incluye la misma política para instalaciones nuevas.
+- `INSTALACION_SUPABASE.md`: nuevo apartado "añadí stock y NO aparece / Otros almacenes carga eterno" con diagnóstico.
+- sw.js: caché v13. Sin cambios funcionales en la app (el fix es 100% SQL).

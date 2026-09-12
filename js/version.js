@@ -8,7 +8,7 @@
 // =====================================================
 
 export const APP_VERSION = "5.1.3";
-export const APP_BUILD = "2026-09-11";
+export const APP_BUILD = "2026-09-12";
 export const APP_LABEL = `MANNOL POS v${APP_VERSION} · build ${APP_BUILD}`;
 
 console.info(`[MANNOL] ${APP_LABEL}`);

@@ -53,6 +53,7 @@ Script de mantenimiento manual/ejecutable vía `pg_cron` (plan Pro):
 | `policies.sql` | RLS + buckets Storage + grants + funciones seguridad | **Instalación nueva** |
 | `seed.sql` | Datos demo + productos con tiers mayorista | **Instalación nueva** |
 | `migration-v5.1-update.sql` | **Todo-en-uno e idempotente** (columnas de productos + motivos de transferencia + realtime) | **⚠️ EJECUTAR en una BD existente para pasar a la v5.1** |
+| `migration-v5.1.3-pin-stock.sql` | Lectura de stock para accesos por PIN (rol anon) + opcionales (movimientos, asignar almacenes a un usuario) | **⚠️ EJECUTAR en una BD existente si el stock no se ve desde el almacén (PIN)** |
 | `migration-v4-transfer-reasons.sql` | Solo motivos de transferencia | Alternativa mínima (incluida en la v5.1) |
 | `lifecycle-cleanup.sql` | Mantenimiento periódico | Cada 3-6 meses |
 
