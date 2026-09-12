@@ -175,6 +175,26 @@ Bloque de fixes al final de `css/styles.css`:
 - CSS v5.1.3: bloque anti-desborde extra en admin (badges, tablas, KPIs, toasts, grid).
 - sw.js: caché v12.
 
+## v5.1.8 (2026-09-12) — El banner muestra el error real de sincronización
+
+### Diagnóstico confirmado (probes REST contra la BD real)
+- El SQL v5.1.7 SÍ se ejecutó bien: las 5 columnas existen y la verificación
+  "VENTAS EN LA NUBE 0" es normal (el editor SQL solo muestra el último resultado).
+- INSERT y UPSERT anónimos a `sales` devuelven **201 Created** — la base de datos
+  ya acepta ventas sin problema. NO hace falta ejecutar más SQL.
+- Si las ventas siguen "pendientes", el dispositivo está ejecutando **JavaScript
+  viejo desde la caché del Service Worker**. Solución: actualizar la página 2 veces
+  (o limpiar datos del sitio) y verificar el pie del menú: "MANNOL POS v5.1.8".
+
+### FIX APP — transparencia total en el banner de pendientes
+- `offline-sync.js`: nuevo `getLastSyncError()` — guarda código + mensaje real del
+  último fallo de subida (ej. `[PGRST204] Could not find the 'X' column...`).
+- `sync-banner.js`: si hay ventas pendientes y el último intento falló, el banner
+  muestra el error exacto en rojo y, si es un error de columnas/permisos
+  (PGRST*/42501), añade el aviso amarillo "Actualiza esta página 2 veces".
+- Así cualquier fallo futuro se puede reportar con una simple captura del banner.
+- sw.js: caché v18. package.json 5.1.8.
+
 ## v5.1.7 (2026-09-12) — FIX DEFINITIVO: ventas pendientes (faltaban columnas en la BD)
 
 ### Por qué seguía fallando tras el SQL v5.1.6

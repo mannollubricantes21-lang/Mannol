@@ -82,6 +82,24 @@ let _syncListeners = new Set();
 let _retryTimeoutId = null;
 let _autoSyncSetup = false;
 
+// Último error de sincronización (visible en el banner para que el
+// usuario pueda reportarlo con una captura sin necesitar consola).
+// Formato: { code, message, saleCode, at } | null
+let _lastSyncError = null;
+
+export function getLastSyncError() {
+  return _lastSyncError;
+}
+
+function recordSyncError(err, sale) {
+  _lastSyncError = {
+    code: err?.code || err?.details?.code || "ERROR",
+    message: String(err?.message || err?.details?.message || err || "Error desconocido").slice(0, 140),
+    saleCode: sale?.code || "?",
+    at: Date.now(),
+  };
+}
+
 export function isSyncing() {
   return _syncInProgress;
 }
@@ -229,6 +247,7 @@ export async function syncOfflineQueue(options = {}) {
       store.dequeueOfflineSale(sale.id);
     } catch (err) {
       console.error(`[Sync] Failed to sync sale ${sale.code}:`, err);
+      recordSyncError(err, sale);
       failed++;
       failedIds.push(sale.id);
       // Sale stays in queue for next retry
@@ -251,6 +270,8 @@ export async function syncOfflineQueue(options = {}) {
     skipped,
     total: queue.length,
   };
+
+  if (failed === 0) _lastSyncError = null; // limpiar error si todo subió
 
   console.info(`[Sync] Done: ${synced} synced, ${skipped} skipped, ${failed} failed`, summary);
 
