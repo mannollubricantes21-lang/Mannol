@@ -175,6 +175,15 @@ Bloque de fixes al final de `css/styles.css`:
 - CSS v5.1.3: bloque anti-desborde extra en admin (badges, tablas, KPIs, toasts, grid).
 - sw.js: caché v12.
 
+## v5.1.5 (2026-09-12) — NUEVO: añadir stock a cada almacén por separado (Admin → Stock)
+- La sección "Stock por almacén (local)" ahora tiene entrada directa por local:
+  - Botón **+** en la cabecera de cada tarjeta de almacén → abre el diálogo de entrada con ESE almacén ya preseleccionado.
+  - Botón **+** junto a cada producto dentro de la tarjeta → ajusta ESE producto en ESE local (producto y almacén preseleccionados).
+  - Si el local está vacío: mensaje "Sin stock en este local todavía" + botón "Añadir el primero".
+- Texto de ayuda bajo el título de la sección explicando los nuevos botones.
+- El diálogo sigue siendo el mismo (stock actual en vivo, chips rápidos, motivo, nota, RPC atómica adjust_stock con auditoría).
+- sw.js: caché v15. package.json 5.1.5.
+
 ## v5.1.4 (2026-09-12) — FIX: el index rebotaba al admin y no dejaba entrar por PIN
 - CAUSA: `app.js` redirigía automáticamente index → admin.html siempre que hubiera una sesión de admin guardada en el dispositivo (`localStorage`), y además `subscribeAuth` restauraba el admin en cada carga aunque el dispositivo estuviera en sesión PIN. El dueño no podía abrir la app de almacenes ni verificar el stock como empleado.
 - FIX: eliminada la redirección automática. El index vuelve a ser el hub de entrada:

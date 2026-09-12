@@ -2716,24 +2716,31 @@ export function mountAdminView(container, navigateOrUser) {
           <!-- Stock separado por almacén -->
           <div>
             <h2 class="text-base font-semibold flex items-center gap-2" style="margin:0 0 0.5rem">${icon("store", 16)} Stock por almacén (local)</h2>
+            <p class="text-xs text-muted" style="margin:0 0 0.625rem">Usa el botón <strong>+</strong> de cada local para añadir stock directamente a ese almacén, o toca un producto para ajustarlo en ese local.</p>
             <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
               ${activeWhs.map((w) => `
                 <div class="card" style="min-width:0">
-                  <div class="card-header flex justify-between items-center">
+                  <div class="card-header flex justify-between items-center" style="gap:0.5rem">
                     <h3 class="card-title text-sm flex items-center gap-2" style="min-width:0">
                       <span class="truncate">${esc(w.name)}</span>
                       <span class="badge badge-outline" style="font-size:0.5625rem;flex-shrink:0">${esc(w.code)}</span>
                     </h3>
-                    <span class="badge badge-accent" style="flex-shrink:0">${totalsByWh[w.id] || 0} u.</span>
+                    <div style="display:flex;align-items:center;gap:0.375rem;flex-shrink:0">
+                      <span class="badge badge-accent">${totalsByWh[w.id] || 0} u.</span>
+                      <button class="btn btn-primary btn-xs" data-stk-wh-entry="${esc(w.id)}" title="Añadir stock a ${esc(w.name)}" style="white-space:nowrap">${icon("plus", 12)}</button>
+                    </div>
                   </div>
                   <div class="card-content" style="padding:0.75rem;max-height:16rem;overflow-y:auto">
                     ${(() => {
                       const items = prodRows.filter((r) => (r.byWh[w.id] || 0) > 0).sort((a, b) => b.byWh[w.id] - a.byWh[w.id]);
-                      if (items.length === 0) return `<div class="text-xs text-muted">Sin stock en este local.</div>`;
+                      if (items.length === 0) return `<div class="text-xs text-muted" style="display:flex;flex-direction:column;gap:0.5rem;align-items:flex-start">Sin stock en este local todavía.<button class="btn btn-outline btn-xs" data-stk-wh-entry="${esc(w.id)}">${icon("plus", 10)} Añadir el primero</button></div>`;
                       return items.map((r) => `
                         <div class="flex items-center justify-between gap-2" style="padding:0.25rem 0;border-bottom:1px solid var(--border)">
                           <span class="text-xs truncate" style="min-width:0" title="${esc(r.p.name)}">${esc(r.p.name)}</span>
-                          <span class="text-xs font-bold ${r.byWh[w.id] <= (r.minStock || 0) ? 'text-warning' : ''}" style="flex-shrink:0">${r.byWh[w.id]}</span>
+                          <span style="display:flex;align-items:center;gap:0.25rem;flex-shrink:0">
+                            <span class="text-xs font-bold ${r.byWh[w.id] <= (r.minStock || 0) ? 'text-warning' : ''}">${r.byWh[w.id]}</span>
+                            <button class="btn btn-ghost btn-xs" data-stk-wh-adjust data-wh="${esc(w.id)}" data-pid="${esc(r.p.id)}" title="Ajustar ${esc(r.p.name)} en ${esc(w.name)}" style="padding:0.125rem 0.375rem">${icon("plus", 10)}</button>
+                          </span>
                         </div>
                       `).join("");
                     })()}
@@ -2863,6 +2870,29 @@ export function mountAdminView(container, navigateOrUser) {
             warehouses: activeWhs,
             presetProductId: btn.dataset.stkAdjust,
             presetWarehouseId: whFilter || "",
+            onSaved: () => load(),
+          });
+        });
+      });
+      // v5.1.5: entrada de stock directa en un almacén concreto (tarjeta del local)
+      content.querySelectorAll("[data-stk-wh-entry]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          showStockEntryDialog({
+            products: allProducts,
+            warehouses: activeWhs,
+            presetWarehouseId: btn.dataset.stkWhEntry,
+            onSaved: () => load(),
+          });
+        });
+      });
+      // v5.1.5: ajustar un producto concreto dentro de un local concreto
+      content.querySelectorAll("[data-stk-wh-adjust]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          showStockEntryDialog({
+            products: allProducts,
+            warehouses: activeWhs,
+            presetProductId: btn.dataset.pid,
+            presetWarehouseId: btn.dataset.wh,
             onSaved: () => load(),
           });
         });
