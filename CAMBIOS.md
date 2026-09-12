@@ -175,6 +175,34 @@ Bloque de fixes al final de `css/styles.css`:
 - CSS v5.1.3: bloque anti-desborde extra en admin (badges, tablas, KPIs, toasts, grid).
 - sw.js: caché v12.
 
+## v5.1.7 (2026-09-12) — FIX DEFINITIVO: ventas pendientes (faltaban columnas en la BD)
+
+### Por qué seguía fallando tras el SQL v5.1.6
+Dos causas encadenadas, confirmadas con probes REST contra la BD real:
+
+1. **Faltaban columnas en la BD** (la migración v2 de "fin de semana" nunca se ejecutó):
+   `sales.weekend_redirect`, `sales.original_warehouse_id`, `sales.weekend_warehouse_id`,
+   `settings.weekend_warehouse_id`, `settings.weekend_redirect_enabled`.
+   Cada venta fallaba con `PGRST204: Could not find the 'weekend_redirect' column of 'sales'`.
+2. **La app enviaba campos fantasma**: las ventas encoladas llevan `_syncAttempts` →
+   se convertía en `_sync_attempts` (columna inexistente) → **cada reintento fallaba
+   aunque todo lo demás estuviera bien**. También `settings` enviaba
+   `weekend_warehouse_name` (caché solo-app).
+
+### FIX SQL — NUEVO `supabase/migration-v5.1.7-sales-weekend.sql`
+- Añade las 5 columnas faltantes (idempotente, no toca datos) + 2 índices.
+- **Hay que ejecutarlo en Supabase → SQL Editor** (Paso B, script 4).
+- Al ejecutarlo, las ventas atascadas en la cola suben solas en <1 min.
+
+### FIX APP — blindaje anti columnas fantasma (db.js)
+- Nuevo `sanitizeSaleRow()` (whitelist `SALE_COLUMNS`): descarta cualquier campo
+  que no sea columna real de `sales` (ej. `_sync_attempts`) antes de guardar.
+  Ya no puede volver a pasar el error PGRST204 en ventas, venga de la UI o de la cola offline.
+- Nuevo `sanitizeSettingsRow()` (whitelist `SETTINGS_COLUMNS`): el guardado de
+  configuración ya no falla por `weekend_warehouse_name`.
+- `schema.sql`: instalaciones nuevas ya incluyen las columnas de fin de semana.
+- tests/sale-row.test.js: 5 tests. sw.js: caché v17. package.json 5.1.7.
+
 ## v5.1.6 (2026-09-12) — FIX: las ventas ya no se quedan "pendientes" + viscosidad automática
 
 ### 1) Ventas pendientes que nunca se subían (FIX CRÍTICO, requiere SQL)

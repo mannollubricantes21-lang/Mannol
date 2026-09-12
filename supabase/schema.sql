@@ -21,7 +21,10 @@ create table if not exists public.settings (
   el_toque_enabled boolean not null default true,
   el_toque_markup numeric not null default 5,
   business_name text not null default 'MANNOL',
-  last_rate_sync timestamptz
+  last_rate_sync timestamptz,
+  -- Regla de fin de semana (migración v2)
+  weekend_warehouse_id uuid references public.warehouses(id) on delete set null,
+  weekend_redirect_enabled boolean not null default false
 );
 
 -- 2. rate_config (singleton — id siempre 'default')
@@ -224,7 +227,11 @@ create table if not exists public.sales (
   vendor_commission_per_box numeric,  -- comisión vendedor por caja
   gestor_commission_per_box numeric,  -- comisión gestor por caja
   created_at timestamptz not null default now(),
-  synced_at timestamptz
+  synced_at timestamptz,
+  -- Regla de fin de semana (migración v2): auditoría de ventas reasignadas
+  weekend_redirect boolean not null default false,
+  original_warehouse_id uuid references public.warehouses(id) on delete set null,
+  weekend_warehouse_id uuid references public.warehouses(id) on delete set null
 );
 
 -- 14. commission_payouts (id compuesto)

@@ -375,7 +375,7 @@ export async function getSettings() {
       return { ...DEFAULT_SETTINGS, ...r };
     }
     // Create default row if missing
-    const insertRow = toRow({ id: "global", ...DEFAULT_SETTINGS });
+    const insertRow = sanitizeSettingsRow(toRow({ id: "global", ...DEFAULT_SETTINGS }));
     const { error: insErr } = await s.from("settings").insert(insertRow);
     if (insErr) console.warn("[getSettings] insert default failed:", insErr);
     return { ...DEFAULT_SETTINGS };
@@ -394,7 +394,7 @@ export async function saveSettings(settings) {
   const s = await sb();
   if (!s) return;
   try {
-    const update = { ...toRow(settings), id: "global" };
+    const update = { ...sanitizeSettingsRow(toRow(settings)), id: "global" };
     const { error } = await s.from("settings").upsert(update, { onConflict: "id" });
     if (error) throw error;
   } catch (err) {
@@ -1308,6 +1308,58 @@ export async function listSales(filters = {}) {
   }
 }
 
+// Columnas reales de la tabla `sales` (schema.sql + migración v2 de fin de
+// semana). Cualquier campo extra que envíe la UI o la cola offline se
+// descarta aquí para evitar el error PGRST204 ("Could not find the 'X'
+// column of 'sales'"), que dejaba las ventas "pendientes" para siempre.
+// Caso real: las ventas encoladas llevan `_syncAttempts` → `_sync_attempts`,
+// una columna que NO existe en la BD → cada reintento fallaba en silencio.
+export const SALE_COLUMNS = new Set([
+  "id", "code", "client_ref",
+  "warehouse_id", "warehouse_name", "warehouse_code",
+  "user_id", "user_name",
+  "manager_id", "manager_name", "manager_code",
+  "customer_name",
+  "items", "total_amount", "total_usd",
+  "payments", "is_multi_currency", "payment_mode", "currency",
+  "paid_usd", "paid_mn", "paid_eur", "paid_transfer",
+  "payment_method",
+  "card_id", "card_number", "card_name", "transfer_amount",
+  "note", "status",
+  "completed_at", "cancelled_at", "cancel_reason",
+  "gestor_commission_usd", "gestor_commission_mn",
+  "vendor_commission_usd", "vendor_commission_mn",
+  "sale_type", "boxes", "price_per_box",
+  "vendor_commission_per_box", "gestor_commission_per_box",
+  "weekend_redirect", "original_warehouse_id", "weekend_warehouse_id",
+  "created_at", "synced_at",
+]);
+
+export function sanitizeSaleRow(r) {
+  const out = {};
+  for (const [k, v] of Object.entries(r)) {
+    if (SALE_COLUMNS.has(k)) out[k] = v;
+  }
+  return out;
+}
+
+// Columnas reales de la tabla `settings`. `weekendWarehouseName` es solo
+// de app (caché denormalizada) y NO existe en la BD — si se enviara,
+// el guardado de configuración fallaría con PGRST204.
+export const SETTINGS_COLUMNS = new Set([
+  "id", "pin_code", "el_toque_enabled", "el_toque_markup",
+  "business_name", "last_rate_sync",
+  "weekend_warehouse_id", "weekend_redirect_enabled",
+]);
+
+export function sanitizeSettingsRow(r) {
+  const out = {};
+  for (const [k, v] of Object.entries(r)) {
+    if (SETTINGS_COLUMNS.has(k)) out[k] = v;
+  }
+  return out;
+}
+
 /**
  * Save a sale (idempotent via clientRef unique constraint).
  * @param {Sale} sale
@@ -1318,7 +1370,7 @@ export async function saveSale(sale) {
   if (!s) return;
   try {
     // Idempotency via client_ref unique constraint
-    const r = toRow({ ...sale, syncedAt: sale.syncedAt || Date.now() });
+    const r = sanitizeSaleRow(toRow({ ...sale, syncedAt: sale.syncedAt || Date.now() }));
     const { error } = await s.from("sales").upsert(r, { onConflict: "id" });
     if (error) {
       // If duplicate client_ref, treat as success (idempotent)

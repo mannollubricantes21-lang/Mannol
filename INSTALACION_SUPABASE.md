@@ -64,7 +64,7 @@ asistente para guardar la configuración en cada dispositivo.
 
 ## Paso B — Tu BD ya existe (alguien ya ejecutó schema/policies)
 
-Necesitas TRES scripts (en este orden):
+Necesitas CUATRO scripts (en este orden):
 
 1. **`supabase/migration-v5.1-update.sql`** → SQL Editor → pegar todo → Run.
    - Al terminar debe aparecer: `MIGRACIÓN v5.1 COMPLETADA`.
@@ -77,6 +77,10 @@ Necesitas TRES scripts (en este orden):
      (si no, quedan "pendientes" para siempre). Al terminar verás las
      políticas de `sales` (deben incluir `sales_insert_pin` y
      `sales_read_pin`), el total de ventas y las últimas 5 ventas.
+4. **`supabase/migration-v5.1.7-sales-weekend.sql`** → SQL Editor → pegar todo → Run.
+   - Añade columnas de fin de semana que la app envía en cada venta
+     (`weekend_redirect`, etc.). SIN este script las ventas siguen
+     fallando con `PGRST204` aunque los permisos estén bien.
 
 Los demás archivos no se tocan (`schema.sql`, `policies.sql`, `seed.sql`
 ya están aplicados; `seed.sql` NO lo repitas para no duplicar datos demo).
@@ -118,16 +122,25 @@ order by w.name, p.name;
 
 ## Problema: registro una venta y se queda "pendiente", nunca se sube
 
-**Causa:** exactamente la misma que el stock invisible — el acceso por
-PIN no crea sesión de Supabase (rol `anon`) y la tabla `sales` solo
-dejaría INSERTAR/LEER a usuarios autenticados. La app reintenta
-subir la venta cada 30 segundos y falla en silencio con
-`42501 new row violates row-level security policy for table "sales"`.
+Son DOS causas encadenadas — hay que ejecutar AMBOS SQL:
 
-**Solución:** ejecuta `supabase/migration-v5.1.6-sales-pin.sql`
-(Paso B, script 3). Da a las sesiones PIN permiso para registrar y
-leer ventas. Las ventas que estaban atascadas en la cola se suben
-solas en menos de 1 minuto tras ejecutar el SQL (la app reintenta sola).
+1. **Permisos**: el acceso por PIN no crea sesión de Supabase (rol `anon`)
+   y la tabla `sales` solo dejaba INSERTAR/LEER a usuarios autenticados
+   (fallaba `42501 row-level security`).
+   → Solución: `migration-v5.1.6-sales-pin.sql` (Paso B, script 3).
+2. **Columnas faltantes**: tu BD nunca recibió la migración v2 y a `sales`
+   le faltan `weekend_redirect`, `original_warehouse_id`,
+   `weekend_warehouse_id` que la app envía en cada venta (fallaba
+   `PGRST204 Could not find the 'weekend_redirect' column`).
+   → Solución: `migration-v5.1.7-sales-weekend.sql` (Paso B, script 4).
+
+Además, desde la app v5.1.7 el guardado descarta cualquier campo que no
+sea columna real (antes las ventas encoladas fallaban por un campo
+interno `_sync_attempts` que no existe en la BD).
+
+Tras ejecutar AMBOS scripts y abrir la app (versión v5.1.7 o superior),
+las ventas atascadas se suben solas en menos de 1 minuto. Puedes
+forzarlo con el botón **Sincronizar** del aviso verde.
 
 ---
 
