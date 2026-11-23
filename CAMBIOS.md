@@ -1,5 +1,27 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.6.1 (2026-11-23) — FIX: PIN del almacén (incorrecto siempre + demora)
+
+### Qué pasaba
+- **"PIN incorrecto" aunque el PIN fuera correcto**: si el almacén no tenía su propio PIN y
+  el row de `settings` en Supabase tenía `pinCode` en null/vacío, el valor null pisaba el
+  default `2025` → el PIN esperado quedaba `null` y **ningún** PIN entraba. Además, si el PIN
+  llegó a guardarse como número (columna numérica en Supabase), `"2611" !== 2611` fallaba.
+- **Demora al entrar**: cada intento de PIN hacía un `await getSettings()` (viaje de red a
+  Supabase) aunque el almacén ya tuviera su propio PIN. Igual en toda la app: settings y
+  warehouses se re-consultaban en cada navegación.
+
+### Arreglos
+- `js/pin-utils.js` (nuevo, puro y testeado): `normalizePin`, `resolveExpectedPin`,
+  `pinMatches` — comparación segura string/número y con trim de espacios.
+- El login PIN ya **no consulta settings si el almacén tiene su propio PIN** (validación local,
+  instantánea). El mensaje "PIN incorrecto" solo aparece cuando de verdad no coincide; si el
+  almacén no tiene PIN configurado, avisa dónde configurarlo en vez de decir "incorrecto".
+- **Caché TTL**: `getSettings` 60s y `listWarehouses` 30s (se invalidan al guardar) — la app
+  entera deja de re-consultar Supabase en cada pantalla; el arranque en frío del plan gratis
+  se siente una sola vez.
+- 12 tests nuevos (107 total). `sw.js` caché v25. Sin migración SQL.
+
 ## v5.6.0 (2026-11-23) — Notificaciones en vivo + reportes de cierres
 
 > Sin migración SQL nueva — usa las tablas de v5.5 (`transfer_requests`, `daily_closures`).

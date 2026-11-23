@@ -7,6 +7,7 @@ import { getSettings, listWarehouses } from "../db.js";
 import { isSupabaseConfigured } from "../supabase.js";
 import { toast, icon } from "../ui.js";
 import { canAttemptPin, recordPinAttempt, clearPinAttempts, getPinBlockRemainingSec } from "../pin-rate-limit.js";
+import { resolveExpectedPin, pinMatches } from "../pin-utils.js";
 
 export function renderPinLoginView() {
   const store = getStore();
@@ -129,11 +130,23 @@ export function mountPinLoginView(container, navigate) {
     errorBox.classList.add("hidden");
 
     try {
-      const settings = await getSettings();
-      // PIN del almacén: si tiene su propio pin úsalo, si no usa el global (2025)
-      // BUG FIX: el campo del almacén es 'pin' (no 'pinCode' que es del settings global)
-      const expectedPin = warehouse.pin || settings.pinCode;
-      if (pin !== expectedPin) {
+      // v5.6.1: si el almacén tiene su propio PIN no hace falta consultar
+      // settings (evita esperar red en cada intento). Solo se consulta como
+      // fallback cuando el almacén no tiene pin guardado.
+      const hasOwnPin = String(warehouse.pin ?? "").trim() !== "";
+      const settings = hasOwnPin ? null : await getSettings();
+      const expectedPin = resolveExpectedPin(warehouse, settings);
+
+      if (!expectedPin) {
+        errorBox.textContent = "Este almacén no tiene PIN configurado. Defínelo en Admin → Almacenes (o en Ajustes, PIN global).";
+        errorBox.classList.remove("hidden");
+        submit.disabled = false;
+        submit._submitting = false;
+        submit.innerHTML = `${icon("lock", 14)} Entrar`;
+        return;
+      }
+
+      if (!pinMatches(pin, expectedPin)) {
         // Registrar intento fallido (localStorage + auditoría remota pin_attempts)
         recordPinAttempt(warehouse.id, warehouse.code);
         const remaining = getPinBlockRemainingSec(warehouse.id);

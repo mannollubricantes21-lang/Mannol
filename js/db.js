@@ -363,9 +363,17 @@ function subscribeTable({ channelName, table, filter, order, fn, demoData, isDem
  * Get the singleton settings row.
  * @returns {Promise<Settings>}
  */
+// Caché TTL corta para settings: getSettings se consulta en muchos flujos
+// (login PIN, ventas, dashboard) y era un viaje de red en cada uno.
+let _settingsCache = { ts: 0, data: null };
+const SETTINGS_CACHE_TTL = 60000;
+
 export async function getSettings() {
   const demo = await isDemo();
   if (demo) return { ...DEFAULT_SETTINGS };
+  if (_settingsCache.data && Date.now() - _settingsCache.ts < SETTINGS_CACHE_TTL) {
+    return { ..._settingsCache.data };
+  }
   const s = await sb();
   if (!s) return { ...DEFAULT_SETTINGS };
   try {
@@ -373,13 +381,22 @@ export async function getSettings() {
     if (error) throw error;
     if (data) {
       const r = row(data);
-      return { ...DEFAULT_SETTINGS, ...r };
+      const merged = { ...DEFAULT_SETTINGS, ...r };
+      // Guard: un pinCode null/vacío en la BD NO debe pisar el default,
+      // dejaría el PIN esperado en null y ningún PIN funcionaría.
+      if (r.pinCode == null || String(r.pinCode).trim() === "") {
+        merged.pinCode = DEFAULT_SETTINGS.pinCode;
+      }
+      _settingsCache = { ts: Date.now(), data: merged };
+      return { ...merged };
     }
     // Create default row if missing
     const insertRow = sanitizeSettingsRow(toRow({ id: "global", ...DEFAULT_SETTINGS }));
     const { error: insErr } = await s.from("settings").insert(insertRow);
     if (insErr) console.warn("[getSettings] insert default failed:", insErr);
-    return { ...DEFAULT_SETTINGS };
+    const def = { ...DEFAULT_SETTINGS };
+    _settingsCache = { ts: Date.now(), data: def };
+    return { ...def };
   } catch (err) {
     console.warn("Settings load failed:", err);
     return { ...DEFAULT_SETTINGS };
@@ -394,6 +411,7 @@ export async function getSettings() {
 export async function saveSettings(settings) {
   const s = await sb();
   if (!s) return;
+  _settingsCache = { ts: 0, data: null }; // invalidar caché de settings
   try {
     const update = { ...sanitizeSettingsRow(toRow(settings)), id: "global" };
     const { error } = await s.from("settings").upsert(update, { onConflict: "id" });
@@ -522,14 +540,23 @@ export function resolveEffectiveWarehouse(sellerWarehouse, allWarehouses, settin
 /**
  * @returns {Promise<Warehouse[]>}
  */
+// Caché TTL corta para warehouses: evita re-query en cada navegación/click.
+// Se invalida al guardar (saveWarehouse).
+let _whCache = { ts: 0, data: null };
+const WH_CACHE_TTL = 30000;
+
 export async function listWarehouses() {
   const demo = await isDemo();
   if (demo) return DEMO_WAREHOUSES;
   const s = await sb();
   if (!s) return [];
+  if (_whCache.data && Date.now() - _whCache.ts < WH_CACHE_TTL) {
+    return _whCache.data.map((w) => ({ ...w }));
+  }
   try {
     const { data, error } = await s.from("warehouses").select("*").order("created_at", { ascending: true });
     if (error) throw error;
+    _whCache = { ts: Date.now(), data: rows(data) };
     return rows(data);
   } catch (err) {
     console.error("listWarehouses failed:", err);
@@ -559,6 +586,7 @@ export function subscribeWarehouses(cb) {
  */
 export async function saveWarehouse(w) {
   const s = await sb();
+  _whCache = { ts: 0, data: null }; // invalidar caché de warehouses
   if (!s) return "demo-id";
   try {
     const r = toRow({ ...w, createdAt: w.createdAt || Date.now() });
