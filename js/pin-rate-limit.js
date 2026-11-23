@@ -16,6 +16,27 @@ const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 5 * 60 * 1000; // ventana de 5 minutos
 const BLOCK_MS = 5 * 60 * 1000; // bloqueo de 5 minutos
 
+// Auditoría remota de intentos fallidos (tabla pin_attempts,
+// migration-v5.3-improvements.sql). Best-effort: si falla (sin
+// conexión, RLS, tabla ausente) no afecta el flujo local.
+function auditPinAttemptRemote(warehouseId, warehouseCode) {
+  (async () => {
+    try {
+      const { getSupabase } = await import("./supabase.js");
+      const s = await getSupabase();
+      if (!s) return;
+      await s.from("pin_attempts").insert({
+        warehouse_id: warehouseId && /^[0-9a-f-]{36}$/i.test(warehouseId) ? warehouseId : null,
+        warehouse_code: warehouseCode || null,
+        ok: false,
+        device: navigator.userAgent.slice(0, 120),
+      });
+    } catch (err) {
+      console.warn("[PinAudit] no se pudo registrar el intento:", err?.message || err);
+    }
+  })();
+}
+
 function readAll() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -57,8 +78,13 @@ export function getPinBlockRemainingSec(warehouseId) {
 
 /**
  * Registra un intento fallido. Si supera el máximo, bloquea.
+ * @param {string} warehouseId
+ * @param {string} [warehouseCode] - código visible del almacén (para auditoría)
  */
-export function recordPinAttempt(warehouseId) {
+export function recordPinAttempt(warehouseId, warehouseCode) {
+  // Auditoría remota (1 registro por intento fallido)
+  auditPinAttemptRemote(warehouseId, warehouseCode);
+
   const all = readAll();
   const now = Date.now();
   const entry = all[warehouseId] || { attempts: [], blockedUntil: 0 };

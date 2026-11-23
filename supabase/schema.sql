@@ -149,12 +149,24 @@ create table if not exists public.products (
   vendor_commission numeric not null default 0,
   vendor_commission_currency text not null default 'USD' check (vendor_commission_currency in ('USD','MN')),
   image_url text,
+  thumb_url text,  -- miniatura 200px generada al subir la imagen (listados livianos)
   active boolean not null default true,
   -- Mayorista (Opción B)
   units_per_box int,  -- pomos/botellas por caja. NULL = no mayorista
   wholesale_tiers jsonb default '[]',  -- [{minBoxes, maxBoxes, pricePerUnit, vendorCommission, gestorCommission}]
   created_at timestamptz not null default now()
 );
+
+-- 10b. pin_attempts (auditoría de intentos de PIN de almacén)
+create table if not exists public.pin_attempts (
+  id uuid primary key default gen_random_uuid(),
+  warehouse_id uuid references public.warehouses(id) on delete set null,
+  warehouse_code text,
+  ok boolean not null default false,
+  device text,
+  attempted_at timestamptz not null default now()
+);
+create index if not exists pin_attempts_warehouse_time on public.pin_attempts (warehouse_id, attempted_at desc);
 
 -- 11. stock (id compuesto: `${warehouseId}_${productId}`)
 create table if not exists public.stock (
@@ -416,3 +428,61 @@ begin
   end if;
 end;
 $$ language plpgsql security definer;
+
+-- =====================================================
+-- v5.5: transfer_requests — solicitud de mercancía del personal
+-- =====================================================
+-- El empleado pide producto a otro almacén; el admin aprueba
+-- (mueve stock) o rechaza. Máx 1 solicitud PENDIENTE por
+-- (origen, destino, producto) — índice único parcial.
+
+create table if not exists public.transfer_requests (
+  id uuid primary key default gen_random_uuid(),
+  code text,
+  from_warehouse_id uuid not null references public.warehouses(id) on delete cascade,
+  to_warehouse_id uuid not null references public.warehouses(id) on delete cascade,
+  product_id uuid not null references public.products(id) on delete cascade,
+  product_name text,
+  quantity numeric not null check (quantity > 0),
+  note text,
+  status text not null default 'PENDIENTE'
+    check (status in ('PENDIENTE','APROBADA','RECHAZADA','CANCELADA')),
+  requested_by uuid,
+  requested_by_name text,
+  resolved_by uuid,
+  resolved_by_name text,
+  resolved_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_transfer_requests_status on public.transfer_requests (status, created_at desc);
+create index if not exists idx_transfer_requests_to_wh on public.transfer_requests (to_warehouse_id, created_at desc);
+create unique index if not exists idx_transfer_requests_one_pending
+  on public.transfer_requests (from_warehouse_id, to_warehouse_id, product_id)
+  where status = 'PENDIENTE';
+
+-- =====================================================
+-- v5.5: daily_closures — cierre de caja diario por almacén
+-- =====================================================
+-- Snapshot del resumen del día. UNIQUE (warehouse_id, closure_date):
+-- un cierre por almacén y día (upsert al re-cerrar).
+
+create table if not exists public.daily_closures (
+  id uuid primary key default gen_random_uuid(),
+  warehouse_id uuid not null references public.warehouses(id) on delete cascade,
+  warehouse_code text,
+  warehouse_name text,
+  closure_date date not null,
+  sales_count int not null default 0,
+  units_sold int not null default 0,
+  total_usd numeric not null default 0,
+  by_currency jsonb not null default '{}',
+  top_products jsonb not null default '[]',
+  created_by uuid,
+  created_by_name text,
+  created_at timestamptz not null default now(),
+  unique (warehouse_id, closure_date)
+);
+
+create index if not exists idx_daily_closures_wh_date on public.daily_closures (warehouse_id, closure_date desc);
+create index if not exists idx_daily_closures_date on public.daily_closures (closure_date desc);

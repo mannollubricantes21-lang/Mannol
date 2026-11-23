@@ -4,7 +4,7 @@
 // =====================================================
 
 import { getStore } from "../store.js";
-import { subscribeProducts, subscribeStock, listCards, listManagers, saveSale, adjustStock, getWholesaleTier, getSuggestedPricePerBox, getSuggestedVendorCommissionPerBox, getSuggestedGestorCommissionPerBox, isWholesaleProduct, listWarehouses, resolveEffectiveWarehouse } from "../db.js";
+import { subscribeProducts, subscribeStock, listCards, listManagers, saveSale, adjustStock, getWholesaleTier, getSuggestedPricePerBox, getSuggestedVendorCommissionPerBox, getSuggestedGestorCommissionPerBox, isWholesaleProduct, listWarehouses, resolveEffectiveWarehouse, sumCartCommissions } from "../db.js";
 import { formatMoney, generateSaleId, CURRENCIES, CURRENCY_LABELS, CARD_BRANDS, getRate } from "../currency.js";
 import { enqueueSale, generateClientRef } from "../offline-sync.js";
 import { toast, icon, showModal, closeModal, esc, confirmDialog } from "../ui.js";
@@ -34,6 +34,9 @@ export function mountSalesView(container, navigate) {
   let selectedCardId = "";
   let transferAmount = 0;
   let catalogOpen = false;
+  // v5.4.0: búsqueda rápida inline + calculadora de vuelto
+  let quickSearch = "";
+  let paidWith = 0;
   // Mayorista
   let saleType = "RETAIL"; // RETAIL | WHOLESALE
   let wholesaleProduct = null; // producto seleccionado para venta mayorista
@@ -102,7 +105,7 @@ export function mountSalesView(container, navigate) {
     }
 
     container.innerHTML = `
-      <div style="display:flex;flex-direction:column;gap:1rem">
+      <div class="sale-form-panel" style="display:flex;flex-direction:column;gap:1rem">
         <div class="flex items-center justify-between">
           <div>
             <h1 class="text-xl font-bold flex items-center gap-2">${icon("cart", 20)} Venta en ${esc(wh.name)} (${esc(wh.code)})</h1>
@@ -145,9 +148,30 @@ export function mountSalesView(container, navigate) {
         </div>
         <div>
           <label class="label flex items-center gap-1">${icon("boxes", 14)} Productos de la venta</label>
+          <!-- v5.4.0: búsqueda rápida — filtra al escribir y añade con un toque (Enter = primer resultado) -->
+          <div style="position:relative;margin-top:0.375rem">
+            <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)">${icon("search", 14)}</span>
+            <input class="input" id="quick-search" placeholder="Buscar y añadir rápido (ej: 5W-30)…" value="${esc(quickSearch)}" style="padding-left:2.1rem" autocomplete="off" />
+            ${quickSearch ? `
+              <div id="quick-results" style="position:absolute;left:0;right:0;top:calc(100% + 0.25rem);z-index:30;display:flex;flex-direction:column;gap:0.25rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);padding:0.375rem;box-shadow:var(--shadow-md);max-height:16rem;overflow-y:auto">
+                ${quickMatches().length === 0
+                  ? `<div class="text-xs text-muted" style="padding:0.5rem">Sin resultados para “${esc(quickSearch)}”</div>`
+                  : quickMatches().map((p) => {
+                      const qty = getStockQty(p.id);
+                      const isOut = qty <= 0;
+                      return `
+                        <button class="btn btn-ghost btn-sm" data-quick-add="${esc(p.id)}" ${isOut ? 'disabled' : ''} style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;width:100%">
+                          <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left">${esc(p.name)}</span>
+                          <span style="flex-shrink:0;font-size:0.75rem;color:var(--text-muted)">${formatMoney(p.salePrice, "USD")} · ${isOut ? 'agotado' : `stock ${qty}`}</span>
+                        </button>
+                      `;
+                    }).join("")}
+              </div>
+            ` : ''}
+          </div>
           ${cart.length === 0 ? `
             <button class="btn btn-primary btn-block btn-lg" id="open-catalog-btn" style="justify-content:space-between">
-              <span class="flex items-center gap-2">${icon("boxes", 18)} Abrir catálogo de productos</span>
+              <span class="flex items-center gap-2">${icon("boxes", 18)} Abrir catálogo</span>
               <span class="badge">${products.filter(p => getStockQty(p.id) > 0).length} disponibles</span>
             </button>
           ` : `
@@ -157,10 +181,10 @@ export function mountSalesView(container, navigate) {
                 const stockQty = getStockQty(item.productId);
                 return `
                   <div class="cart-item" style="display:flex;align-items:center;gap:0.5rem;padding:0.625rem">
-                    <div style="flex:1;min-width:0">
+                    <div style="flex:1 1 100%;min-width:0">
                       <div class="text-sm font-medium truncate">${esc(item.name)}</div>
                       <div class="text-xs text-muted">${formatMoney(item.unitPrice, "USD")} c/u · Stock: ${stockQty + item.quantity}</div>
-                      <div class="text-xs text-muted">Comisión gestor: ${p?.gestorCommission ?? p?.commission ?? 0} ${p?.gestorCommissionCurrency ?? p?.commissionCurrency ?? "USD"} · Comisión vendedor: ${p?.vendorCommission ?? 0} ${p?.vendorCommissionCurrency ?? "MN"}</div>
+                      ${user?.role === "admin" ? `<div class="text-xs text-muted">Comisión gestor: ${p?.gestorCommission ?? p?.commission ?? 0} ${p?.gestorCommissionCurrency ?? p?.commissionCurrency ?? "USD"} · Comisión vendedor: ${p?.vendorCommission ?? 0} ${p?.vendorCommissionCurrency ?? "MN"}</div>` : ''}
                     </div>
                     <div class="flex items-center gap-1">
                       <button class="btn btn-outline btn-icon btn-sm" data-action="dec" data-idx="${i}">${icon("minus", 12)}</button>
@@ -238,6 +262,17 @@ export function mountSalesView(container, navigate) {
             <span class="flex items-center gap-2 font-semibold">${icon("dollar", 18)} Total a cobrar</span>
             <span class="text-2xl font-bold" style="color:var(--primary)">${formatMoney(cartTotal(), "USD")}</span>
           </div>
+
+          <!-- v5.4.0: calculadora de vuelto (efectivo en una sola moneda) -->
+          ${paymentMode === "SINGLE" && selectedCurrency !== "TRANSFERENCIA" ? `
+            <div class="card" style="padding:0.875rem 1rem">
+              <label class="label label-xs flex items-center gap-1">${icon("receipt", 12)} Vuelto · ¿Con cuánto paga el cliente? (${selectedCurrency})</label>
+              <input class="input" type="number" step="0.01" min="0" id="paid-with" value="${paidWith || ''}" placeholder="0.00" style="max-width:12rem" inputmode="decimal" />
+              <div class="text-sm font-semibold" id="change-due" style="margin-top:0.375rem;color:${paidWith > 0 && paidWith >= cartTotal() ? 'var(--primary)' : 'var(--text-muted)'}">
+                ${paidWith > 0 ? (paidWith >= cartTotal() ? `Vuelto: ${formatMoney(paidWith - cartTotal(), selectedCurrency)}` : `Faltan ${formatMoney(cartTotal() - paidWith, selectedCurrency)}`) : `Total: ${formatMoney(cartTotal(), selectedCurrency)}`}
+              </div>
+            </div>
+          ` : ''}
 
           <!-- Botones -->
           <div style="display:flex;flex-direction:column;gap:0.5rem">
@@ -481,6 +516,56 @@ export function mountSalesView(container, navigate) {
     const addMoreBtn = container.querySelector("#add-more-btn");
     if (addMoreBtn) addMoreBtn.addEventListener("click", () => { catalogOpen = true; renderCatalogModal(); });
 
+    // v5.4.0: búsqueda rápida — filtra al escribir; Enter añade el primer resultado
+    const quickSearchInput = container.querySelector("#quick-search");
+    if (quickSearchInput) {
+      quickSearchInput.addEventListener("input", (e) => {
+        quickSearch = e.target.value;
+        render();
+        const re = container.querySelector("#quick-search");
+        if (re) { re.focus(); re.selectionStart = re.selectionEnd = re.value.length; }
+      });
+      quickSearchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const first = quickMatches()[0];
+          if (first && getStockQty(first.id) > 0) {
+            addProduct(first.id);
+            quickSearch = "";
+            render();
+            const re = container.querySelector("#quick-search");
+            if (re) re.focus();
+          } else if (first) {
+            toast("Sin stock suficiente", "warning");
+          }
+        }
+      });
+    }
+    container.querySelectorAll("[data-quick-add]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        addProduct(btn.dataset.quickAdd);
+        quickSearch = "";
+        render();
+        const re = container.querySelector("#quick-search");
+        if (re) re.focus();
+      });
+    });
+
+    // v5.4.0: calculadora de vuelto (actualiza solo la línea, sin re-render)
+    const paidWithInput = container.querySelector("#paid-with");
+    if (paidWithInput) {
+      paidWithInput.addEventListener("input", (e) => {
+        paidWith = parseFloat(e.target.value) || 0;
+        const el = container.querySelector("#change-due");
+        if (!el) return;
+        const t = cartTotal();
+        el.textContent = paidWith > 0
+          ? (paidWith >= t ? `Vuelto: ${formatMoney(paidWith - t, selectedCurrency)}` : `Faltan ${formatMoney(t - paidWith, selectedCurrency)}`)
+          : `Total: ${formatMoney(t, selectedCurrency)}`;
+        el.style.color = paidWith >= t && paidWith > 0 ? "var(--primary)" : "var(--text-muted)";
+      });
+    }
+
     // Cart actions
     container.querySelectorAll("[data-action]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -568,6 +653,8 @@ export function mountSalesView(container, navigate) {
         multiPayments = { USD: 0, MN: 0, EUR: 0, TRANSFERENCIA: 0 };
         transferAmount = 0;
         selectedCardId = "";
+        paidWith = 0;
+        quickSearch = "";
         wholesaleProduct = null;
         wholesaleBoxes = 1;
         wholesalePricePerBox = 0;
@@ -709,6 +796,18 @@ export function mountSalesView(container, navigate) {
     renderCatalogList();
   }
 
+  // v5.4.0: productos que coinciden con la búsqueda rápida (máx 6)
+  function quickMatches() {
+    const q = quickSearch.toLowerCase().trim();
+    if (!q) return [];
+    return products
+      .filter((p) =>
+        (p.name || "").toLowerCase().includes(q) ||
+        (p.brand || "").toLowerCase().includes(q) ||
+        (p.sku || "").toLowerCase().includes(q))
+      .slice(0, 6);
+  }
+
   function addProduct(productId) {
     const p = products.find((x) => x.id === productId);
     if (!p) return;
@@ -737,6 +836,72 @@ export function mountSalesView(container, navigate) {
     }
     toast(`${p.name} agregado`, "success");
     render();
+  }
+
+  // ===== v5.4.0: ticket compartible =====
+  function buildTicketText(sale) {
+    const lines = [];
+    lines.push("MANNOL POS");
+    lines.push(`Venta ${sale.code} · ${sale.warehouseName || ""}`.trimEnd());
+    lines.push(new Date(sale.createdAt).toLocaleString("es-ES"));
+    lines.push(`Vendedor: ${sale.userName || "—"}`);
+    lines.push("--------------------------------");
+    for (const i of sale.items || []) {
+      const qtyLabel = i.isWholesale ? `${i.boxes} caja(s)` : `${i.quantity} u`;
+      lines.push(`${qtyLabel} · ${i.name} = ${formatMoney(i.subtotal, "USD")}`);
+    }
+    lines.push("--------------------------------");
+    const pay = sale.paymentMode === "MULTI"
+      ? (sale.payments || []).map((p) => `${p.currency}: ${formatMoney(p.amount, p.currency)}`).join(" + ")
+      : `${sale.currency || "USD"}: ${formatMoney(sale.totalAmount, sale.currency || "USD")}`;
+    lines.push(`Pago: ${pay}`);
+    lines.push(`TOTAL: ${formatMoney(sale.totalAmount, "USD")}`);
+    if (sale.note) lines.push(`Nota: ${sale.note}`);
+    lines.push("¡Gracias por su compra!");
+    return lines.join("\n");
+  }
+
+  function showTicketModal(sale) {
+    const text = buildTicketText(sale);
+    const close = showModal({
+      title: `${icon("check", 16)} Venta ${sale.code} registrada`,
+      body: `
+        <div style="display:flex;flex-direction:column;gap:0.75rem">
+          <pre style="margin:0;padding:0.875rem;background:var(--bg-soft);border:1px dashed var(--border);border-radius:var(--radius);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.75rem;white-space:pre-wrap;overflow-x:auto">${esc(text)}</pre>
+          <p class="text-xs text-muted" style="margin:0">Compártelo con el cliente (WhatsApp/SMS) o cópialo al portapapeles.</p>
+        </div>
+      `,
+      footer: `
+        <button class="btn btn-outline" id="ticket-copy">${icon("receipt", 14)} Copiar</button>
+        <button class="btn btn-primary" id="ticket-share">${icon("zap", 14)} Compartir</button>
+        <button class="btn btn-ghost" id="ticket-close">Cerrar</button>
+      `,
+    });
+    document.querySelector("#ticket-close").addEventListener("click", close);
+    document.querySelector("#ticket-copy").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        toast("Ticket copiado al portapapeles", "success");
+      } catch {
+        toast("No se pudo copiar automáticamente", "warning");
+      }
+    });
+    document.querySelector("#ticket-share").addEventListener("click", async () => {
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: `Venta ${sale.code} · MANNOL`, text });
+        } catch (err) {
+          if (err?.name !== "AbortError") toast("No se pudo compartir", "warning");
+        }
+      } else {
+        try {
+          await navigator.clipboard.writeText(text);
+          toast("Compartir no disponible · Ticket copiado", "info");
+        } catch {
+          toast("Compartir no disponible en este navegador", "warning");
+        }
+      }
+    });
   }
 
   async function handleRegister() {
@@ -802,17 +967,13 @@ export function mountSalesView(container, navigate) {
       }];
       stockAdjustments = [{ productId: wholesaleProduct.id, quantity: totalUnits }];
     } else {
-      // Retail: cálculo existente
-      for (const item of cart) {
-        const gCom = item.gestorCommission || 0;
-        const gCurr = item.gestorCommissionCurrency || "USD";
-        const vCom = item.vendorCommission || 0;
-        const vCurr = item.vendorCommissionCurrency || "MN";
-        if (gCurr === "USD") gestorCommissionUSD += gCom * item.quantity;
-        else gestorCommissionMN += gCom * item.quantity;
-        if (vCurr === "USD") vendorCommissionUSD += vCom * item.quantity;
-        else vendorCommissionMN += vCom * item.quantity;
-      }
+      // Retail: comisiones via helper puro (tests/sale-commissions.test.js)
+      ({
+        gestorCommissionUSD,
+        gestorCommissionMN,
+        vendorCommissionUSD,
+        vendorCommissionMN,
+      } = sumCartCommissions(cart));
       saleItems = cart.map((i) => ({ ...i }));
       stockAdjustments = cart.map((i) => ({ productId: i.productId, quantity: i.quantity }));
     }
@@ -891,6 +1052,7 @@ export function mountSalesView(container, navigate) {
       if (!navigator.onLine) {
         enqueueSale(sale);
         toast(`Venta ${sale.code} guardada sin conexión · Se subirá automáticamente`, "info");
+        showTicketModal(sale);
       } else {
         sale.clientRef = generateClientRef();
         await saveSale(sale);
@@ -900,6 +1062,7 @@ export function mountSalesView(container, navigate) {
         }
         sale.syncedAt = Date.now();
         toast(`Venta ${sale.code} registrada${saleType === "WHOLESALE" ? " (mayorista)" : ""}${weekendRedirect ? " · " + finalWh.name : ""}`, "success");
+        showTicketModal(sale);
       }
       // Limpiar
       cart = [];
@@ -909,6 +1072,8 @@ export function mountSalesView(container, navigate) {
       multiPayments = { USD: 0, MN: 0, EUR: 0, TRANSFERENCIA: 0 };
       transferAmount = 0;
       selectedCardId = "";
+      paidWith = 0;
+      quickSearch = "";
       wholesaleProduct = null;
       wholesaleBoxes = 1;
       wholesalePricePerBox = 0;
@@ -919,6 +1084,7 @@ export function mountSalesView(container, navigate) {
       console.error("Sale save failed, enqueuing for retry:", err);
       enqueueSale(sale);
       toast(`Venta ${sale.code} guardada en cola · Se sincronizará automáticamente`, "warning");
+      showTicketModal(sale);
       cart = [];
       note = "";
       selectedManagerCode = "";

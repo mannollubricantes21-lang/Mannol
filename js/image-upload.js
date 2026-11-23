@@ -97,12 +97,53 @@ function loadImage(src) {
 }
 
 /**
- * Sube una imagen a Supabase Storage y devuelve la URL pública.
+ * Genera la miniatura (max 200px) a partir del WebP ya convertido.
+ * Se guarda como {nombre}-thumb.webp y se usa en listados/tarjetas
+ * para no cargar la imagen completa (ahorra ~90% de peso al listar).
+ */
+const THUMB_MAX = 200;
+const THUMB_QUALITY = 0.72;
+
+async function createThumb(sourceBlob) {
+  const objectUrl = URL.createObjectURL(sourceBlob);
+  try {
+    const img = await loadImage(objectUrl);
+    let { width, height } = img;
+    if (width > THUMB_MAX || height > THUMB_MAX) {
+      const ratio = Math.min(THUMB_MAX / width, THUMB_MAX / height);
+      width = Math.round(width * ratio);
+      height = Math.round(height * ratio);
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, 0, 0, width, height);
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error("Error al generar miniatura"));
+        },
+        "image/webp",
+        THUMB_QUALITY
+      );
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+/**
+ * Sube una imagen a GitHub (prioridad) o Supabase Storage y devuelve la URL pública.
  * Si Supabase no está configurado (modo demo), devuelve un data URL.
+ * Siempre genera además una miniatura 200px (`thumbUrl`) para los listados.
  *
  * @param {File} file - Archivo de imagen subido por el usuario
  * @param {string} bucket - Bucket en Storage ("products" o "images")
- * @returns {Promise<{url: string, originalSize: number, webpSize: number, savedPct: number}>}
+ * @returns {Promise<{url: string, thumbUrl: ?string, originalSize: number, webpSize: number, thumbSize: number, savedPct: number, storage: string}>}
  */
 export async function uploadImageAsWebP(file, bucket = "products") {
   const originalSize = file.size;
@@ -112,16 +153,34 @@ export async function uploadImageAsWebP(file, bucket = "products") {
   const webpSize = webpBlob.size;
   const savedPct = Math.round((1 - webpSize / originalSize) * 100);
 
-  // 2. Generar nombre único: {timestamp}-{random}.webp
+  // 1b. Generar la miniatura (200px) para listados — si falla, no bloquea la carga
+  let thumbBlob = null;
+  try {
+    thumbBlob = await createThumb(webpBlob);
+  } catch (err) {
+    console.warn("[ImageUpload] miniatura falló:", err);
+  }
+
+  // 2. Generar nombre único: {timestamp}-{random}.webp (+ -thumb.webp)
   const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.webp`;
+  const thumbFilename = filename.replace(/\.webp$/, "-thumb.webp");
 
   // 3. PRIORIDAD: GitHub (no agota el espacio de Supabase).
   //    Configurable en Admin → Sistema → Almacenamiento.
   if (await isGitHubConfigured()) {
     try {
       const result = await uploadImageToGitHub(webpBlob, filename);
+      let thumbUrl = null;
+      if (thumbBlob) {
+        try {
+          const th = await uploadImageToGitHub(thumbBlob, thumbFilename);
+          thumbUrl = th.url;
+        } catch (err) {
+          console.warn("[ImageUpload] miniatura a GitHub falló:", err);
+        }
+      }
       console.info(`[ImageUpload] Subido a GitHub: ${result.path} (${formatSize(webpSize)})`);
-      return { url: result.url, originalSize, webpSize, savedPct, storage: "github" };
+      return { url: result.url, thumbUrl, originalSize, webpSize, thumbSize: thumbBlob?.size || 0, savedPct, storage: "github" };
     } catch (err) {
       // Si GitHub falla (token, red, permiso) cae a Supabase para no bloquear la carga
       console.warn("[ImageUpload] GitHub falló, usando Supabase Storage:", err);
@@ -147,8 +206,24 @@ export async function uploadImageAsWebP(file, bucket = "products") {
       const url = urlData?.publicUrl;
       if (!url) throw new Error("No se pudo obtener URL pública");
 
+      // Miniatura al mismo bucket (best-effort)
+      let thumbUrl = null;
+      if (thumbBlob) {
+        try {
+          const { error: thumbError } = await s.storage
+            .from(bucket)
+            .upload(thumbFilename, thumbBlob, { contentType: "image/webp", upsert: false });
+          if (!thumbError) {
+            const { data: thumbUrlData } = s.storage.from(bucket).getPublicUrl(thumbFilename);
+            thumbUrl = thumbUrlData?.publicUrl || null;
+          }
+        } catch (err) {
+          console.warn("[ImageUpload] miniatura a Storage falló:", err);
+        }
+      }
+
       console.info(`[ImageUpload] Subido a Supabase Storage: ${bucket}/${fullPath} (${formatSize(webpSize)})`);
-      return { url, originalSize, webpSize, savedPct, storage: "supabase" };
+      return { url, thumbUrl, originalSize, webpSize, thumbSize: thumbBlob?.size || 0, savedPct, storage: "supabase" };
     } catch (err) {
       console.error("[ImageUpload] Error subiendo a Storage:", err);
       throw new Error("Error al subir imagen a Supabase Storage: " + (err.message || err));
@@ -157,8 +232,12 @@ export async function uploadImageAsWebP(file, bucket = "products") {
 
   // 5. Modo demo: convertir a data URL (base64)
   const dataUrl = await blobToDataURL(webpBlob);
+  let thumbUrl = null;
+  try {
+    if (thumbBlob) thumbUrl = await blobToDataURL(thumbBlob);
+  } catch {}
   console.info(`[ImageUpload] Modo demo — data URL (${formatSize(webpSize)})`);
-  return { url: dataUrl, originalSize, webpSize, savedPct, storage: "dataurl" };
+  return { url: dataUrl, thumbUrl, originalSize, webpSize, thumbSize: thumbBlob?.size || 0, savedPct, storage: "dataurl" };
 }
 
 function blobToDataURL(blob) {

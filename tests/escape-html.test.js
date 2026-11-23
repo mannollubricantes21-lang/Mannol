@@ -6,7 +6,8 @@ import { escapeHtml, esc } from "../js/ui.js";
 
 describe("escapeHtml", () => {
   it("escapa < y >", () => {
-    expect(escapeHtml("<script>alert('xss')</script>")).toBe("&lt;script&gt;alert('xss')&lt;/script&gt;");
+    // La implementación también escapa comillas simples (más seguro) — ver test siguiente
+    expect(escapeHtml("<script>alert('xss')</script>")).toBe("&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;");
   });
 
   it("escapa comillas dobles", () => {

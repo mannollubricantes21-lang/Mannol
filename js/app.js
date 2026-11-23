@@ -8,6 +8,7 @@ import { isSupabaseConfiguredAsync } from "./supabase.js";
 import { setupAutoSync } from "./offline-sync.js";
 import { setupGlobalSearch } from "./global-search.js";
 import { askPermission, notifyConnectionRestored } from "./push-notify.js";
+import { setupUpdateBanner } from "./update-banner.js";
 import { mountHomeView } from "./views/home.js";
 import { mountPinLoginView } from "./views/pin-login.js";
 import { mountUserLoginView } from "./views/user-login.js";
@@ -128,6 +129,8 @@ function init() {
   }
 
   const navigate = (view) => {
+    // v5.4.0: recordar el último destino para reabrirlo al volver
+    try { localStorage.setItem("mannol-last-view", view); } catch {}
     setUrlView(view);
     renderView(container, view, navigate);
   };
@@ -146,6 +149,18 @@ function init() {
     // v5.1.4: el admin aterriza en el home-hub (PIN + acceso al panel);
     // el resto de roles con sesión, en su dashboard.
     initialView = user && user.role !== "admin" ? "dashboard" : "home";
+    // v5.4.0: abrir en el último destino del dispositivo. Solo aplica al
+    // admin (los demás roles son redirigidos a dashboard de todas formas).
+    // "pin" solo si quedó un almacén activo de la sesión anterior.
+    if (user && user.role === "admin") {
+      try {
+        const last = localStorage.getItem("mannol-last-view");
+        const hasPinSession = store.getState().authMode === "pin" && !!store.getState().currentWarehouse;
+        if (last === "dashboard" || last === "home" || (last === "pin" && hasPinSession)) {
+          initialView = last;
+        }
+      } catch {}
+    }
   }
 
   console.info("[App] rendering initial view:", initialView);
@@ -284,11 +299,5 @@ try {
   }
 }
 
-// Register service worker (skip on file:// protocol)
-if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js", { scope: "./" })
-      .then((reg) => console.info("[SW] registered:", reg.scope))
-      .catch((err) => console.warn("[SW] registration failed:", err));
-  });
-}
+// Register service worker + banner "Nueva versión disponible" (skip on file://)
+setupUpdateBanner({ register: true });

@@ -1,5 +1,182 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.6.0 (2026-11-23) — Notificaciones en vivo + reportes de cierres
+
+> Sin migración SQL nueva — usa las tablas de v5.5 (`transfer_requests`, `daily_closures`).
+> Si vienes de v5.4 o anterior, ejecuta primero `migration-v5.5-transfers-closures.sql`.
+
+### 🔔 Notificaciones en vivo de solicitudes
+- **El admin se entera al momento**: suscripción en tiempo real (Supabase Realtime sobre
+  `transfer_requests`). Cuando el personal envía una solicitud llega, sin recargar:
+  beep corto (WebAudio, sin archivos), toast, banner destacado arriba del contenido con
+  botón **Ver** (salta a Transferencias → Solicitudes) y el badge rojo de la sidebar se
+  actualiza al instante.
+- **Notification API**: si el navegador lo permite, además llega una notificación del sistema
+  (con `tag` para no duplicar). Botón **"🔔 Activar notificaciones"** en la sidebar cuando el
+  permiso aún no se otorgó ni se denegó.
+- No notifica lo ya existente: solo solicitudes nuevas desde que abriste el panel.
+- En demo el flujo completo es probabable: localStorage emite el evento `mannol-demo-requests-changed`.
+
+### 📊 Reporte de cierres comparativo (admin → Cierres de caja)
+- **Chips de período**: Esta semana (arranca lunes) / Este mes / Últimos 30 días.
+- **Resumen del período**: total recaudado (+ promedio/día), ventas, unidades, cierres
+  registrados y ticket promedio.
+- **Comparativa por almacén** con barras (total USD) y promedio diario por local.
+- **Top productos del período** agregados entre todos los cierres (máx 8).
+- **Tabla por almacén** con cierres/ventas/unidades/total/prom-día/ticket-promedio y
+  **export CSV del reporte** (`reporte-cierres-week|month|30d.csv`).
+
+### 🧱 Técnico
+- `sales-stats.js`: `reportPeriodRange` + `aggregateClosuresReport` + `dateKeyToMs` (puras, testeadas).
+- `db.js`: `subscribeTransferRequests` (Realtime en producción, evento demo en localStorage);
+  los writes demo emiten el evento para que la suscripción reaccione en vivo.
+- `js/version.js` → 5.6.0 · `sw.js` CACHE v24 · 8 tests nuevos (95 total).
+
+## v5.5.0 (2026-11-21) — FLUJO DE NEGOCIO: solicitudes de traspaso y cierre de caja
+
+> ⚠️ **Requiere migración SQL (una vez)**: ejecutar `supabase/migration-v5.5-transfers-closures.sql`
+> en Supabase → SQL Editor. Crea 2 tablas (`transfer_requests`, `daily_closures`) con RLS e índices.
+> Sin la migración la app sigue funcionando; los dos flujos nuevos solo operan tras ejecutarla.
+
+### 📦 Solicitudes de traspaso (personal ↔ admin)
+- **El empleado pide mercancía**: en el interior del almacén, tab "Otros almacenes" → botón
+  **Solicitar traspaso** por producto (elige almacén origen con disponibilidad, cantidad y nota).
+- **"Mis solicitudes"** al pie del inventario: últimas 5 con estado (PENDIENTE / APROBADA / RECHAZADA).
+- **El admin resuelve en Transferencias → "Solicitudes del personal"**: Aprobar mueve el stock
+  (TRANSFERENCIA_SALIDA del origen + TRANSFERENCIA_ENTRADA al destino, con auditoría), Rechazar no
+  toca stock. El badge rojo de la sidebar ahora suma transferencias + solicitudes pendientes.
+- Regla anti-duplicados: índice único en BD — máx 1 solicitud PENDIENTE por (origen, destino, producto).
+- Máquina de estados cerrada: PENDIENTE → {APROBADA, RECHAZADA, CANCELADA}; los finales no reabren.
+
+### 💰 Cierre de caja diario
+- **Interior del almacén → tarjeta "Cierre de caja"**: ventas/unidades/total del DÍA + desglose por
+  moneda (siempre hoy, independiente del período elegido en el resumen).
+- **"Cerrar caja de hoy"** guarda el snapshot; si ya había uno se actualiza con confirmación.
+- **"Últimos cierres"** (7) plegable con fecha, ventas y responsable.
+- **Admin → Sistema → "Cierres de caja"**: todos los almacenes con resumen por local, filtro,
+  detalle por moneda y export CSV (columnas listas para Excel).
+
+### 🧱 Técnico
+- `js/sales-stats.js` nuevo: lógica pura compartida (stats de cierre + validación/máquina de estados
+  de solicitudes) — testeada.
+- Migración `migration-v5.5-transfers-closures.sql` + `schema.sql` actualizado para instalaciones nuevas.
+- RLS por tabla: empleados escriben solicitudes y cierres; solo admins las resuelven.
+- Demo: solicitudes y cierres persisten en localStorage (con seeds) para probar el flujo completo
+  sin Supabase.
+- `js/version.js` → 5.5.0 · `sw.js` CACHE v23 · 14 tests nuevos (87 total).
+
+## v5.4.0 (2026-11-21) — UX: vender más rápido y panel más cómodo
+
+### ⚡ POS (app del vendedor)
+- **Búsqueda rápida inline**: en "Registrar venta" un buscador filtra productos al escribir y
+  añade con un toque (Enter añade el primero). Ya no hace falta abrir el catálogo modal para
+  la venta típica de 1-2 productos.
+- **Calculadora de vuelto**: bajo el total, "¿Con cuánto paga el cliente?" — calcula el vuelto
+  en la moneda seleccionada (efectivo, una sola moneda) o cuánto falta.
+- **Ticket compartible**: al registrar la venta (online, offline o en cola) se abre un modal con
+  el ticket y botones Compartir (Web Share → WhatsApp/SMS) y Copiar.
+- **Comisiones solo para admins**: la línea "Comisión gestor/vendedor" de cada item del carrito
+  ya solo la ve el admin — al vendedor le muestra el carrito limpio.
+
+### 🏪 App del vendedor / interior de almacén
+- **Resumen sin tiles en cero**: las KPIs muestran solo las monedas con actividad; las que están
+  en 0 se resumen en una línea ("Sin movimiento: EUR · Transf.") en vez de ocupar media pantalla.
+- **Badges de stock clicables**: "2 bajo" / "1 agotado" ahora FILTRAN la lista al tocarlos
+  (segundo toque quita el filtro); lista vacía con CTA "Limpiar filtros".
+- **Header sin código duplicado**: "Empleado · VIB · VIB" → "Empleado · Víbora".
+
+### 🏠 Home y navegación
+- **Hero compacto**: el bloque de marca ocupa una línea y las tasas/almacenes quedan visibles
+  al abrir la app.
+- **Banner de configuración descartable**: "No volver a mostrar" guarda la preferencia por
+  dispositivo (el asistente sigue disponible en setup.html).
+- **Abrir en el último destino**: la app recuerda la última vista del admin (dashboard, PIN o
+  home) y reabre ahí al volver; los demás roles siguen entrando a su dashboard.
+
+### 🖥️ Panel admin
+- **Accesos rápidos compactos**: las 3 filas de tarjetas grandes se convirtieron en chips en
+  una sola banda — las KPIs y gráficos quedan en la primera pantalla.
+- **Tabla de Productos más densa**: la columna Marca se fusionó en el nombre y las comisiones
+  G/V son un solo chip — más ancho para lo importante.
+- **Sparklines con tooltip**: al pasar el mouse/dedo sobre la micro-tendencia de cada KPI se ve
+  la fecha y el valor del día.
+- **Export CSV en Productos y Usuarios** (además del de ventas/movimientos que ya existía):
+  exporta lo filtrado, con las columnas listas para Excel.
+
+### 🧰 Pulidos
+- Targets táctiles ≥44px en botones de icono para pantallas táctiles (`pointer: coarse`).
+- Búsqueda del historial ahora también cubre la **nota** y los **nombres de productos** de cada venta.
+
+### Notas
+- Sin cambios de esquema ni migración SQL en esta versión.
+- `js/version.js` → 5.4.0 · `sw.js` CACHE v22 · `package.json` 5.4.0.
+
+## v5.3.0 (2026-11-21) — MEJORAS: performance, filtros, imágenes más livianas y robustez offline
+
+### ⚡ Performance (dashboard y consultas)
+- **Dashboard ya no trae TODAS las ventas históricas**: `listSales({})` → `listSales({ from: ... })` y
+  db.js filtra `created_at` EN LA BASE DE DATOS (índice `created_at`) con `.gte()/.lte()` en vez de
+  traer todo y filtrar en el cliente. Con miles de ventas el panel vuelve a ser rápido.
+- **Movimientos de stock**: buscador de texto (producto, usuario, nota, motivo) + **paginación**
+  (50 por página con Anterior/Siguiente; las stats se calculan sobre todo el filtrado, no la página).
+- `listStockMovements` acepta `from/to` en la query (server-side).
+
+### 🖼️ Imágenes (GitHub + WebP + miniaturas)
+- **Miniatura 200px automática**: al subir una imagen se generan DOS archivos WebP — la principal
+  (máx 1200px) y `{nombre}-thumb.webp` (máx 200px) — en GitHub (Contents API), Supabase Storage o
+  data URL según la config. Nuevo campo `products.thumb_url`.
+- **La tabla de Productos ahora muestra la miniatura** de cada producto (antes texto solamente).
+- Nuevo `supabase/migration-v5.3-improvements.sql` (ejecutar en SQL Editor) + `schema.sql` actualizado
+  para instalaciones nuevas. Al cambiar/borrar imagen se limpia también la miniatura huérfana.
+
+### 🎛️ Panel admin más cómodo
+- **Filtros en las tablas**: Productos (buscar por nombre/marca/SKU + categoría + estado activo/inactivo),
+  Usuarios (buscar + rol), Movimientos (texto libre). Los filtros restauran el foco tras re-render.
+- **Precios en lote**: botón "Precios en lote" en Productos — cambia el precio de todos los productos
+  filtrados a la vez (% / monto fijo / precio exacto) con vista previa y confirmación.
+- **Sparklines en las KPI cards** del dashboard (Ingresos/Ventas/Unidades: micro-tendencia de `N` días,
+  nuevo helper `sparkline()` en charts.js).
+- **Exportar CSV del período** junto a los botones 7d/30d/90d/1 año.
+- **Paleta de comandos Ctrl+K adaptada al admin**: secciones reales del panel + acciones rápidas
+  (precios en lote, comparar almacenes, tema, refrescar). `global-search.js` ahora acepta
+  `navItems`/`extraActions`; admin.js expone `window.__adminNavigateTo`.
+- **Alertas de stock bajo al abrir el admin** (1 vez por día): toast + notificación push con los
+  productos en el mínimo (`notifyLowStock` en push-notify.js).
+
+### 📲 PWA — actualizaciones visibles
+- **Banner "Nueva versión disponible"** (`js/update-banner.js`): cuando sw.js trae cambios, el
+  usuario ve el banner con botón «Actualizar» (SKIP_WAITING + recarga) en vez de esperar.
+  admin.html ahora TAMBIÉN registra el service worker aunque se abra directo.
+- sw.js: caché v21 + handler de mensajes SKIP_WAITING.
+
+### 🛡️ Robustez (requiere ejecutar el SQL nuevo)
+- **Descuento de stock atómico al sincronizar ventas offline**: nueva RPC `deduct_sale_stock` —
+  solo descuenta si hay stock suficiente, así dos puestos que vendieron lo mismo sin internet
+  **ya no dejan el inventario en negativo**. Los items sin stock vuelven en `shortages` y la app
+  avisa "venta sincronizada con revisión". Fallback automático al desconto clásico si la RPC no
+  está instalada (instalaciones viejas siguen funcionando).
+- **Auditoría de PIN**: cada intento fallido queda en la nueva tabla `pin_attempts` (best-effort,
+  no bloquea nada si falla) — detección de accesos no autorizados.
+
+### ✨ Pulido
+- **Focus trap completo en modales** (Tab cicla dentro, foco restaurado al cerrar) — ui.js.
+- **Copys unificados** al español neutro: eliminados los restos de voseo ("Tenés", "Seleccioná",
+  "Conectá", "Volvé", "Hacé", "¿No sos administrador?"...) para la audiencia cubana.
+
+### 🧪 Tests
+- Nuevo `tests/sale-commissions.test.js` (6): helper puro `sumCartCommissions()` extraído del
+  checkout retail de sales.js — el cálculo de comisiones ahora está testeado.
+- Nuevo `tests/weekend-rule.test.js` (9): regla de fin de semana (`shouldRedirectWeekend` +
+  `resolveEffectiveWarehouse`) — redirección, auditoría, fallbacks y días hábiles.
+- Suite completa: **8 archivos, 73 tests OK**.
+
+### ⚠️ PASO MANUAL (una vez): ejecutar `supabase/migration-v5.3-improvements.sql` en Supabase → SQL Editor.
+- Añade `products.thumb_url`, la RPC `deduct_sale_stock` y la tabla `pin_attempts` (idempotente).
+- Sin ejecutarlo, la app sigue funcionando (miniaturas fallan silenciosamente y el desconto usa el método clásico).
+
+### Versiones
+- sw.js: caché v21. package.json 5.3.0. js/version.js 5.3.0.
+
 ## 🆕 Archivos nuevos añadidos (v5.0.0)
 
 | # | Archivo | Tamaño | Descripción |

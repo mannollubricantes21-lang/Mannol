@@ -48,7 +48,14 @@ const NAV_ITEMS = [
   { id: "admin", label: "Panel admin", icon: "shield", section: "Navegación" },
 ];
 
-export function setupGlobalSearch(navigate) {
+/**
+ * Instala la paleta Ctrl+K.
+ * @param {(id: string) => void} navigate - navega a una vista/sección
+ * @param {Object} [opts] - { navItems?: Array, extraActions?: Array<{label, icon, sub?, run}> }
+ *   navItems reemplaza la lista de vistas (p.ej. secciones del panel admin);
+ *   extraActions añade acciones ejecutables al final de la búsqueda.
+ */
+export function setupGlobalSearch(navigate, opts = {}) {
   if (_installed) return;
   _installed = true;
 
@@ -56,16 +63,17 @@ export function setupGlobalSearch(navigate) {
   document.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
       e.preventDefault();
-      openSearch(navigate);
+      openSearch(navigate, opts);
     }
   });
 
   // Also expose a global function for manual trigger from a button
-  window.__openGlobalSearch = () => openSearch(navigate);
+  window.__openGlobalSearch = () => openSearch(navigate, opts);
 }
 
-function openSearch(navigate) {
+function openSearch(navigate, opts = {}) {
   refreshCache();
+  const navList = Array.isArray(opts.navItems) && opts.navItems.length > 0 ? opts.navItems : NAV_ITEMS;
 
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
@@ -101,10 +109,18 @@ function openSearch(navigate) {
     q = (q || "").toLowerCase().trim();
     const groups = [];
 
-    // Group 1: Navigation
-    const navMatches = NAV_ITEMS.filter((n) => !q || n.label.toLowerCase().includes(q)).slice(0, 5);
-    if (navMatches.length > 0) {
-      groups.push({ section: "Navegación", items: navMatches.map((n) => ({ type: "nav", id: n.id, label: n.label, sub: "Vista", icon: n.icon })) });
+    // Group 1: Navigation (+ acciones rápidas si el panel las define)
+    const actions = (opts.extraActions || [])
+      .filter((a) => !q || a.label.toLowerCase().includes(q))
+      .slice(0, 5)
+      .map((a) => ({ type: "action", label: a.label, sub: a.sub || "Acción", icon: a.icon || "arrowRight", run: a.run }));
+    const navMatches = navList.filter((n) => !q || n.label.toLowerCase().includes(q)).slice(0, 5);
+    const navItems = [
+      ...actions,
+      ...navMatches.map((n) => ({ type: "nav", id: n.id, label: n.label, sub: n.sub || "Vista", icon: n.icon })),
+    ];
+    if (navItems.length > 0) {
+      groups.push({ section: "Navegación", items: navItems });
     }
 
     // Group 2: Products
@@ -214,7 +230,9 @@ function openSearch(navigate) {
 
 function selectResult(item, navigate, close) {
   close();
-  if (item.type === "nav") {
+  if (item.type === "action") {
+    item.run?.();
+  } else if (item.type === "nav") {
     navigate(item.id);
   } else if (item.type === "product") {
     navigate("catalog");

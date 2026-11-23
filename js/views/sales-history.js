@@ -55,10 +55,14 @@ export function mountSalesHistoryView(container, navigate) {
       }
       if (search) {
         const q = search.toLowerCase();
+        const inNote = (s.note || "").toLowerCase().includes(q);
+        const inItems = (s.items || []).some((i) =>
+          (i.name || i.productName || "").toLowerCase().includes(q));
         if (!s.code.toLowerCase().includes(q) &&
             !(s.userName || "").toLowerCase().includes(q) &&
             !(s.managerName || "").toLowerCase().includes(q) &&
-            !(s.customerName || "").toLowerCase().includes(q)) return false;
+            !(s.customerName || "").toLowerCase().includes(q) &&
+            !inNote && !inItems) return false;
       }
       return true;
     });
@@ -104,7 +108,7 @@ export function mountSalesHistoryView(container, navigate) {
             <div class="flex gap-2 flex-wrap" style="gap:0.5rem">
               <div style="position:relative;flex:1;min-width:12rem">
                 <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)" aria-hidden="true">${icon("search", 16)}</span>
-                <input class="input" placeholder="Buscar por código, vendedor, gestor, cliente..." id="search-input" value="${search}" style="padding-left:2.25rem" aria-label="Buscar ventas" />
+                <input class="input" placeholder="Buscar por código, vendedor, gestor, cliente, nota o producto..." id="search-input" value="${search}" style="padding-left:2.25rem" aria-label="Buscar ventas" />
               </div>
               <select class="select" id="status-filter" style="width:9rem" aria-label="Filtrar por estado">
                 <option value="all" ${statusFilter === "all" ? "selected" : ""}>Todos</option>

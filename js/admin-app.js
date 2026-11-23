@@ -18,9 +18,16 @@
 import { getStore, applyTheme } from "./store.js";
 import { getSupabase, isSupabaseConfiguredAsync, isSupabaseConfigured } from "./supabase.js";
 import { logout, loginWithEmail } from "./auth.js";
-import { toast, icon } from "./ui.js";
+import { toast, icon, esc } from "./ui.js";
 import { setupGlobalSearch } from "./global-search.js";
+import { setupUpdateBanner } from "./update-banner.js";
+import { notifyLowStock } from "./push-notify.js";
 import { mountAdminPanel } from "./views/admin.js";
+
+// Registro del service worker + banner "Nueva versión disponible".
+// admin.html se puede abrir directo sin pasar por index — así el SW
+// también se registra desde acá y el admin recibe las actualizaciones.
+setupUpdateBanner({ register: true });
 
 // ===== Bootstrap =====
 async function init() {
@@ -85,11 +92,11 @@ async function init() {
   store.setUser(profile);
   store.setAuthMode("user");
 
-  // Setup global search (Ctrl+K)
-  setupGlobalSearch(() => {});
-
+  // Setup global search (Ctrl+K) + montar panel + alertas de stock bajo
+  setupAdminSearch();
   mountAdminPanel(container, profile);
   setupAdminShell(container, profile);
+  checkLowStockOnce();
 
   console.info("[Admin] init done");
 }
@@ -98,6 +105,88 @@ function setupAdminShell(container, user) {
   // The admin panel handles its own internal navigation,
   // but we add a top bar with logout + back to app.
   // This is done inside mountAdminPanel via the shell wrapper.
+}
+
+// =====================================================
+// Paleta de comandos (Ctrl+K) adaptada al admin:
+// secciones reales del panel + acciones rápidas.
+// =====================================================
+function setupAdminSearch() {
+  setupGlobalSearch((id) => {
+    if (window.__adminNavigateTo) window.__adminNavigateTo(id);
+    else window.location.href = "./admin.html";
+  }, {
+    navItems: [
+      { id: "dashboard", label: "Dashboard", icon: "home" },
+      { id: "users", label: "Usuarios", icon: "userCog" },
+      { id: "products", label: "Productos", icon: "tags" },
+      { id: "categories", label: "Categorías", icon: "tags" },
+      { id: "warehouses", label: "Almacenes", icon: "store" },
+      { id: "stock", label: "Stock general", icon: "boxes" },
+      { id: "managers", label: "Gestores", icon: "users" },
+      { id: "cards", label: "Tarjetas", icon: "creditCard" },
+      { id: "warehouseCommissions", label: "Comisiones locales", icon: "wallet" },
+      { id: "profit", label: "Ganancia/Inversión", icon: "trendingUp" },
+      { id: "rates", label: "Tasas", icon: "trendingUp" },
+      { id: "transfers", label: "Transferencias", icon: "arrowLeftRight" },
+      { id: "movements", label: "Movimientos de stock", icon: "listTree" },
+      { id: "storage", label: "Almacenamiento de imágenes", icon: "cloud" },
+      { id: "weekend", label: "Regla de fin de semana", icon: "calendar" },
+      { id: "audit", label: "Auditoría", icon: "receipt" },
+    ],
+    extraActions: [
+      { label: "Precios en lote (ir a Productos)", icon: "dollar", run: () => window.__adminNavigateTo?.("products") },
+      { label: "Comparar stock entre almacenes", icon: "boxes", run: () => window.__adminNavigateTo?.("stock") },
+      { label: "Registrar venta (app vendedor)", icon: "cart", run: () => { window.location.href = "./index.html?view=dashboard"; } },
+      { label: "Cambiar tema claro/oscuro", icon: "moon", run: () => document.querySelector("#admin-theme")?.click() },
+      { label: "Refrescar datos", icon: "refresh", run: () => document.querySelector("#admin-refresh")?.click() },
+    ],
+  });
+}
+
+// =====================================================
+// Alertas de stock bajo — al abrir el admin, revisa el inventario
+// y avisa (toast + notificación) si hay productos en el mínimo.
+// Se repite como máximo 1 vez por día (localStorage).
+// =====================================================
+async function checkLowStockOnce() {
+  try {
+    const { listProducts, listAllStockAcrossWarehouses } = await import("./db.js");
+    const [products, stock] = await Promise.all([listProducts(), listAllStockAcrossWarehouses()]);
+    const pMap = new Map(products.map((p) => [p.id, p]));
+    const low = [];
+    for (const st of stock) {
+      const p = pMap.get(st.productId);
+      if (!p || p.active === false) continue;
+      const min = p.minStock ?? 0;
+      if (min > 0 && st.quantity <= min) {
+        low.push({
+          productId: p.id,
+          name: p.name,
+          qty: st.quantity,
+          minStock: min,
+          warehouseName: st.warehouseName,
+          warehouseId: st.warehouseId,
+        });
+      }
+    }
+    if (low.length === 0) return;
+
+    // Throttle: máximo 1 aviso por día por dispositivo
+    const today = new Date().toISOString().slice(0, 10);
+    const KEY = "mannol-lowstock-notified";
+    let last = {};
+    try { last = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch {}
+    if (last.date === today) return;
+    last.date = today;
+    try { localStorage.setItem(KEY, JSON.stringify(last)); } catch {}
+
+    // Toast (visible aunque la app esté en foco) + notificación push si hay permiso
+    toast(`⚠️ Stock bajo en ${low.length} producto(s) — revisa Stock general`, "warning", 6000);
+    notifyLowStock(low);
+  } catch (err) {
+    console.warn("[Admin] checkLowStockOnce falló:", err);
+  }
 }
 
 // =====================================================
@@ -120,11 +209,11 @@ function renderNeedsConfig(container) {
         <div class="admin-content">
           <div class="empty-state" style="padding: 3rem 1.5rem">
             <div class="empty-state-icon" style="color: var(--primary)">${icon("droplet", 32)}</div>
-            <p class="empty-state-title">Conectá Supabase en este dispositivo</p>
-            <p class="empty-state-desc">Este navegador todavía no tiene las credenciales de tu Supabase. Conectá una sola vez y después entrás solo con tu email y contraseña.</p>
+            <p class="empty-state-title">Conecta Supabase en este dispositivo</p>
+            <p class="empty-state-desc">Este navegador todavía no tiene las credenciales de tu Supabase. Conecta una sola vez y después entrás solo con tu email y contraseña.</p>
             <div style="margin-top: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem; max-width: 24rem; margin-left: auto; margin-right: auto;">
               <a href="./setup.html" class="btn btn-primary" style="text-decoration:none">${icon("zap", 14)} Conectar Supabase (1 min)</a>
-              <p class="text-xs text-muted text-center" style="margin-top:0.5rem">¿Ya lo conectaste antes? Tu navegador borró la configuración. Volvé a hacer el wizard paso 5 (pegar URL + key) y listo.</p>
+              <p class="text-xs text-muted text-center" style="margin-top:0.5rem">¿Ya lo conectaste antes? Tu navegador borró la configuración. Vuelve a hacer el wizard paso 5 (pegar URL + key) y listo.</p>
             </div>
           </div>
         </div>
@@ -166,7 +255,7 @@ function renderAdminLogin(container, errorMessage) {
 
                 ${errorMessage ? `
                   <div style="background: color-mix(in oklab, var(--danger) 10%, transparent); border: 1px solid color-mix(in oklab, var(--danger) 30%, transparent); border-radius: var(--radius); padding: 0.75rem; color: var(--danger); font-size: 0.8125rem; line-height: 1.4;">
-                    ${icon("alertTriangle", 14)} ${errorMessage}
+                    ${icon("alertTriangle", 14)} ${esc(errorMessage)}
                   </div>
                 ` : ''}
 
@@ -185,7 +274,7 @@ function renderAdminLogin(container, errorMessage) {
                 </form>
 
                 <p class="text-xs text-muted text-center mt-2">
-                  ¿No sos administrador? <a href="./index.html" style="color: var(--primary)">Volver a la app</a>
+                  ¿No eres administrador? <a href="./index.html" style="color: var(--primary)">Volver a la app</a>
                 </p>
               </div>
             </div>
@@ -234,10 +323,11 @@ function renderAdminLogin(container, errorMessage) {
       store.setUser(profile);
       store.setAuthMode("user");
 
-      // Setup global search + montar panel
-      setupGlobalSearch(() => {});
+      // Setup global search + montar panel + alertas de stock bajo
+      setupAdminSearch();
       mountAdminPanel(container, profile);
       setupAdminShell(container, profile);
+      checkLowStockOnce();
     } catch (err) {
       console.error("[Admin] login failed:", err);
       renderAdminLogin(container, err.message || "Error al iniciar sesión. Verificá tu email y contraseña.");
@@ -263,7 +353,7 @@ function showError(container, message) {
           <div class="empty-state" style="padding: 4rem 1.5rem">
             <div class="empty-state-icon" style="color: var(--danger)">${icon("ban", 32)}</div>
             <p class="empty-state-title" style="color: var(--danger)">Acceso denegado</p>
-            <p class="empty-state-desc">${message}</p>
+            <p class="empty-state-desc">${esc(message)}</p>
             <a href="./index.html" class="btn btn-primary" style="margin-top: 1.5rem">${icon("arrowLeft", 14)} Volver a la app</a>
           </div>
         </div>

@@ -218,6 +218,7 @@ import {
   isoToMs,
 } from "./supabase.js";
 import { getStore } from "./store.js";
+import { validateTransferRequest, canTransitionRequest } from "./sales-stats.js";
 import {
   DEMO_WAREHOUSES, DEMO_MANAGERS, DEMO_CARDS, DEMO_CATEGORIES,
   DEMO_PRODUCTS, DEMO_STOCK, DEMO_SALES, DEMO_RATE_CONFIG, DEMO_TODAY_RATES,
@@ -425,6 +426,35 @@ export async function saveSettings(settings) {
  * @param {object} settings - settings del store (con weekendRedirectEnabled, weekendWarehouseId)
  * @returns {null | { weekendRedirect: true, originalWarehouseId: string, weekendWarehouseId: string }}
  */
+/**
+ * Suma las comisiones del gestor y del vendedor de un carrito,
+ * separadas por moneda. Función PURA (testeada en tests/sale-commissions.test.js).
+ * El item sin moneda de comisión asume USD para gestor y MN para vendedor
+ * (mismos defaults que usaba el cálculo inline en sales.js).
+ *
+ * @param {Array<{quantity:number, gestorCommission?:number, gestorCommissionCurrency?:string, vendorCommission?:number, vendorCommissionCurrency?:string}>} cart
+ * @returns {{gestorCommissionUSD:number, gestorCommissionMN:number, vendorCommissionUSD:number, vendorCommissionMN:number}}
+ */
+export function sumCartCommissions(cart) {
+  let gestorUSD = 0, gestorMN = 0, vendorUSD = 0, vendorMN = 0;
+  for (const item of cart || []) {
+    const gCom = item.gestorCommission || 0;
+    const gCurr = item.gestorCommissionCurrency || "USD";
+    const vCom = item.vendorCommission || 0;
+    const vCurr = item.vendorCommissionCurrency || "MN";
+    if (gCurr === "USD") gestorUSD += gCom * item.quantity;
+    else gestorMN += gCom * item.quantity;
+    if (vCurr === "USD") vendorUSD += vCom * item.quantity;
+    else vendorMN += vCom * item.quantity;
+  }
+  return {
+    gestorCommissionUSD: gestorUSD,
+    gestorCommissionMN: gestorMN,
+    vendorCommissionUSD: vendorUSD,
+    vendorCommissionMN: vendorMN,
+  };
+}
+
 export function shouldRedirectWeekend(createdAtMs, settings) {
   if (!settings || !settings.weekendRedirectEnabled || !settings.weekendWarehouseId) {
     return null;
@@ -898,7 +928,7 @@ const PRODUCT_COLUMNS = new Set([
   "cost_price", "sale_price", "min_stock",
   "gestor_commission", "gestor_commission_currency",
   "vendor_commission", "vendor_commission_currency",
-  "image_url", "active", "units_per_box", "wholesale_tiers", "created_at",
+  "image_url", "thumb_url", "active", "units_per_box", "wholesale_tiers", "created_at",
 ]);
 
 function sanitizeProductRow(r) {
@@ -927,9 +957,13 @@ export async function saveProduct(p) {
     // Detectar imagen reemplazada para borrar la huérfana
     if (p.id && p.imageUrl) {
       try {
-        const { data: existing } = await s.from("products").select("image_url").eq("id", p.id).maybeSingle();
+        const { data: existing } = await s.from("products").select("image_url, thumb_url").eq("id", p.id).maybeSingle();
         if (existing?.image_url && existing.image_url !== p.imageUrl) {
           await deleteStorageImageByUrl(s, existing.image_url);
+        }
+        // La miniatura vieja también se limpia si cambió la imagen principal
+        if (existing?.thumb_url && existing.thumb_url !== (p.thumbUrl || null)) {
+          await deleteStorageImageByUrl(s, existing.thumb_url);
         }
       } catch (cleanupErr) {
         console.warn("[saveProduct] image cleanup check failed:", cleanupErr);
@@ -964,9 +998,12 @@ export async function deleteProduct(id) {
   try {
     // 1. Obtener la imagen antes de borrar el producto, para limpiar storage
     try {
-      const { data: existing } = await s.from("products").select("image_url").eq("id", id).maybeSingle();
+      const { data: existing } = await s.from("products").select("image_url, thumb_url").eq("id", id).maybeSingle();
       if (existing?.image_url) {
         await deleteStorageImageByUrl(s, existing.image_url);
+      }
+      if (existing?.thumb_url) {
+        await deleteStorageImageByUrl(s, existing.thumb_url);
       }
     } catch (cleanupErr) {
       console.warn("[deleteProduct] image cleanup check failed:", cleanupErr);
@@ -1172,6 +1209,50 @@ export async function adjustStock(warehouseId, productId, delta, reason = "AJUST
 }
 
 /**
+ * Descuenta el stock de una venta sincronizada de forma ATÓMICA (RPC
+ * deduct_sale_stock, migration-v5.3-improvements.sql). Solo descuenta
+ * los items con stock suficiente — así dos puestos que vendieron lo
+ * mismo offline nunca dejan el inventario en negativo. Los items sin
+ * stock vuelven en `shortages` para avisar al usuario.
+ *
+ * Lanza Error con code="RPC_MISSING" si la función no está instalada
+ * (instalaciones viejas) para que el caller use el desconto clásico.
+ *
+ * @param {Sale} sale
+ * @returns {Promise<{ok: boolean, deducted: number, shortages: Array<{product_id: string, requested: number, available: number}>}>}
+ */
+export async function deductSaleStockAtomic(sale) {
+  const s = await sb();
+  if (!s) {
+    const e = new Error("RPC_MISSING");
+    e.code = "RPC_MISSING";
+    throw e;
+  }
+  const items = (sale.items || []).map((i) => ({
+    product_id: i.productId,
+    quantity: Number(i.quantity) || 0,
+  }));
+  const { data, error } = await s.client.rpc("deduct_sale_stock", {
+    p_warehouse_id: nullIfNotUuid(sale.warehouseId),
+    p_items: items,
+    p_reason: "VENTA",
+    p_note: `Venta ${sale.code}${sale.clientRef ? " (sync)" : ""}`,
+    p_user_id: nullIfNotUuid(sale.userId),
+    p_user_name: sale.userName || null,
+  });
+  if (error) {
+    // PGRST202 = función inexistente en el esquema (instalación sin la migración)
+    if (error.code === "PGRST202" || /function.*not.*exist|schema cache/i.test(error.message || "")) {
+      const e = new Error("RPC_MISSING");
+      e.code = "RPC_MISSING";
+      throw e;
+    }
+    throw error;
+  }
+  return data || { ok: true, deducted: 0, shortages: [] };
+}
+
+/**
  * @param {string} [warehouseId] - optional filter
  * @returns {Promise<Stock[]>}
  */
@@ -1204,6 +1285,9 @@ export async function listStockMovements(filters = {}) {
     let query = s.from("stock_movements").select("*");
     if (filters.warehouseId) query = query.eq("warehouse_id", filters.warehouseId);
     if (filters.productId) query = query.eq("product_id", filters.productId);
+    // Rango de fechas en la BD (índice created_at) — opcional
+    if (filters.from) query = query.gte("created_at", new Date(filters.from).toISOString());
+    if (filters.to) query = query.lte("created_at", new Date(filters.to).toISOString());
     query = query.order("created_at", { ascending: false });
     if (filters.limit) query = query.limit(filters.limit);
     const { data, error } = await query;
@@ -1297,6 +1381,9 @@ export async function listSales(filters = {}) {
     if (filters.warehouseId) query = query.eq("warehouse_id", filters.warehouseId);
     if (filters.userId) query = query.eq("user_id", filters.userId);
     if (filters.managerId) query = query.eq("manager_id", filters.managerId);
+    // Filtrar en la BD (usa el índice created_at) — sin esto trae TODAS las ventas históricas
+    if (filters.from) query = query.gte("created_at", new Date(filters.from).toISOString());
+    if (filters.to) query = query.lte("created_at", new Date(filters.to).toISOString());
     query = query.order("created_at", { ascending: false });
     const { data, error } = await query;
     if (error) throw error;
@@ -2615,6 +2702,22 @@ export async function listStockForProductInAllWarehouses(productId) {
  * @returns {Promise<Array<{productId, warehouseId, warehouseName, warehouseCode, quantity, localPrice}>>}
  */
 export async function listAllStockAcrossWarehouses() {
+  // v5.5.0: rama demo — aplanar DEMO_STOCK con info de almacén/producto
+  // (antes devolvía [] sin Supabase y el tab "Otros almacenes" quedaba vacío)
+  if (await isDemo()) {
+    const whMap = new Map(DEMO_WAREHOUSES.map((w) => [w.id, w]));
+    const prodMap = new Map(DEMO_PRODUCTS.map((p) => [p.id, p]));
+    return (DEMO_STOCK || [])
+      .filter((st) => whMap.has(st.warehouseId) && prodMap.has(st.productId))
+      .map((st) => ({
+        productId: st.productId,
+        warehouseId: st.warehouseId,
+        warehouseName: whMap.get(st.warehouseId)?.name,
+        warehouseCode: whMap.get(st.warehouseId)?.code,
+        quantity: Number(st.quantity) || 0,
+        localPrice: st.localPrice ?? null,
+      }));
+  }
   const s = await sb();
   if (!s) return [];
   try {
@@ -2783,6 +2886,376 @@ export async function processStockTransfer(transferId, newStatus, user) {
   } catch (err) {
     console.error("processStockTransfer failed:", err);
     throw err;
+  }
+}
+
+// =====================================================
+// ============ Solicitudes de traspaso (v5.5) ============
+// =====================================================
+// El empleado de almacén pide mercancía a otro almacén; el admin
+// aprueba (mueve stock con TRANSFERENCIA_SALIDA/ENTRADA) o rechaza.
+// En demo se persiste en localStorage para poder probar el flujo.
+
+const DEMO_REQUESTS_KEY = "mannol-demo-transfer-requests-v1";
+const DEMO_CLOSURES_KEY = "mannol-demo-daily-closures-v1";
+// Evento para suscripciones en vivo en modo demo (localStorage no avisa a la misma pestaña)
+const DEMO_REQUESTS_EVENT = "mannol-demo-requests-changed";
+
+function readDemoStore(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function writeDemoStore(key, items) {
+  try { localStorage.setItem(key, JSON.stringify(items)); } catch {}
+}
+
+function emitDemoRequestsChanged() {
+  try { window.dispatchEvent(new CustomEvent(DEMO_REQUESTS_EVENT)); } catch {}
+}
+
+// Seed demo (una sola vez): 1 solicitud pendiente + 2 cierres recientes
+function ensureDemoSeeds() {
+  if (!readDemoStore(DEMO_REQUESTS_KEY)) {
+    const whFrom = DEMO_WAREHOUSES[1] || DEMO_WAREHOUSES[0];
+    const whTo = DEMO_WAREHOUSES[0];
+    const prod = DEMO_PRODUCTS[0];
+    const now = Date.now();
+    writeDemoStore(DEMO_REQUESTS_KEY, [
+      {
+        id: "demo-req-1",
+        code: `TRS-${String(now).slice(-5)}`,
+        fromWarehouseId: whFrom?.id || "demo-id",
+        fromWarehouseName: whFrom?.name || "",
+        toWarehouseId: whTo?.id || "demo-id",
+        toWarehouseName: whTo?.name || "",
+        productId: prod?.id || "demo-id",
+        productName: prod?.name || "Producto",
+        quantity: 10,
+        note: "Se nos acabó el 5W-30, quedan 2 unidades",
+        status: "PENDIENTE",
+        requestedBy: "demo-user",
+        requestedByName: "Empleado (Víbora)",
+        resolvedBy: null,
+        resolvedByName: null,
+        resolvedAt: null,
+        createdAt: now - 3600000,
+      },
+    ]);
+  }
+  if (!readDemoStore(DEMO_CLOSURES_KEY)) {
+    const wh = DEMO_WAREHOUSES[0];
+    const dayMs = 86400000;
+    const now = Date.now();
+    writeDemoStore(DEMO_CLOSURES_KEY, [0, 1].map((back) => ({
+      id: `demo-closure-${back}`,
+      warehouseId: wh?.id || "demo-id",
+      warehouseCode: wh?.code || "",
+      warehouseName: wh?.name || "",
+      closureDate: new Date(now - back * dayMs - new Date(now - back * dayMs).getTimezoneOffset() * 60000).toISOString().slice(0, 10),
+      salesCount: 12 - back * 3,
+      unitsSold: 34 - back * 8,
+      totalUSD: 310.5 - back * 72.25,
+      byCurrency: {
+        USD: { count: 7 - back, amount: 198.5 - back * 45 },
+        MN: { count: 4 - back, amount: 3200 - back * 800 },
+        EUR: { count: 0, amount: 0 },
+        TRANSFERENCIA: { count: 1, amount: 112 - back * 27.25 },
+      },
+      topProducts: [
+        { name: "MANNOL Energy Formula 5W-30", qty: 6, total: 150 },
+        { name: "Filtro de Aceite Mannol W712/93", qty: 5, total: 25 },
+      ],
+      createdBy: "demo-user",
+      createdByName: "Empleado",
+      createdAt: now - back * dayMs,
+    })));
+  }
+}
+
+/**
+ * Crea una solicitud de traspaso (estado inicial PENDIENTE).
+ * @param {Object} data - { fromWarehouseId, toWarehouseId, productId, productName, quantity, note }
+ * @param {Object} user - { id, displayName } quien la pide
+ * @returns {Promise<{id: string, code?: string}>}
+ */
+export async function createTransferRequest(data, user) {
+  const check = validateTransferRequest(data);
+  if (!check.ok) throw new Error(check.error);
+
+  const base = {
+    code: `TRS-${String(Date.now()).slice(-5)}${Math.floor(Math.random() * 9)}`,
+    fromWarehouseId: data.fromWarehouseId,
+    toWarehouseId: data.toWarehouseId,
+    productId: data.productId,
+    productName: data.productName || "",
+    quantity: Number(data.quantity),
+    note: data.note || null,
+    status: "PENDIENTE",
+    requestedBy: user?.id || null,
+    requestedByName: user?.displayName || null,
+    createdAt: Date.now(),
+  };
+
+  const demo = await isDemo();
+  if (demo) {
+    ensureDemoSeeds();
+    const items = readDemoStore(DEMO_REQUESTS_KEY) || [];
+    // Regla: máx 1 PENDIENTE por (origen, destino, producto)
+    const dup = items.find((r) => r.status === "PENDIENTE" &&
+      r.fromWarehouseId === base.fromWarehouseId &&
+      r.toWarehouseId === base.toWarehouseId &&
+      r.productId === base.productId);
+    if (dup) throw new Error("Ya existe una solicitud pendiente de este producto desde ese almacén");
+    const rec = { ...base, id: `demo-req-${Date.now()}` };
+    items.unshift(rec);
+    writeDemoStore(DEMO_REQUESTS_KEY, items);
+    emitDemoRequestsChanged();
+    return { id: rec.id, code: rec.code };
+  }
+
+  const s = await sb();
+  if (!s) return { id: "demo-id" };
+  try {
+    const { data: inserted, error } = await s.from("transfer_requests")
+      .insert(toRow(base)).select().single();
+    if (error) throw error;
+    return { id: inserted.id, code: inserted.code };
+  } catch (err) {
+    console.error("createTransferRequest failed:", err);
+    // Índice único parcial: solicitud duplicada
+    if (String(err.code) === "23505" || /duplicate/i.test(err.message || "")) {
+      throw new Error("Ya existe una solicitud pendiente de este producto desde ese almacén");
+    }
+    throw err;
+  }
+}
+
+/**
+ * Lista solicitudes de traspaso (más recientes primero).
+ * @param {Object} filters - { status, toWarehouseId, limit }
+ * @returns {Promise<Array>}
+ */
+export async function listTransferRequests(filters = {}) {
+  const demo = await isDemo();
+  if (demo) {
+    ensureDemoSeeds();
+    let items = readDemoStore(DEMO_REQUESTS_KEY) || [];
+    if (filters.status) items = items.filter((r) => r.status === filters.status);
+    if (filters.toWarehouseId) items = items.filter((r) => r.toWarehouseId === filters.toWarehouseId);
+    return items.slice(0, filters.limit || 50);
+  }
+  const s = await sb();
+  if (!s) return [];
+  try {
+    let q = s.from("transfer_requests").select("*");
+    if (filters.status) q = q.eq("status", filters.status);
+    if (filters.toWarehouseId) q = q.eq("to_warehouse_id", filters.toWarehouseId);
+    q = q.order("created_at", { ascending: false }).limit(filters.limit || 50);
+    const { data, error } = await q;
+    if (error) throw error;
+    return rows(data || []);
+  } catch (err) {
+    console.error("listTransferRequests failed:", err);
+    return [];
+  }
+}
+
+/**
+ * Resuelve una solicitud: APROBADA mueve el stock (origen → destino),
+ * RECHAZADA/CANCELADA solo cambian el estado. Estados finales cerrados.
+ * @param {string} id
+ * @param {"APROBADA"|"RECHAZADA"|"CANCELADA"} nextStatus
+ * @param {Object} user - { id, displayName } quien resuelve
+ */
+export async function setTransferRequestStatus(id, nextStatus, user) {
+  const demo = await isDemo();
+  if (demo) {
+    const items = readDemoStore(DEMO_REQUESTS_KEY) || [];
+    const rec = items.find((r) => r.id === id);
+    if (!rec) throw new Error("Solicitud no encontrada");
+    if (!canTransitionRequest(rec.status, nextStatus)) {
+      throw new Error(`No se puede pasar de ${rec.status} a ${nextStatus}`);
+    }
+    rec.status = nextStatus;
+    rec.resolvedBy = user?.id || null;
+    rec.resolvedByName = user?.displayName || null;
+    rec.resolvedAt = Date.now();
+    writeDemoStore(DEMO_REQUESTS_KEY, items);
+    emitDemoRequestsChanged();
+    // En demo no se mueve stock (los stocks demo son de solo lectura)
+    return { ...rec };
+  }
+
+  const s = await sb();
+  if (!s) return null;
+  try {
+    const { data: req, error: e1 } = await s.from("transfer_requests")
+      .select("*").eq("id", id).maybeSingle();
+    if (e1) throw e1;
+    if (!req) throw new Error("Solicitud no encontrada");
+    if (!canTransitionRequest(req.status, nextStatus)) {
+      throw new Error(`No se puede pasar de ${req.status} a ${nextStatus}`);
+    }
+
+    if (nextStatus === "APROBADA") {
+      // Stock: sale del origen, entra al destino (mismo patrón que processStockTransfer)
+      await adjustStock(
+        req.from_warehouse_id, req.product_id, -req.quantity,
+        "TRANSFERENCIA_SALIDA", `Solicitud ${req.code || id} → destino`,
+        user?.id, user?.displayName
+      );
+      await adjustStock(
+        req.to_warehouse_id, req.product_id, req.quantity,
+        "TRANSFERENCIA_ENTRADA", `Solicitud ${req.code || id} ← origen`,
+        user?.id, user?.displayName
+      );
+    }
+
+    const { error: e2 } = await s.from("transfer_requests").update({
+      status: nextStatus,
+      resolved_by: user?.id || null,
+      resolved_by_name: user?.displayName || null,
+      resolved_at: new Date().toISOString(),
+    }).eq("id", id);
+    if (e2) throw e2;
+    return { id, status: nextStatus };
+  } catch (err) {
+    console.error("setTransferRequestStatus failed:", err);
+    throw err;
+  }
+}
+
+/**
+ * Suscripción en vivo a las solicitudes de traspaso (v5.6).
+ * Real: Supabase Realtime (postgres_changes sobre transfer_requests).
+ * Demo: re-lee localStorage en cada evento mannol-demo-requests-changed
+ * (o si otra pestaña cambia la clave — evento storage).
+ *
+ * @param {(items: Array<Object>) => void} cb
+ * @returns {() => void} función para cancelar la suscripción
+ */
+export function subscribeTransferRequests(cb) {
+  let unsub = noopUnsub;
+  (async () => {
+    const emit = () => { listTransferRequests({ limit: 100 }).then(cb).catch(() => {}); };
+
+    if (await isDemo()) {
+      emit();
+      const onStorage = (e) => { if (e.key === DEMO_REQUESTS_KEY) emit(); };
+      window.addEventListener(DEMO_REQUESTS_EVENT, emit);
+      window.addEventListener("storage", onStorage);
+      unsub = () => {
+        window.removeEventListener(DEMO_REQUESTS_EVENT, emit);
+        window.removeEventListener("storage", onStorage);
+      };
+      return;
+    }
+
+    const s = await sb();
+    if (!s) return;
+    try {
+      emit();
+      const channel = s.channel("transfer-requests-live");
+      channel.on("postgres_changes", { event: "*", schema: "public", table: "transfer_requests" }, emit);
+      channel.subscribe();
+      unsub = () => {
+        try { s.client.removeChannel(channel); } catch {}
+      };
+    } catch (err) {
+      console.error("subscribeTransferRequests failed:", err);
+    }
+  })();
+  return () => unsub();
+}
+
+// =====================================================
+// ============ Cierre de caja diario (v5.5) ============
+// =====================================================
+
+/**
+ * Guarda (o actualiza, si ya existía) el cierre del día para un almacén.
+ * @param {Object} c - { warehouseId, warehouseCode, warehouseName, dateKey, stats, user }
+ * @returns {Promise<{id: string, updated: boolean}>}
+ */
+export async function saveDailyClosure(c) {
+  const payload = {
+    warehouseId: c.warehouseId,
+    warehouseCode: c.warehouseCode || null,
+    warehouseName: c.warehouseName || null,
+    closureDate: c.dateKey,
+    salesCount: c.stats.salesCount,
+    unitsSold: c.stats.unitsSold,
+    totalUSD: c.stats.totalUSD,
+    byCurrency: c.stats.byCurrency,
+    topProducts: c.stats.topProducts,
+    createdBy: c.user?.id || null,
+    createdByName: c.user?.displayName || null,
+    createdAt: Date.now(),
+  };
+
+  const demo = await isDemo();
+  if (demo) {
+    ensureDemoSeeds();
+    const items = readDemoStore(DEMO_CLOSURES_KEY) || [];
+    const idx = items.findIndex((x) => x.warehouseId === payload.warehouseId && x.closureDate === payload.closureDate);
+    let updated = false;
+    if (idx >= 0) { items[idx] = { ...items[idx], ...payload, id: items[idx].id }; updated = true; }
+    else items.unshift({ ...payload, id: `demo-closure-${Date.now()}` });
+    writeDemoStore(DEMO_CLOSURES_KEY, items);
+    return { id: items[0].id, updated };
+  }
+
+  const s = await sb();
+  if (!s) return { id: "demo-id", updated: false };
+  try {
+    const { data: existing } = await s.from("daily_closures")
+      .select("id").eq("warehouse_id", payload.warehouseId)
+      .eq("closure_date", payload.closureDate).maybeSingle();
+    const rowPayload = toRow(payload);
+    if (existing?.id) {
+      const { error } = await s.from("daily_closures").update(rowPayload).eq("id", existing.id);
+      if (error) throw error;
+      return { id: existing.id, updated: true };
+    }
+    const { data: inserted, error } = await s.from("daily_closures").insert(rowPayload).select().single();
+    if (error) throw error;
+    return { id: inserted.id, updated: false };
+  } catch (err) {
+    console.error("saveDailyClosure failed:", err);
+    throw err;
+  }
+}
+
+/**
+ * Lista cierres diarios (más recientes primero).
+ * @param {Object} filters - { warehouseId, fromMs, toMs, limit }
+ * @returns {Promise<Array>}
+ */
+export async function listDailyClosures(filters = {}) {
+  const demo = await isDemo();
+  if (demo) {
+    ensureDemoSeeds();
+    let items = readDemoStore(DEMO_CLOSURES_KEY) || [];
+    if (filters.warehouseId) items = items.filter((x) => x.warehouseId === filters.warehouseId);
+    return items
+      .sort((a, b) => String(b.closureDate).localeCompare(String(a.closureDate)))
+      .slice(0, filters.limit || 30);
+  }
+  const s = await sb();
+  if (!s) return [];
+  try {
+    let q = s.from("daily_closures").select("*");
+    if (filters.warehouseId) q = q.eq("warehouse_id", filters.warehouseId);
+    q = q.order("closure_date", { ascending: false }).limit(filters.limit || 30);
+    const { data, error } = await q;
+    if (error) throw error;
+    return rows(data || []);
+  } catch (err) {
+    console.error("listDailyClosures failed:", err);
+    return [];
   }
 }
 

@@ -109,6 +109,48 @@ export function lineChart(data, opts = {}) {
 }
 
 /**
+ * Sparkline — micro-tendencia para KPI cards (sin ejes).
+ * v5.4.0: puntos con <title> (fecha/valor al hover o toque) si se pasan labels.
+ * @param {Array<number>} values
+ * @param {Object} opts - { color, height, labels, formatValue }
+ */
+export function sparkline(values, opts = {}) {
+  const height = opts.height || 36;
+  const color = opts.color || COLORS.primary;
+  const width = 100;
+  const padding = 3;
+  const data = (values || []).filter((v) => typeof v === "number" && !isNaN(v));
+  if (data.length < 2) return "";
+
+  const maxVal = Math.max(...data, 1);
+  const minVal = Math.min(...data, 0);
+  const range = maxVal - minVal || 1;
+  const chartH = height - padding * 2;
+
+  const points = data.map((v, i) => {
+    const x = padding + (i / (data.length - 1)) * (width - padding * 2);
+    const y = padding + (1 - (v - minVal) / range) * chartH;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  });
+  const pathD = `M${points.join(" L")}`;
+  const areaD = `${pathD} L${points[points.length - 1]},${height} L${points[0]},${height} Z`;
+
+  // Puntos interactivos: muestran label (fecha) y valor al hover/toque
+  const fmt = opts.formatValue || ((v) => v);
+  const dots = data.map((v, i) => {
+    const [x, y] = points[i].split(",");
+    const label = opts.labels?.[i] != null ? `${opts.labels[i]}: ` : "";
+    return `<circle cx="${x}" cy="${y}" r="1.7" fill="${color}" stroke="var(--bg)" stroke-width="0.4" opacity="0.9"><title>${label}${fmt(v)}</title></circle>`;
+  }).join("");
+
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" style="width:100%;height:${height}px;display:block" aria-hidden="true">
+    <path d="${areaD}" fill="${color}" opacity="0.12"/>
+    <path d="${pathD}" stroke="${color}" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    ${dots}
+  </svg>`;
+}
+
+/**
  * Donut chart — muestra proporciones.
  * @param {Array<{label:string, value:number, color?:string}>} data
  * @param {Object} opts - { size, thickness, total }

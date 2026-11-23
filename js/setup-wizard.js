@@ -986,7 +986,7 @@ function wireCredentialsStep() {
       validation.innerHTML = `<span class="wizard-alert-icon">${ICONS.alert}</span><div><strong>URL inválida.</strong> Debe ser <code>https://algo.supabase.co</code> (sin barra al final).</div>`;
     } else if (isSecret) {
       validation.className = "wizard-alert wizard-alert-danger";
-      validation.innerHTML = `<span class="wizard-alert-icon">${ICONS.alert}</span><div><strong>¡Cuidado!</strong> Pegaste la <code>secret key</code> (sb_secret_...). Esa es privada y <strong>NUNCA</strong> debe ir en el frontend. Volvé a Supabase → Project Settings → API y copiá la <code>publishable key</code> (sb_publishable_...) o la <code>anon public</code> (eyJ...).</div>`;
+      validation.innerHTML = `<span class="wizard-alert-icon">${ICONS.alert}</span><div><strong>¡Cuidado!</strong> Pegaste la <code>secret key</code> (sb_secret_...). Esa es privada y <strong>NUNCA</strong> debe ir en el frontend. Vuelve a Supabase → Project Settings → API y copia la <code>publishable key</code> (sb_publishable_...) o la <code>anon public</code> (eyJ...).</div>`;
     } else if (!keyOk) {
       validation.className = "wizard-alert wizard-alert-warning";
       validation.innerHTML = `<span class="wizard-alert-icon">${ICONS.alert}</span><div><strong>anon key inválida.</strong> Debe empezar con <code>sb_publishable_</code> (formato nuevo) o <code>eyJ</code> (formato anterior JWT). Asegurate de copiar la <strong>"publishable key"</strong> o <strong>"anon public"</strong> desde Supabase → Project Settings → API.</div>`;

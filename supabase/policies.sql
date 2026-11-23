@@ -541,6 +541,24 @@ create policy "products_images_delete_admin" on storage.objects
 grant execute on function public.adjust_stock(uuid, uuid, numeric, text, text, uuid, text) to authenticated;
 grant execute on function public.update_sale_status(text, text, text, uuid, text) to authenticated;
 grant execute on function public.create_admin_user(text, text, text, text, text, uuid[]) to authenticated;
+grant execute on function public.deduct_sale_stock(uuid, jsonb, text, text, uuid, text) to anon, authenticated;
+
+-- =====================================================
+-- Auditoría de intentos de PIN (tabla pin_attempts)
+-- Cualquiera registra intentos (sesiones PIN = anon); solo admin lee.
+-- =====================================================
+drop policy if exists "pin_attempts_insert" on public.pin_attempts;
+create policy "pin_attempts_insert" on public.pin_attempts
+  for insert to anon, authenticated with check (true);
+
+drop policy if exists "pin_attempts_read_admin" on public.pin_attempts;
+create policy "pin_attempts_read_admin" on public.pin_attempts
+  for select to authenticated using (
+    EXISTS (
+      SELECT 1 FROM public.users u
+      WHERE u.auth_uid = auth.uid() AND u.role = 'admin' AND u.active
+    )
+  );
 
 -- =====================================================
 -- Resumen de funciones helper expuestas

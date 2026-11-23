@@ -134,8 +134,8 @@ export function mountPinLoginView(container, navigate) {
       // BUG FIX: el campo del almacén es 'pin' (no 'pinCode' que es del settings global)
       const expectedPin = warehouse.pin || settings.pinCode;
       if (pin !== expectedPin) {
-        // Registrar intento fallido
-        recordPinAttempt(warehouse.id);
+        // Registrar intento fallido (localStorage + auditoría remota pin_attempts)
+        recordPinAttempt(warehouse.id, warehouse.code);
         const remaining = getPinBlockRemainingSec(warehouse.id);
         if (remaining > 0) {
           const min = Math.ceil(remaining / 60);

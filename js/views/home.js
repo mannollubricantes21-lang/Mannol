@@ -21,6 +21,10 @@ export function renderHomeView(navigate) {
   const syncing = state._syncing;
   const user = state.currentUser;
   const supabaseConfigured = state._supabaseConfigured;
+  // v5.4.0: banner de configuración descartable (persistido por dispositivo)
+  const setupBannerDismissed = (() => {
+    try { return localStorage.getItem("mannol_setup_banner_dismissed") === "1"; } catch { return false; }
+  })();
 
   // Tasas en formato MANNOL: USD = X MN, EUR = Y MN
   // Si no hay rates cargados (modo demo sin sync, o Supabase vacío),
@@ -70,23 +74,20 @@ export function renderHomeView(navigate) {
 
       <!-- ===== Premium main ===== -->
       <main class="premium-home-main">
-        <!-- ===== Hero section ===== -->
-        <section class="home-hero premium-fade-in">
+        <!-- ===== Hero compacto (v5.4.0: una línea, deja el contenido arriba) ===== -->
+        <section class="home-hero premium-fade-in" style="padding:0.875rem 1rem">
           <div class="home-hero-bg"></div>
-          ${user ? `
-            <div class="home-hero-badge">
-              <span class="dot"></span>
-              ${user.role === 'admin' ? 'Panel admin' : user.role === 'gestor' ? 'Gestor' : 'Vendedor'}
+          <div style="display:flex;align-items:center;gap:0.625rem;position:relative">
+            <div class="home-hero-logo" style="width:2.25rem;height:2.25rem;min-width:2.25rem;display:flex;align-items:center;justify-content:center;border-radius:0.75rem">${icon("droplet", 18)}</div>
+            <div style="flex:1;min-width:0">
+              <h2 class="home-hero-title" style="font-size:1.125rem;line-height:1.2;margin:0">MANNOL POS</h2>
+              <p class="home-hero-subtitle" style="margin:0;font-size:0.75rem">Aceites y lubricantes · Ventas y stock</p>
             </div>
-          ` : `
-            <div class="home-hero-badge">
+            <div class="home-hero-badge" style="flex-shrink:0;margin:0">
               <span class="dot"></span>
-              En línea
+              ${user ? (user.role === 'admin' ? 'Panel admin' : user.role === 'gestor' ? 'Gestor' : user.role === 'warehouse' || user.role === 'empleado_pin' ? 'Empleado' : 'Vendedor') : 'En línea'}
             </div>
-          `}
-          <div class="home-hero-logo">${icon("droplet", 32)}</div>
-          <h2 class="home-hero-title">MANNOL POS</h2>
-          <p class="home-hero-subtitle">Aceites y lubricantes · Control de ventas y stock</p>
+          </div>
         </section>
 
         <!-- ===== Acceso rápido al panel admin (v5.1.4, solo admin) ===== -->
@@ -100,24 +101,25 @@ export function renderHomeView(navigate) {
           </section>
         ` : ''}
 
-        <!-- ===== Setup banner (si Supabase no está configurado) ===== -->
-        ${!supabaseConfigured ? `
+        <!-- ===== Setup banner (si Supabase no está configurado; descartable v5.4.0) ===== -->
+        ${!supabaseConfigured && !setupBannerDismissed ? `
           <section class="premium-setup-banner premium-fade-in premium-fade-in-delay-1">
             <div class="premium-setup-banner-content">
               <div class="premium-setup-banner-header">
                 <div class="premium-setup-banner-icon">${icon("droplet", 20)}</div>
                 <div style="flex:1;min-width:0">
-                  <h3 class="premium-setup-banner-title">Conectá Supabase en este dispositivo</h3>
+                  <h3 class="premium-setup-banner-title">Conecta Supabase en este dispositivo</h3>
                   <p class="premium-setup-banner-desc">
                     Estás en <strong>modo demo</strong>. Los datos no se guardan en la nube.
-                    Conectá tu base de datos Supabase con el asistente — 10 minutos, sin tocar código.
+                    Conecta tu base de datos Supabase con el asistente — 10 minutos, sin tocar código.
                   </p>
                 </div>
+                <button class="btn btn-ghost btn-sm" data-action="dismiss-setup" aria-label="Ocultar banner" title="Ocultar este banner">${icon("x", 16)}</button>
               </div>
               <a href="./setup.html" class="premium-setup-banner-btn" style="align-self:stretch">
                 ${icon("zap", 16)} Configurar Supabase ahora
               </a>
-              <p class="premium-setup-banner-hint">¿Ya tenés Supabase? Solo necesitás tu URL y tu anon key.</p>
+              <p class="premium-setup-banner-hint">¿Ya tenés Supabase? Solo necesitás tu URL y tu anon key. <button class="btn btn-ghost btn-sm" data-action="dismiss-setup" style="padding:0 0.25rem;font-size:0.6875rem;color:var(--text-muted)">No volver a mostrar</button></p>
             </div>
           </section>
         ` : ''}
@@ -363,6 +365,15 @@ export function mountHomeView(container, navigate) {
         window.dispatchEvent(new CustomEvent("open-drawer"));
       });
     }
+
+    // v5.4.0: ocultar el banner de configuración de forma persistente
+    container.querySelectorAll('[data-action="dismiss-setup"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        try { localStorage.setItem("mannol_setup_banner_dismissed", "1"); } catch {}
+        toast("Banner ocultado · El asistente sigue disponible en setup.html", "info", 2500);
+        render();
+      });
+    });
   }
 
   async function handleSyncRates() {

@@ -233,7 +233,10 @@ class Store {
 // Apply theme to document
 export function applyTheme(theme) {
   const root = document.documentElement;
-  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const prefersDark =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches;
   const isDark = theme === "dark" || (theme === "system" && prefersDark);
   root.setAttribute("data-theme", isDark ? "dark" : "light");
   // Update theme-color meta
@@ -241,11 +244,14 @@ export function applyTheme(theme) {
   if (meta) meta.setAttribute("content", isDark ? "#0f172a" : "#ffffff");
 }
 
-// Listen for system theme changes
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-  const store = getStore();
-  if (store.getState().theme === "system") applyTheme("system");
-});
+// Listen for system theme changes (guard: matchMedia no existe en entornos
+// sin navegador completo — p.ej. tests con jsdom — y rompería el import)
+if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    const store = getStore();
+    if (store.getState().theme === "system") applyTheme("system");
+  });
+}
 
 // Singleton
 let storeInstance = null;

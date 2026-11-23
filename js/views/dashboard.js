@@ -47,6 +47,19 @@ const DRAWER_ADMIN_ITEMS = [
   { id: "users", label: "Usuarios", icon: "userCog", roles: ["admin"] },
 ];
 
+// Subtítulo del header: nombre de persona + almacén (sin repetir el código
+// si ya viene en el displayName; muestra el nombre del local, no el código).
+function headerSubtitle(user, warehouse) {
+  const base = user?.displayName || user?.role || "";
+  if (!warehouse) return base;
+  const b = base.toLowerCase();
+  const name = (warehouse.name || "").toLowerCase();
+  const code = (warehouse.code || "").toLowerCase();
+  if (name && b.includes(name)) return base;
+  if (code && b.includes(code)) return base;
+  return `${base} · ${warehouse.name || warehouse.code}`;
+}
+
 export function mountDashboardView(container, navigate) {
   const store = getStore();
   let activeView = "dashboard";
@@ -84,7 +97,7 @@ export function mountDashboardView(container, navigate) {
                 <div class="brand-logo">${icon("droplet", 18)}</div>
                 <div class="min-w-0" style="line-height: 1.2;">
                   <h1 class="font-bold text-base truncate" style="margin:0">MANNOL</h1>
-                  <p class="text-xs text-muted truncate" style="margin:0">${user.displayName} · ${warehouse?.code || user.role}</p>
+                  <p class="text-xs text-muted truncate" style="margin:0">${headerSubtitle(user, warehouse)}</p>
                 </div>
               </div>
             </div>

@@ -4,7 +4,7 @@
 // Bump CACHE_VERSION on every release to force clients to refresh.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v19";
+const CACHE_VERSION = "mannol-pos-supabase-v24";
 const STATIC_ASSETS = [
   "./",
   "./index.html",
@@ -30,6 +30,7 @@ const STATIC_ASSETS = [
   "./js/charts.js",
   "./js/push-notify.js",
   "./js/global-search.js",
+  "./js/update-banner.js",
   "./js/pin-rate-limit.js",
   "./js/components/sync-banner.js",
   "./js/views/home.js",
@@ -139,6 +140,10 @@ self.addEventListener("message", (event) => {
   const msgType = typeof data === "string" ? data : data?.type;
   if (msgType === "flush-queue" || msgType === "retry-sync") {
     notifyClientsToSync();
+  }
+  // Activar el SW nuevo inmediatamente (banner de actualización)
+  if (msgType === "SKIP_WAITING") {
+    self.skipWaiting();
   }
 });
 

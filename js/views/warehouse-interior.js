@@ -4,7 +4,8 @@
 // =====================================================
 
 import { getStore } from "../store.js";
-import { subscribeSales, subscribeStock, listProducts, listWarehouses, listAllStockAcrossWarehouses, listStockForProductInAllWarehouses } from "../db.js";
+import { subscribeSales, subscribeStock, listProducts, listWarehouses, listAllStockAcrossWarehouses, listStockForProductInAllWarehouses, createTransferRequest, listTransferRequests, saveDailyClosure, listDailyClosures } from "../db.js";
+import { computeClosureStats, closureDateKey, validateTransferRequest } from "../sales-stats.js";
 import { formatMoney, formatDate } from "../currency.js";
 import { icon, esc, toast, showModal, closeModal, confirmDialog } from "../ui.js";
 
@@ -16,6 +17,11 @@ export function mountWarehouseInterior(container, navigate) {
   let products = [];
   let period = "today";
   let search = "";
+  let stockFilter = "all"; // v5.4.0: "all" | "low" | "out" (badges clicables)
+  // v5.5.0: solicitudes de traspaso + cierre de caja
+  let myRequests = [];
+  let recentClosures = [];
+  let closuresOpen = false;
   let inventoryTab = "stock"; // "stock" | "others"  (sin "transfers" — solo admin transfiere)
   let otherWarehousesStock = []; // stock en otros almacenes
   let othersState = "idle"; // "idle" | "loading" | "ready" | "error"
@@ -38,6 +44,10 @@ export function mountWarehouseInterior(container, navigate) {
   }, { warehouseId: warehouse.id });
   const unsubStock = subscribeStock(warehouse.id, (items) => { stock = items; render(); });
 
+  // v5.5.0: solicitudes propias + cierres recientes
+  listTransferRequests({ toWarehouseId: warehouse.id, limit: 5 }).then((r) => { myRequests = r; render(); }).catch(() => {});
+  listDailyClosures({ warehouseId: warehouse.id, limit: 7 }).then((c) => { recentClosures = c; render(); }).catch(() => {});
+
   // Cargar stock de otros almacenes (para el tab "Otros almacenes")
   async function loadOtherStock() {
     othersState = "loading";
@@ -52,6 +62,78 @@ export function mountWarehouseInterior(container, navigate) {
       othersState = "error";
     }
     render();
+  }
+
+  // v5.5.0: diálogo para solicitar traspaso desde otro almacén
+  function showRequestDialog(product) {
+    const available = otherWarehousesStock
+      .filter((s) => s.productId === product.id && (s.quantity || 0) > 0)
+      .sort((a, b) => b.quantity - a.quantity);
+    if (available.length === 0) {
+      toast("No hay stock disponible en otros almacenes", "warning");
+      return;
+    }
+    const whMap = new Map(allWarehouses.map((w) => [w.id, w]));
+    const user = store.getState().currentUser;
+    const close = showModal({
+      title: `Solicitar traspaso · ${product.name}`,
+      body: `
+        <div style="display:flex;flex-direction:column;gap:0.75rem">
+          <div>
+            <label class="label label-xs">Desde qué almacén *</label>
+            <select class="select" id="tr-from">
+              ${available.map((s) => `<option value="${esc(s.warehouseId)}">${esc(s.warehouseName || whMap.get(s.warehouseId)?.name || s.warehouseId)} — ${s.quantity} disponibles</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label class="label label-xs">Cantidad (unidades) *</label>
+            <input class="input" type="number" min="1" id="tr-qty" value="5" inputmode="numeric" />
+          </div>
+          <div>
+            <label class="label label-xs">Nota (opcional)</label>
+            <input class="input" id="tr-note" placeholder="Ej: para el fin de semana" />
+          </div>
+          <p class="text-xs text-muted" style="margin:0">Quedará como <strong>PENDIENTE</strong> hasta que el administrador la apruebe y mueva el stock.</p>
+        </div>
+      `,
+      footer: `
+        <button class="btn btn-ghost" id="tr-cancel">Cancelar</button>
+        <button class="btn btn-primary" id="tr-submit">${icon("arrowLeftRight", 14)} Enviar solicitud</button>
+      `,
+    });
+    document.querySelector("#tr-cancel").addEventListener("click", close);
+    document.querySelector("#tr-submit").addEventListener("click", async () => {
+      const fromId = document.querySelector("#tr-from")?.value;
+      const qty = parseInt(document.querySelector("#tr-qty")?.value, 10);
+      const note = document.querySelector("#tr-note")?.value?.trim() || null;
+      const src = available.find((s) => s.warehouseId === fromId);
+      const check = validateTransferRequest({
+        fromWarehouseId: fromId,
+        toWarehouseId: warehouse.id,
+        productId: product.id,
+        quantity: qty,
+      });
+      if (!check.ok) { toast(check.error, "warning"); return; }
+      if (src && qty > src.quantity) {
+        toast(`Solo hay ${src.quantity} disponibles en ${src.warehouseName || "ese almacén"}`, "warning");
+        return;
+      }
+      try {
+        const res = await createTransferRequest({
+          fromWarehouseId: fromId,
+          toWarehouseId: warehouse.id,
+          productId: product.id,
+          productName: product.name,
+          quantity: qty,
+          note,
+        }, user);
+        toast(`Solicitud ${res.code || ""} enviada al administrador`, "success");
+        close();
+        listTransferRequests({ toWarehouseId: warehouse.id, limit: 5 }).then((r) => { myRequests = r; render(); }).catch(() => {});
+      } catch (err) {
+        toast("No se pudo enviar: " + (err.message || "desconocido"), "error");
+      }
+    });
   }
 
   function getPeriodSales() {
@@ -94,11 +176,45 @@ export function mountWarehouseInterior(container, navigate) {
     stock.forEach((s) => (stockMap[s.productId] = s));
     const user = store.getState().currentUser;
     const isAdmin = user?.role === "admin";
-    const filteredProducts = products.filter((p) =>
-      !search || p.name.toLowerCase().includes(search.toLowerCase()) || (p.brand || "").toLowerCase().includes(search.toLowerCase()) || (p.sku || "").toLowerCase().includes(search.toLowerCase())
-    );
+    const filteredProducts = products.filter((p) => {
+      if (search) {
+        const q = search.toLowerCase();
+        if (!p.name.toLowerCase().includes(q) && !(p.brand || "").toLowerCase().includes(q) && !(p.sku || "").toLowerCase().includes(q)) return false;
+      }
+      // v5.4.0: filtro por estado de stock (badges "bajo" / "agotado")
+      if (stockFilter === "low" || stockFilter === "out") {
+        const qty = stockMap[p.id]?.quantity ?? 0;
+        const min = stockMap[p.id]?.minStock || p.minStock || 5;
+        if (stockFilter === "low" && !(qty > 0 && qty <= min)) return false;
+        if (stockFilter === "out" && qty !== 0) return false;
+      }
+      return true;
+    });
     const lowStock = stock.filter((s) => s.quantity <= (s.minStock || 5) && s.quantity > 0).length;
     const outOfStock = stock.filter((s) => s.quantity === 0).length;
+
+    // v5.4.0: tiles de monedas con movimiento; las sin actividad van en una línea compacta
+    const CURR_MARK = { USD: "$", MN: "₱", EUR: "€", TRANSFERENCIA: icon("creditCard", 18) };
+    const CURR_BORDER = {
+      USD: "color-mix(in oklab, var(--accent-usd) 30%, transparent)",
+      MN: "color-mix(in oklab, var(--accent-mn) 30%, transparent)",
+      EUR: "color-mix(in oklab, var(--accent-eur) 30%, transparent)",
+      TRANSFERENCIA: "color-mix(in oklab, var(--accent-transfer) 30%, transparent)",
+    };
+    const CURR_COLOR = {
+      USD: "var(--accent-usd)", MN: "var(--accent-mn)", EUR: "var(--accent-eur)", TRANSFERENCIA: "var(--accent-transfer)",
+    };
+    const CURR_FMT = { USD: "USD", MN: "MN", EUR: "EUR", TRANSFERENCIA: "USD" };
+    const CURR_LABEL = { USD: "USD", MN: "MN", EUR: "EUR", TRANSFERENCIA: "Transf." };
+    const activeCurrs = ["USD", "MN", "EUR", "TRANSFERENCIA"].filter((c) => stats.byCurrency[c].count > 0 || stats.byCurrency[c].amount > 0);
+    const zeroCurrs = ["USD", "MN", "EUR", "TRANSFERENCIA"].filter((c) => !(stats.byCurrency[c].count > 0 || stats.byCurrency[c].amount > 0));
+
+    // v5.5.0: cierre de caja — siempre del DÍA, independiente del período elegido
+    const nowDate = new Date();
+    const todayFrom = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate()).getTime();
+    const todayStats = computeClosureStats(sales, { fromMs: todayFrom, toMs: todayFrom + 86400000 });
+    const todayKey = closureDateKey(Date.now());
+    const todayClosed = recentClosures.find((c) => c.closureDate === todayKey);
 
     container.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:0.875rem">
@@ -131,39 +247,31 @@ export function mountWarehouseInterior(container, navigate) {
             <span class="badge badge-dark">${icon("cart", 10)} ${stats.count} ventas</span>
           </div>
 
-          <!-- Grid 2x3 KPIs -->
+          <!-- Grid de KPIs: Ventas + monedas activas + Unidades (v5.4.0) -->
           <div class="grid grid-cols-3 gap-2">
             <div style="text-align:center;padding:0.5rem;background:var(--bg-dark);border-radius:var(--radius);border:1px solid var(--border-on-dark)">
               <div style="color:var(--accent-usd);margin-bottom:0.125rem">${icon("cart", 18)}</div>
               <div class="text-xl font-bold text-on-dark">${stats.count}</div>
               <div class="text-xs text-muted-on-dark">Ventas</div>
             </div>
-            <div style="text-align:center;padding:0.5rem;background:var(--bg-dark);border-radius:var(--radius);border:1px solid color-mix(in oklab, var(--accent-usd) 30%, transparent)">
-              <div style="color:var(--accent-usd);margin-bottom:0.125rem;font-size:1.125rem;font-weight:700">$</div>
-              <div class="text-xl font-bold text-on-dark">${formatMoney(stats.byCurrency.USD.amount, "USD")}</div>
-              <div class="text-xs text-muted-on-dark">USD</div>
-            </div>
-            <div style="text-align:center;padding:0.5rem;background:var(--bg-dark);border-radius:var(--radius);border:1px solid color-mix(in oklab, var(--accent-mn) 30%, transparent)">
-              <div style="color:var(--accent-mn);margin-bottom:0.125rem;font-size:1.125rem;font-weight:700">₱</div>
-              <div class="text-xl font-bold text-on-dark">${formatMoney(stats.byCurrency.MN.amount, "MN")}</div>
-              <div class="text-xs text-muted-on-dark">MN</div>
-            </div>
-            <div style="text-align:center;padding:0.5rem;background:var(--bg-dark);border-radius:var(--radius);border:1px solid color-mix(in oklab, var(--accent-eur) 30%, transparent)">
-              <div style="color:var(--accent-eur);margin-bottom:0.125rem;font-size:1.125rem;font-weight:700">€</div>
-              <div class="text-xl font-bold text-on-dark">${formatMoney(stats.byCurrency.EUR.amount, "EUR")}</div>
-              <div class="text-xs text-muted-on-dark">EUR</div>
-            </div>
-            <div style="text-align:center;padding:0.5rem;background:var(--bg-dark);border-radius:var(--radius);border:1px solid color-mix(in oklab, var(--accent-transfer) 30%, transparent)">
-              <div style="color:var(--accent-transfer);margin-bottom:0.125rem">${icon("creditCard", 18)}</div>
-              <div class="text-xl font-bold text-on-dark">${formatMoney(stats.byCurrency.TRANSFERENCIA.amount, "USD")}</div>
-              <div class="text-xs text-muted-on-dark">Transf.</div>
-            </div>
+            ${activeCurrs.map((c) => `
+              <div style="text-align:center;padding:0.5rem;background:var(--bg-dark);border-radius:var(--radius);border:1px solid ${CURR_BORDER[c]}">
+                <div style="color:${CURR_COLOR[c]};margin-bottom:0.125rem;font-size:1.125rem;font-weight:700">${CURR_MARK[c]}</div>
+                <div class="text-xl font-bold text-on-dark">${formatMoney(stats.byCurrency[c].amount, CURR_FMT[c])}</div>
+                <div class="text-xs text-muted-on-dark">${CURR_LABEL[c]}</div>
+              </div>
+            `).join("")}
             <div style="text-align:center;padding:0.5rem;background:var(--bg-dark);border-radius:var(--radius);border:1px solid var(--border-on-dark)">
               <div style="color:var(--warning);margin-bottom:0.125rem">${icon("boxes", 18)}</div>
               <div class="text-xl font-bold text-on-dark">${stats.unitsSold}</div>
               <div class="text-xs text-muted-on-dark">Unidades</div>
             </div>
           </div>
+          ${zeroCurrs.length > 0 ? `
+            <div class="text-xs text-muted-on-dark" style="margin-top:0.375rem">
+              Sin movimiento: ${zeroCurrs.map((c) => CURR_LABEL[c]).join(" · ")}
+            </div>
+          ` : ''}
 
           ${stats.count > 0 ? `
             <hr style="border:none;border-top:1px solid var(--border-on-dark);margin:0.625rem 0" />
@@ -183,13 +291,66 @@ export function mountWarehouseInterior(container, navigate) {
           ${icon("cart", 20)} Registrar venta
         </button>
 
+        <!-- Cierre de caja (v5.5.0) -->
+        <div class="card">
+          <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+            <h3 class="card-title flex items-center gap-1">${icon("receipt", 14)} Cierre de caja</h3>
+            ${todayClosed
+              ? `<span class="badge badge-accent" style="font-size:0.625rem">Cerrado · ${esc(todayClosed.createdByName || '')}</span>`
+              : `<span class="badge ${todayStats.salesCount > 0 ? 'badge-warning' : ''}" style="font-size:0.625rem">${todayStats.salesCount > 0 ? 'Pendiente de cerrar' : 'Sin ventas hoy'}</span>`}
+          </div>
+          <div class="card-content" style="padding:0.625rem 0.75rem">
+            <div class="grid grid-cols-3 gap-2">
+              <div style="text-align:center;padding:0.375rem;background:var(--bg-soft);border-radius:var(--radius-sm)">
+                <div class="text-lg font-bold">${todayStats.salesCount}</div>
+                <div class="text-xs text-muted">Ventas hoy</div>
+              </div>
+              <div style="text-align:center;padding:0.375rem;background:var(--bg-soft);border-radius:var(--radius-sm)">
+                <div class="text-lg font-bold" style="color:var(--accent-usd)">${formatMoney(todayStats.totalUSD, "USD")}</div>
+                <div class="text-xs text-muted">Total (USD)</div>
+              </div>
+              <div style="text-align:center;padding:0.375rem;background:var(--bg-soft);border-radius:var(--radius-sm)">
+                <div class="text-lg font-bold">${todayStats.unitsSold}</div>
+                <div class="text-xs text-muted">Unidades</div>
+              </div>
+            </div>
+            ${Object.entries(todayStats.byCurrency).filter(([_, v]) => v.count > 0).map(([curr, d]) => `
+              <div style="display:flex;justify-content:space-between;padding:0.25rem 0.5rem;margin-top:0.375rem;background:var(--bg-soft);border-radius:var(--radius-sm);border:1px solid var(--border)" class="text-xs">
+                <span class="text-muted">${esc(curr)} · ${d.count} venta(s)</span>
+                <strong>${formatMoney(d.amount, curr)}</strong>
+              </div>
+            `).join("")}
+            <button class="btn btn-outline btn-sm btn-block" id="close-cash-btn" style="margin-top:0.5rem">
+              ${icon("check", 14)} ${todayClosed ? 'Actualizar cierre de hoy' : 'Cerrar caja de hoy'}
+            </button>
+            ${recentClosures.length > 0 ? `
+              <button class="btn btn-ghost btn-sm btn-block" data-toggle-closures>
+                Últimos cierres (${recentClosures.length}) ${closuresOpen ? '▲' : '▼'}
+              </button>
+              ${closuresOpen ? `
+                <div style="display:flex;flex-direction:column;gap:0.25rem">
+                  ${recentClosures.map((c) => `
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius-sm)">
+                      <div>
+                        <div class="text-xs font-medium">${esc(c.closureDate)}${c.closureDate === todayKey ? ' · hoy' : ''}</div>
+                        <div class="text-xs text-muted">${c.salesCount} ventas · ${c.unitsSold} u · por ${esc(c.createdByName || '—')}</div>
+                      </div>
+                      <strong class="text-sm" style="color:var(--accent-usd)">${formatMoney(c.totalUSD, "USD")}</strong>
+                    </div>
+                  `).join("")}
+                </div>
+              ` : ''}
+            ` : ''}
+          </div>
+        </div>
+
         <!-- Inventario con tabs: Stock / Otros almacenes / Transferencias -->
         <div class="card">
           <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem">
             <h3 class="card-title flex items-center gap-1">${icon("boxes", 14)} Inventario</h3>
             <div style="display:flex;gap:0.25rem">
-              ${lowStock > 0 ? `<span class="badge badge-warning" style="font-size:0.5625rem">${lowStock} bajo</span>` : ''}
-              ${outOfStock > 0 ? `<span class="badge badge-danger" style="font-size:0.5625rem">${outOfStock} agotado</span>` : ''}
+              ${lowStock > 0 ? `<button class="badge badge-warning" data-stock-filter="low" style="font-size:0.5625rem;cursor:pointer;border:none;font-weight:700" title="Ver solo productos con stock bajo">${lowStock} bajo${stockFilter === 'low' ? ' ✕' : ''}</button>` : ''}
+              ${outOfStock > 0 ? `<button class="badge badge-danger" data-stock-filter="out" style="font-size:0.5625rem;cursor:pointer;border:none;font-weight:700" title="Ver solo productos agotados">${outOfStock} agotado${stockFilter === 'out' ? ' ✕' : ''}</button>` : ''}
             </div>
           </div>
 
@@ -225,7 +386,14 @@ export function mountWarehouseInterior(container, navigate) {
                     </div>
                   `;
                 }).join("")}
-                ${filteredProducts.length === 0 ? '<div class="empty-state text-xs">Sin productos</div>' : ''}
+                ${filteredProducts.length === 0 ? `
+                  <div class="empty-state text-xs">
+                    <div class="empty-state-icon">${icon("boxes", 20)}</div>
+                    ${search || stockFilter !== "all"
+                      ? `<p style="margin:0.25rem 0 0.5rem">Sin resultados para los filtros aplicados.</p><button class="btn btn-outline btn-sm" data-clear-stock-filters style="margin:0 auto">Limpiar filtros</button>`
+                      : `<p style="margin:0.25rem 0 0.5rem">No hay productos en este almacén todavía.</p><p class="text-muted" style="font-size:0.6875rem">El administrador puede crearlos y cargarles stock.</p>`}
+                  </div>
+                ` : ''}
               </div>
             ` : ''}
 
@@ -297,6 +465,11 @@ export function mountWarehouseInterior(container, navigate) {
                             </span>
                           `).join('')}
                         </div>
+                        <div style="margin-top:0.375rem">
+                          <button class="btn btn-outline btn-sm" data-request-product="${esc(product.id)}" ${totalQty <= 0 ? 'disabled title="Sin stock en otros almacenes"' : ''} style="font-size:0.75rem">
+                            ${icon("arrowLeftRight", 12)} Solicitar traspaso
+                          </button>
+                        </div>
                       </div>
                     `).join('')}
                   </div>
@@ -304,6 +477,24 @@ export function mountWarehouseInterior(container, navigate) {
               })()}
             ` : ''}
           </div>
+
+          <!-- Mis solicitudes de traspaso (v5.5.0) -->
+          ${myRequests.length > 0 ? `
+            <div style="border-top:1px solid var(--border);padding:0.5rem 0.75rem 0.75rem">
+              <div class="text-xs font-semibold text-muted" style="margin-bottom:0.375rem">Mis solicitudes de traspaso</div>
+              <div style="display:flex;flex-direction:column;gap:0.25rem">
+                ${myRequests.slice(0, 5).map((r) => `
+                  <div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius-sm)">
+                    <div style="min-width:0">
+                      <div class="text-xs font-medium truncate">${esc(r.productName || '—')} · <strong>${r.quantity}</strong> u</div>
+                      <div class="text-xs text-muted">Desde ${esc(r.fromWarehouseName || r.fromWarehouseId || '—')} · ${formatDate(r.createdAt)}</div>
+                    </div>
+                    <span class="badge ${r.status === 'PENDIENTE' ? 'badge-warning' : r.status === 'APROBADA' ? 'badge-accent' : 'badge-danger'}" style="font-size:0.5625rem">${esc(r.status)}</span>
+                  </div>
+                `).join("")}
+              </div>
+            </div>
+          ` : ''}
         </div>
 
         <!-- Ventas recientes -->
@@ -345,6 +536,63 @@ export function mountWarehouseInterior(container, navigate) {
         }
       });
     });
+
+    // v5.4.0: filtro por estado de stock (badges clicables) + limpiar filtros
+    container.querySelectorAll("[data-stock-filter]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        stockFilter = stockFilter === btn.dataset.stockFilter ? "all" : btn.dataset.stockFilter;
+        render();
+      });
+    });
+    const clearFiltersBtn = container.querySelector("[data-clear-stock-filters]");
+    if (clearFiltersBtn) {
+      clearFiltersBtn.addEventListener("click", () => {
+        search = "";
+        stockFilter = "all";
+        render();
+      });
+    }
+
+    // v5.5.0: solicitar traspaso a otro almacén
+    container.querySelectorAll("[data-request-product]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const p = products.find((x) => x.id === btn.dataset.requestProduct);
+        if (p) showRequestDialog(p);
+      });
+    });
+
+    // v5.5.0: cierre de caja
+    const closeCashBtn = container.querySelector("#close-cash-btn");
+    if (closeCashBtn) {
+      closeCashBtn.addEventListener("click", () => {
+        const user = store.getState().currentUser;
+        confirmDialog(
+          todayClosed
+            ? "Ya hay un cierre de hoy. ¿Actualizarlo con las ventas actuales?"
+            : `¿Cerrar la caja de hoy? ${todayStats.salesCount} venta(s) · ${formatMoney(todayStats.totalUSD, "USD")}`,
+          async () => {
+            try {
+              const res = await saveDailyClosure({
+                warehouseId: warehouse.id,
+                warehouseCode: warehouse.code,
+                warehouseName: warehouse.name,
+                dateKey: todayKey,
+                stats: todayStats,
+                user,
+              });
+              toast(res.updated ? "Cierre de hoy actualizado" : "Cierre de caja guardado", "success");
+              listDailyClosures({ warehouseId: warehouse.id, limit: 7 }).then((c) => { recentClosures = c; closuresOpen = true; render(); }).catch(() => {});
+            } catch (err) {
+              toast("Error al guardar el cierre: " + (err.message || "desconocido"), "error");
+            }
+          }
+        );
+      });
+    }
+    const toggleClosuresBtn = container.querySelector("[data-toggle-closures]");
+    if (toggleClosuresBtn) {
+      toggleClosuresBtn.addEventListener("click", () => { closuresOpen = !closuresOpen; render(); });
+    }
 
     // Botón "Ver en otros almacenes" (en cada producto del tab Stock)
     container.querySelectorAll("[data-view-others]").forEach((btn) => {

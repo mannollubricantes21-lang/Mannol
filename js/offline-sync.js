@@ -34,7 +34,7 @@
 
 import { getStore } from "./store.js";
 import { getSupabase } from "./supabase.js";
-import { saveSale, adjustStock } from "./db.js";
+import { saveSale, adjustStock, deductSaleStockAtomic } from "./db.js";
 import { toast } from "./ui.js";
 
 // ===== UUID v4 generation =====
@@ -155,23 +155,45 @@ async function syncOneSale(sale) {
   await saveSale(sale);
 
   // 3. Deduct stock for each item (only if COMPLETADA)
-  //    Sequential per sale to avoid race within the same sale
+  //    PRIMERO con la RPC atómica deduct_sale_stock (migration-v5.3):
+  //    solo descuenta si hay stock suficiente, así dos puestos que
+  //    vendieron lo mismo offline no dejan el inventario en negativo.
+  //    Si el RPC no está instalado (RPC_MISSING) o falla, usa el
+  //    desconto clásico item por item (comportamiento anterior).
   if (sale.status === "COMPLETADA") {
-    for (const item of sale.items) {
-      try {
-        await adjustStock(
-          sale.warehouseId,
-          item.productId,
-          -item.quantity,
-          "VENTA",
-          `Venta ${sale.code}${sale.clientRef ? ` (sync)` : ""}`,
-          sale.userId,
-          sale.userName,
+    let atomicDone = false;
+    try {
+      const res = await deductSaleStockAtomic(sale);
+      atomicDone = true;
+      const shortages = res?.shortages || [];
+      if (shortages.length > 0) {
+        console.warn(`[Sync] ${sale.code}: stock insuficiente al sincronizar:`, shortages);
+        toast(
+          `Venta ${sale.code} sincronizada con revisión: stock insuficiente para ${shortages.length} producto(s). Revisa Stock general.`,
+          "warning",
+          7000,
         );
-      } catch (err) {
-        console.warn(`[Sync] Stock adjust failed for ${item.productId} in sale ${sale.code}:`, err);
-        // Continue — sale is saved, stock may need manual adjustment
-        // We don't fail the whole sync because of one stock issue
+      }
+    } catch (err) {
+      console.warn(`[Sync] deduct_sale_stock no disponible para ${sale.code}, usando desconto clásico:`, err);
+    }
+    if (!atomicDone) {
+      for (const item of sale.items) {
+        try {
+          await adjustStock(
+            sale.warehouseId,
+            item.productId,
+            -item.quantity,
+            "VENTA",
+            `Venta ${sale.code}${sale.clientRef ? ` (sync)` : ""}`,
+            sale.userId,
+            sale.userName,
+          );
+        } catch (err) {
+          console.warn(`[Sync] Stock adjust failed for ${item.productId} in sale ${sale.code}:`, err);
+          // Continue — sale is saved, stock may need manual adjustment
+          // We don't fail the whole sync because of one stock issue
+        }
       }
     }
   }

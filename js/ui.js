@@ -53,6 +53,7 @@ let _modalCounter = 0;
 export function showModal({ title, body, footer, onClose, size }) {
   const container = document.getElementById("modal-container");
   if (!container) return () => {};
+  const prevFocus = document.activeElement; // para restaurar el foco al cerrar
 
   const modalId = `modal-${++_modalCounter}`;
   const overlay = document.createElement("div");
@@ -73,6 +74,10 @@ export function showModal({ title, body, footer, onClose, size }) {
     if (!overlay.parentNode) return; // already removed
     overlay.remove();
     document.removeEventListener("keydown", escHandler);
+    // Accesibilidad: devolver el foco al elemento que abrió el modal
+    try {
+      if (prevFocus && prevFocus.isConnected) prevFocus.focus();
+    } catch {}
     if (onClose) onClose();
   };
 
@@ -98,7 +103,30 @@ export function showModal({ title, body, footer, onClose, size }) {
   setTimeout(() => {
     const focusable = overlay.querySelector("input, button:not(.modal-close), select, textarea");
     if (focusable) focusable.focus();
+    else overlay.querySelector(".modal")?.focus();
   }, 50);
+
+  // Focus trap completo: Tab cicla dentro del modal, nunca se sale (accesibilidad)
+  const trapHandler = (e) => {
+    if (e.key !== "Tab") return;
+    const focusables = [...overlay.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )].filter((el) => el.offsetParent !== null || el === document.activeElement);
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (!overlay.contains(document.activeElement)) {
+      e.preventDefault();
+      first.focus();
+    } else if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  overlay.addEventListener("keydown", trapHandler);
 
   container.appendChild(overlay);
   return close;

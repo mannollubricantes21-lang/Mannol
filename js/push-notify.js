@@ -68,6 +68,19 @@ export function notifySaleCompleted(sale) {
   });
 }
 
+// Convenience: notify low stock (se llama al detectar productos en el mínimo)
+export function notifyLowStock(items) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const first = items[0];
+  const extra = items.length - 1;
+  return notify(`Stock bajo: ${first.name}`, {
+    body:
+      `${first.warehouseName ? first.warehouseName + " · " : ""}Quedan ${first.qty} u. (mínimo ${first.minStock})` +
+      (extra > 0 ? `\n+${extra} producto(s) más con stock bajo` : ""),
+    tag: `low-stock-${first.productId}-${first.warehouseId || "all"}`,
+  });
+}
+
 // Convenience: notify a pending sync queue
 export function notifyPendingSync(count) {
   return notify(`${count} venta(s) pendiente(s)`, {

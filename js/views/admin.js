@@ -20,14 +20,17 @@ import {
   listCardsWithBalances, getCardBalance, addCardMovement,
   listAllStockAcrossWarehouses, listStockForProductInAllWarehouses,
   createStockTransfer, listStockTransfers, processStockTransfer,
+  listTransferRequests, setTransferRequestStatus, listDailyClosures,
+  subscribeTransferRequests,
 } from "../db.js";
 import { logout } from "../auth.js";
 import { formatMoney, formatDate, formatDateShort } from "../currency.js";
 import { toast, icon, showModal, closeModal, confirmDialog, esc } from "../ui.js";
 import { CURRENCIES, CATEGORY_COLORS, STOCK_REASONS, STOCK_REASON_LABELS } from "../types.js";
 import { uploadImageAsWebP, pickImageFile } from "../image-upload.js";
-import { lineChart, barChart, COLORS } from "../charts.js";
+import { lineChart, barChart, sparkline, COLORS } from "../charts.js";
 import { exportToCSV, exportMultipleCSVs } from "../csv-export.js";
+import { closureDateKey, aggregateClosuresReport, reportPeriodRange } from "../sales-stats.js";
 import { getGitHubConfig, saveGitHubConfig, testGitHubConnection, isGitHubConfigured } from "../github-storage.js";
 import { detectViscosityFromName } from "../viscosity.js";
 
@@ -59,6 +62,7 @@ const NAV_SECTIONS = [
     items: [
       { id: "transfers", label: "Transferencias", icon: "arrowLeftRight" },
       { id: "movements", label: "Movimientos", icon: "listTree" },
+      { id: "closures", label: "Cierres de caja", icon: "receipt" },
       { id: "storage", label: "Almacenamiento", icon: "cloud" },
       { id: "weekend", label: "Fin de semana", icon: "calendar" },
       { id: "audit", label: "Auditoría", icon: "receipt" },
@@ -94,20 +98,131 @@ export function mountAdminView(container, navigateOrUser) {
   let tabGeneration = 0;
   let sidebarOpen = false;
   let pendingTransfersCount = 0; // badge rojo en sidebar
+  let closuresReportPeriod = "week"; // v5.6.0: "week" | "month" | "30d"
+  // Caché de datos del dashboard analítico. Vive en este scope (no dentro de
+  // mountAnalyticsDashboard) para que loadCardBalanceChart y showCardEvolutionModal
+  // puedan leerla sin ReferenceError.
+  let dataCache = null;
 
-  // Cargar conteo de transferencias pendientes para el badge del sidebar
-  listStockTransfers({ status: "PENDING" }).then((pending) => {
-    pendingTransfersCount = pending.length;
-    // Actualizar solo el badge si la sidebar ya está renderizada
+  // Actualiza el badge rojo del sidebar (transferencias + solicitudes pendientes)
+  function updatePendingBadge(total) {
+    pendingTransfersCount = total;
     const badgeEl = document.querySelector("[data-pending-count]");
     if (badgeEl) {
-      badgeEl.textContent = String(pendingTransfersCount);
-      badgeEl.style.display = pendingTransfersCount > 0 ? "" : "none";
-    } else if (pendingTransfersCount > 0) {
+      badgeEl.textContent = String(total);
+      badgeEl.style.display = total > 0 ? "" : "none";
+    } else if (total > 0) {
       // Si el badge no existe pero hay pendientes, re-render el sidebar
       render();
     }
+  }
+
+  // Cargar conteo inicial para el badge del sidebar
+  Promise.all([
+    listStockTransfers({ status: "PENDING" }),
+    listTransferRequests({ status: "PENDIENTE", limit: 100 }),
+  ]).then(([pending, requests]) => {
+    updatePendingBadge(pending.length + requests.length);
   }).catch(() => {});
+
+  // ===== v5.6.0: notificaciones en vivo de solicitudes del personal =====
+  // Realtime (Supabase) o evento demo → badge, beep, banner y Notification API.
+  const seenRequestIds = new Set();
+  let requestsFirstLoad = true;
+
+  function playNotifyBeep() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(1174, ctx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.07, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.36);
+      osc.onended = () => { try { ctx.close(); } catch {} };
+    } catch {}
+  }
+
+  function showRequestBanner(r) {
+    const host = container.querySelector("#admin-tab-content");
+    if (!host) return;
+    // Máx 1 banner simultáneo — el más nuevo reemplaza al anterior
+    document.querySelectorAll("[data-request-banner]").forEach((b) => b.remove());
+    const banner = document.createElement("div");
+    banner.setAttribute("data-request-banner", "");
+    banner.style.cssText = "margin:0 0 0.75rem;padding:0.625rem 0.75rem;border:1px solid var(--warning);border-left-width:4px;border-radius:var(--radius);background:var(--bg-soft);display:flex;justify-content:space-between;align-items:center;gap:0.5rem";
+    banner.innerHTML = `
+      <div style="min-width:0">
+        <div class="text-sm font-bold">📥 Nueva solicitud de traspaso</div>
+        <div class="text-xs text-muted truncate">${esc(r.productName || "—")} · ${r.quantity} u · ${esc(r.requestedByName || "empleado")}${r.note ? ` — "${esc(r.note)}"` : ""}</div>
+      </div>
+      <div style="display:flex;gap:0.375rem;flex-shrink:0">
+        <button class="btn btn-primary btn-sm" data-banner-view>Ver</button>
+        <button class="btn btn-ghost btn-sm" data-banner-dismiss>✕</button>
+      </div>
+    `;
+    banner.querySelector("[data-banner-view]").addEventListener("click", () => {
+      banner.remove();
+      activeTab = "transfers";
+      render();
+      renderTabContent();
+    });
+    banner.querySelector("[data-banner-dismiss]").addEventListener("click", () => banner.remove());
+    host.prepend(banner);
+  }
+
+  function notifyNewRequest(r) {
+    playNotifyBeep();
+    toast(`📥 Nueva solicitud: ${r.productName || "—"} (${r.quantity} u) de ${r.requestedByName || "empleado"}`, "info", 6000);
+    showRequestBanner(r);
+    try {
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification("Nueva solicitud de traspaso", {
+          body: `${r.productName || "—"} · ${r.quantity} u · ${r.requestedByName || ""}`,
+          tag: `tr-${r.id}`,
+        });
+      }
+    } catch {}
+  }
+
+  subscribeTransferRequests((items) => {
+    const pendientes = items.filter((r) => r.status === "PENDIENTE");
+    if (requestsFirstLoad) {
+      // La carga inicial marca lo existente como "ya visto" (no notifica lo viejo)
+      pendientes.forEach((r) => seenRequestIds.add(r.id));
+      requestsFirstLoad = false;
+      return;
+    }
+    const nuevos = pendientes.filter((r) => !seenRequestIds.has(r.id));
+    pendientes.forEach((r) => seenRequestIds.add(r.id));
+    listStockTransfers({ status: "PENDING" }).then((trs) => {
+      updatePendingBadge(trs.length + pendientes.length);
+    }).catch(() => {
+      updatePendingBadge(pendientes.length);
+    });
+    nuevos.forEach((r) => notifyNewRequest(r));
+  });
+
+  // Botón para activar las notificaciones del sistema (requiere gesto del usuario)
+  container.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-enable-notifications]");
+    if (!btn) return;
+    try {
+      if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission().then((p) => {
+          if (p === "granted") toast("Notificaciones del sistema activadas", "success");
+          render();
+        });
+      }
+    } catch {}
+  });
 
   function render() {
     container.innerHTML = `
@@ -121,6 +236,11 @@ export function mountAdminView(container, navigateOrUser) {
               <p class="text-xs text-muted truncate" style="margin:0">${user.displayName}</p>
             </div>
           </div>
+          ${("Notification" in window) && typeof Notification !== "undefined" && Notification.permission === "default" ? `
+            <div style="padding:0.375rem 0.625rem;border-bottom:1px solid var(--border)">
+              <button class="btn btn-ghost btn-sm btn-block" data-enable-notifications style="font-size:0.625rem" title="Recibir avisos del sistema cuando lleguen solicitudes">🔔 Activar notificaciones</button>
+            </div>
+          ` : ''}
           <nav class="admin-sidebar-nav" aria-label="Navegación admin">
             ${NAV_SECTIONS.map((section) => `
               <div class="admin-nav-section-label">${section.label}</div>
@@ -187,17 +307,21 @@ export function mountAdminView(container, navigateOrUser) {
       </div>
     `;
 
-    // Wire up navigation
+    // Wire up navigation (función compartida: sidebar + paleta Ctrl+K)
+    const navigateToTab = (tabId) => {
+      activeTab = tabId;
+      container.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === tabId));
+      const titleEl = container.querySelector("#admin-page-title");
+      if (titleEl) titleEl.textContent = getActiveTabLabel();
+      closeSidebar();
+      renderTabContent();
+    };
     container.querySelectorAll("[data-tab]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        activeTab = btn.dataset.tab;
-        container.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === activeTab));
-        const titleEl = container.querySelector("#admin-page-title");
-        if (titleEl) titleEl.textContent = getActiveTabLabel();
-        closeSidebar();
-        renderTabContent();
-      });
+      btn.addEventListener("click", () => navigateToTab(btn.dataset.tab));
     });
+
+    // Expuesto para la paleta de comandos (admin-app.js) y atajos externos
+    window.__adminNavigateTo = navigateToTab;
 
     // Mobile sidebar toggle
     const toggleBtn = container.querySelector("#admin-toggle-sidebar");
@@ -628,6 +752,7 @@ export function mountAdminView(container, navigateOrUser) {
       case "weekend": mountWeekendPanel(content, myGen); break;
       case "transfers": mountTransfersPanel(content, myGen); break;
       case "movements": mountMovementsPanel(content, myGen); break;
+      case "closures": mountClosuresPanel(content, myGen); break;
       case "storage": mountStoragePanel(content, myGen); break;
       case "rates": mountRatesPanel(content, myGen); break;
       case "profit": mountProfitPanel(content, myGen); break;
@@ -898,7 +1023,6 @@ export function mountAdminView(container, navigateOrUser) {
   function mountAnalyticsDashboard(content, gen) {
     content.innerHTML = `<div class="empty-state"><div class="spinner spinner-lg"></div><p class="text-sm text-muted mt-2">Cargando panel…</p></div>`;
     let range = 30; // días
-    let dataCache = null;
 
     async function load() {
       if (gen !== tabGeneration) return;
@@ -906,8 +1030,11 @@ export function mountAdminView(container, navigateOrUser) {
       content.innerHTML = renderShell();
       wireQuickAccess();
       try {
+        // Solo traer ventas del rango visible + el período anterior para la comparativa
+        // (antes traía TODAS las ventas de la historia — lento con miles de registros)
+        const fromMs = Date.now() - range * 2 * 86400000;
         const [allSales, cardsWithBalances, unpaidReminder, pendingTransfers] = await Promise.all([
-          listSales({}),
+          listSales({ from: fromMs }),
           listCardsWithBalances(),
           import("../db.js").then((m) => m.getUnpaidCommissionsFromPreviousMonth()),
           listStockTransfers({ status: "PENDING" }),
@@ -930,6 +1057,14 @@ export function mountAdminView(container, navigateOrUser) {
      * Shell con título + botones de rango + grid de acceso rápido
      * (todos los paneles de gestión visibles de un vistazo).
      */
+  // v5.4.0: chip compacto de acceso rápido (reemplaza las tarjetas grandes)
+  function adminChip(id, ic, label) {
+    return `<button class="quick-access-card" data-jump="${id}" style="display:inline-flex;align-items:center;gap:0.5rem;border:1px solid var(--border);background:var(--bg-elevated);border-radius:999px;padding:0.4rem 0.8rem;cursor:pointer;font-size:0.8125rem;font-weight:600;transition:transform 0.15s,box-shadow 0.15s">
+      <span style="color:var(--primary);display:inline-flex">${icon(ic, 14)}</span>
+      <span>${label}</span>
+    </button>`;
+  }
+
     function renderShell() {
       return `<div style="display:flex;flex-direction:column;gap:1rem">
         <div class="flex items-center justify-between flex-wrap gap-2">
@@ -942,117 +1077,24 @@ export function mountAdminView(container, navigateOrUser) {
             <button class="btn ${range === 30 ? 'btn-primary' : 'btn-outline'} btn-sm" data-range="30">30d</button>
             <button class="btn ${range === 90 ? 'btn-primary' : 'btn-outline'} btn-sm" data-range="90">90d</button>
             <button class="btn ${range === 365 ? 'btn-primary' : 'btn-outline'} btn-sm" data-range="365">1 año</button>
+            <button class="btn btn-outline btn-sm" id="dash-export-csv" title="Exportar a CSV las ventas completadas del período">${icon("download", 14)} CSV</button>
           </div>
         </div>
 
-        <!-- ACCESO RÁPIDO: todas las opciones de gestión visibles al entrar -->
+        <!-- ACCESO RÁPIDO (v5.4.0: chips compactos — las KPIs quedan arriba) -->
         <div>
-          <p class="text-xs font-semibold text-muted" style="text-transform:uppercase;letter-spacing:0.05em;margin:0 0 0.5rem">Acceso rápido · Gestión</p>
-          <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
-            <button class="quick-access-card" data-jump="users" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
-              <div style="display:flex;align-items:center;gap:0.75rem">
-                <div style="width:2.5rem;height:2.5rem;background:var(--primary-tint);color:var(--primary);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("userCog", 18)}</div>
-                <div style="min-width:0">
-                  <div class="font-semibold text-sm">Usuarios</div>
-                  <div class="text-xs text-muted">Admin, gestores, vendedores</div>
-                </div>
-              </div>
-            </button>
-            <button class="quick-access-card" data-jump="products" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
-              <div style="display:flex;align-items:center;gap:0.75rem">
-                <div style="width:2.5rem;height:2.5rem;background:var(--primary-tint);color:var(--primary);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("tags", 18)}</div>
-                <div style="min-width:0">
-                  <div class="font-semibold text-sm">Productos</div>
-                  <div class="text-xs text-muted">Catálogo e imágenes</div>
-                </div>
-              </div>
-            </button>
-            <button class="quick-access-card" data-jump="categories" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
-              <div style="display:flex;align-items:center;gap:0.75rem">
-                <div style="width:2.5rem;height:2.5rem;background:var(--primary-tint);color:var(--primary);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("tags", 18)}</div>
-                <div style="min-width:0">
-                  <div class="font-semibold text-sm">Categorías</div>
-                  <div class="text-xs text-muted">Organizar catálogo</div>
-                </div>
-              </div>
-            </button>
-            <button class="quick-access-card" data-jump="warehouses" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
-              <div style="display:flex;align-items:center;gap:0.75rem">
-                <div style="width:2.5rem;height:2.5rem;background:var(--primary-tint);color:var(--primary);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("store", 18)}</div>
-                <div style="min-width:0">
-                  <div class="font-semibold text-sm">Almacenes</div>
-                  <div class="text-xs text-muted">Sucursales y comisiones</div>
-                </div>
-              </div>
-            </button>
-            <button class="quick-access-card" data-jump="managers" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
-              <div style="display:flex;align-items:center;gap:0.75rem">
-                <div style="width:2.5rem;height:2.5rem;background:var(--primary-tint);color:var(--primary);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("users", 18)}</div>
-                <div style="min-width:0">
-                  <div class="font-semibold text-sm">Gestores</div>
-                  <div class="text-xs text-muted">Referidores y comisiones</div>
-                </div>
-              </div>
-            </button>
-            <button class="quick-access-card" data-jump="cards" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
-              <div style="display:flex;align-items:center;gap:0.75rem">
-                <div style="width:2.5rem;height:2.5rem;background:var(--primary-tint);color:var(--primary);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("creditCard", 18)}</div>
-                <div style="min-width:0">
-                  <div class="font-semibold text-sm">Tarjetas</div>
-                  <div class="text-xs text-muted">Cuentas para transferencias</div>
-                </div>
-              </div>
-            </button>
-          </div>
-        </div>
-
-        <!-- ACCESO RÁPIDO: finanzas -->
-        <div>
-          <p class="text-xs font-semibold text-muted" style="text-transform:uppercase;letter-spacing:0.05em;margin:0 0 0.5rem">Acceso rápido · Finanzas</p>
-          <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
-            <button class="quick-access-card" data-jump="warehouseCommissions" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
-              <div style="display:flex;align-items:center;gap:0.75rem">
-                <div style="width:2.5rem;height:2.5rem;background:color-mix(in oklab, var(--accent-usd) 15%, transparent);color:var(--accent-usd);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("wallet", 18)}</div>
-                <div style="min-width:0">
-                  <div class="font-semibold text-sm">Comisiones locales</div>
-                  <div class="text-xs text-muted">Pagos a vendedores</div>
-                </div>
-              </div>
-            </button>
-            <button class="quick-access-card" data-jump="profit" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
-              <div style="display:flex;align-items:center;gap:0.75rem">
-                <div style="width:2.5rem;height:2.5rem;background:color-mix(in oklab, var(--accent-usd) 15%, transparent);color:var(--accent-usd);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("trendingUp", 18)}</div>
-                <div style="min-width:0">
-                  <div class="font-semibold text-sm">Ganancia/Inversión</div>
-                  <div class="text-xs text-muted">Margen y retorno</div>
-                </div>
-              </div>
-            </button>
-            <button class="quick-access-card" data-jump="rates" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
-              <div style="display:flex;align-items:center;gap:0.75rem">
-                <div style="width:2.5rem;height:2.5rem;background:color-mix(in oklab, var(--accent-usd) 15%, transparent);color:var(--accent-usd);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("trendingUp", 18)}</div>
-                <div style="min-width:0">
-                  <div class="font-semibold text-sm">Tasas elToque</div>
-                  <div class="text-xs text-muted">Conversión de moneda</div>
-                </div>
-              </div>
-            </button>
-          </div>
-        </div>
-
-        <!-- ACCESO RÁPIDO: sistema -->
-        <div>
-          <p class="text-xs font-semibold text-muted" style="text-transform:uppercase;letter-spacing:0.05em;margin:0 0 0.5rem">Acceso rápido · Sistema</p>
-          <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
-            <button class="quick-access-card" data-jump="audit" style="border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--radius-lg);padding:0.875rem;text-align:left;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s">
-              <div style="display:flex;align-items:center;gap:0.75rem">
-                <div style="width:2.5rem;height:2.5rem;background:color-mix(in oklab, var(--info) 15%, transparent);color:var(--info);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon("receipt", 18)}</div>
-                <div style="min-width:0">
-                  <div class="font-semibold text-sm">Auditoría</div>
-                  <div class="text-xs text-muted">Movimientos de stock</div>
-                </div>
-              </div>
-            </button>
+          <p class="text-xs font-semibold text-muted" style="text-transform:uppercase;letter-spacing:0.05em;margin:0 0 0.5rem">Acceso rápido</p>
+          <div style="display:flex;flex-wrap:wrap;gap:0.5rem">
+            ${adminChip("users", "userCog", "Usuarios")}
+            ${adminChip("products", "tags", "Productos")}
+            ${adminChip("categories", "tags", "Categorías")}
+            ${adminChip("warehouses", "store", "Almacenes")}
+            ${adminChip("managers", "users", "Gestores")}
+            ${adminChip("cards", "creditCard", "Tarjetas")}
+            ${adminChip("warehouseCommissions", "wallet", "Comisiones")}
+            ${adminChip("profit", "trendingUp", "Ganancia")}
+            ${adminChip("rates", "trendingUp", "Tasas")}
+            ${adminChip("audit", "receipt", "Auditoría")}
           </div>
         </div>
 
@@ -1108,6 +1150,23 @@ export function mountAdminView(container, navigateOrUser) {
           load();
         });
       });
+
+      // Exportar CSV del período visible (ventas completadas)
+      content.querySelector("#dash-export-csv")?.addEventListener("click", () => {
+        if (!dataCache?.filtered) return;
+        const done = dataCache.filtered.filter((s) => s.status === "COMPLETADA");
+        exportToCSV(`ventas-${range}d-${new Date().toISOString().slice(0, 10)}.csv`, done, [
+          { key: "code", label: "Código" },
+          { key: "createdAt", label: "Fecha", format: (v) => formatDate(v, { day: "2-digit", month: "2-digit", year: "numeric" }) },
+          { key: "warehouseName", label: "Almacén" },
+          { key: "sellerName", label: "Vendedor" },
+          { key: "customerName", label: "Cliente" },
+          { key: "currency", label: "Moneda" },
+          { key: "totalAmount", label: "Total" },
+          { key: "itemsCount", label: "Items", format: (v, row) => row.items?.length || 0 },
+        ]);
+        toast(`CSV exportado (${done.length} ventas)`, "success");
+      });
     }
 
     function renderDashboard() {
@@ -1145,8 +1204,10 @@ export function mountAdminView(container, navigateOrUser) {
       const prevCount = prevSales.length;
       const countChange = prevCount > 0 ? Math.round(((completed.length - prevCount) / prevCount) * 100) : 0;
 
-      // Ventas por día
+      // Ventas por día (+ unidades y conteo para sparklines de las KPI cards)
       const days = [];
+      const countsPerDay = [];
+      const unitsPerDay = [];
       const nowDate = new Date();
       nowDate.setHours(0, 0, 0, 0);
       for (let i = range - 1; i >= 0; i--) {
@@ -1154,11 +1215,13 @@ export function mountAdminView(container, navigateOrUser) {
         day.setDate(day.getDate() - i);
         const next = new Date(day);
         next.setDate(next.getDate() + 1);
-        const total = completed
-          .filter((s) => s.createdAt >= day.getTime() && s.createdAt < next.getTime())
-          .reduce((sum, s) => sum + s.totalAmount, 0);
+        const daySales = completed
+          .filter((s) => s.createdAt >= day.getTime() && s.createdAt < next.getTime());
+        const total = daySales.reduce((sum, s) => sum + s.totalAmount, 0);
         const label = day.toLocaleDateString("es-ES", { day: "numeric", month: "short" });
         days.push({ label, value: total });
+        countsPerDay.push(daySales.length);
+        unitsPerDay.push(daySales.reduce((sum, s) => sum + s.items.reduce((a, i) => a + i.quantity, 0), 0));
       }
 
       // Top productos (últimos N días)
@@ -1197,7 +1260,7 @@ export function mountAdminView(container, navigateOrUser) {
               <div style="flex:1;min-width:0">
                 <div class="font-bold text-sm" style="color:var(--warning);margin:0 0 0.125rem">Comisiones pendientes de pago · ${esc(dataCache.unpaidReminder.monthLabel)}</div>
                 <div class="text-xs text-muted" style="margin:0">
-                  Tenés <strong>${dataCache.unpaidReminder.gestores} gestor(es)</strong> con comisiones sin marcar como pagadas del mes anterior.
+                  Tienes <strong>${dataCache.unpaidReminder.gestores} gestor(es)</strong> con comisiones sin marcar como pagadas del mes anterior.
                   ${dataCache.unpaidReminder.totalUSD > 0 ? ` · USD: ${formatMoney(dataCache.unpaidReminder.totalUSD, "USD")}` : ''}
                   ${dataCache.unpaidReminder.totalMN > 0 ? ` · MN: ${formatMoney(dataCache.unpaidReminder.totalMN, "MN")}` : ''}
                 </div>
@@ -1216,6 +1279,7 @@ export function mountAdminView(container, navigateOrUser) {
               <div class="stat-sub ${revenueChange > 0 ? 'text-accent' : revenueChange < 0 ? 'text-danger' : ''}">
                 ${revenueChange > 0 ? '▲' : revenueChange < 0 ? '▼' : '–'} ${Math.abs(revenueChange)}% vs período anterior
               </div>
+              ${sparkline(days.map((d) => d.value), { color: COLORS.usd, height: 30, labels: days.map((d) => d.label), formatValue: (v) => formatMoney(v, "USD") })}
             </div>
             <div class="stat-card">
               <div class="stat-label">${icon("cart", 14)} Ventas completadas</div>
@@ -1223,11 +1287,13 @@ export function mountAdminView(container, navigateOrUser) {
               <div class="stat-sub ${countChange > 0 ? 'text-accent' : countChange < 0 ? 'text-danger' : ''}">
                 ${countChange > 0 ? '▲' : countChange < 0 ? '▼' : '–'} ${Math.abs(countChange)}% · ${formatMoney(avgTicket, "USD")} promedio
               </div>
+              ${sparkline(countsPerDay, { color: COLORS.primary, height: 30, labels: days.map((d) => d.label) })}
             </div>
             <div class="stat-card">
               <div class="stat-label">${icon("boxes", 14)} Unidades vendidas</div>
               <div class="stat-value">${totalUnits}</div>
               <div class="stat-sub">${completed.length} transacciones</div>
+              ${sparkline(unitsPerDay, { color: COLORS.accent, height: 30, labels: days.map((d) => d.label) })}
             </div>
             <div class="stat-card">
               <div class="stat-label" style="color:var(--danger)">${icon("ban", 14)} Canceladas</div>
@@ -1295,61 +1361,146 @@ export function mountAdminView(container, navigateOrUser) {
   }
 
   // ===== USERS =====
+  // Rótulos legibles por rol (en vez de la clave cruda "admin"/"warehouse")
+  const ROLE_LABELS = { admin: "Administrador", warehouse: "Vendedor de local", gestor: "Gestor" };
+  function roleBadge(role) {
+    const label = ROLE_LABELS[role] || role;
+    const cls = role === "admin" ? "badge-primary" : role === "gestor" ? "badge-warning" : "badge-outline";
+    return `<span class="badge ${cls}">${esc(label)}</span>`;
+  }
+
   function mountUsersPanel(content, gen) {
     gen = gen ?? tabGeneration;
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+    let uFilterText = "";
+    let uFilterRole = "";
     listUsers().then((users) => {
       if (gen !== tabGeneration) return;
+
+      function filteredUsers() {
+        let items = users;
+        if (uFilterText) {
+          const q = uFilterText.toLowerCase();
+          items = items.filter((u) =>
+            (u.displayName || "").toLowerCase().includes(q) ||
+            (u.username || "").toLowerCase().includes(q) ||
+            (u.email || "").toLowerCase().includes(q)
+          );
+        }
+        if (uFilterRole) items = items.filter((u) => u.role === uFilterRole);
+        return items;
+      }
+
+      function renderTable() {
+        const wrap = content.querySelector("#users-table-wrap");
+        if (!wrap) return;
+        const items = filteredUsers();
+        wrap.innerHTML = items.length === 0 ? `
+          <div class="empty-state" style="padding:2rem">
+            <div class="empty-state-icon">${icon("users", 24)}</div>
+            <p class="empty-state-title">Sin resultados</p>
+            <p class="empty-state-desc">No hay usuarios que coincidan con el filtro.</p>
+          </div>
+        ` : `
+          <table class="table">
+            <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Almacén</th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
+            <tbody>
+              ${items.map((u) => `
+                <tr>
+                  <td class="font-medium">${esc(u.displayName)}</td>
+                  <td class="text-xs text-muted">${esc(u.username)}</td>
+                  <td>${roleBadge(u.role)}</td>
+                  <td class="text-xs">${esc(u.warehouseName || u.warehouseCode || '—')}</td>
+                  <td class="text-center">${u.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
+                  <td class="text-right">
+                    <button class="btn btn-ghost btn-sm" data-edit-user="${esc(u.id)}">Editar</button>
+                    <button class="btn btn-ghost btn-sm text-danger" data-delete-user="${esc(u.id)}" title="Desactivar">${icon("trash", 12)}</button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+        wrap.querySelectorAll("[data-edit-user]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const u = users.find((x) => x.id === btn.dataset.editUser);
+            if (u) showUserDialog(u, () => mountUsersPanel(content, tabGeneration));
+          });
+        });
+        wrap.querySelectorAll("[data-delete-user]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const u = users.find((x) => x.id === btn.dataset.deleteUser);
+            if (!u) return;
+            confirmDialog(`¿Desactivar a ${esc(u.displayName)}? No podrá iniciar sesión.`, async () => {
+              try {
+                await deleteUser(u.id);
+                toast("Usuario desactivado", "success");
+                mountUsersPanel(content, tabGeneration);
+              } catch (err) {
+                toast(err.message || "Error al desactivar", "error");
+              }
+            });
+          });
+        });
+      }
+
       content.innerHTML = `
         <div class="card">
           <div class="card-header flex justify-between">
             <h2 class="card-title">Usuarios (${users.length})</h2>
-            <button class="btn btn-primary btn-sm" id="new-user">${icon("plus", 14)} Nuevo</button>
+            <div class="flex gap-2">
+              <button class="btn btn-outline btn-sm" id="u-export-csv" title="Exportar usuarios filtrados a CSV">${icon("download", 12)} CSV</button>
+              <button class="btn btn-primary btn-sm" id="new-user">${icon("plus", 14)} Nuevo</button>
+            </div>
           </div>
-          <div class="overflow-x-auto">
-            <table class="table">
-              <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Almacén</th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
-              <tbody>
-                ${users.map((u) => `
-                  <tr>
-                    <td class="font-medium">${esc(u.displayName)}</td>
-                    <td class="text-xs text-muted">${esc(u.username)}</td>
-                    <td><span class="badge badge-outline">${esc(u.role)}</span></td>
-                    <td class="text-xs">${esc(u.warehouseName || u.warehouseCode || '—')}</td>
-                    <td class="text-center">${u.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
-                    <td class="text-right">
-                      <button class="btn btn-ghost btn-sm" data-edit-user="${esc(u.id)}">Editar</button>
-                      <button class="btn btn-ghost btn-sm text-danger" data-delete-user="${esc(u.id)}" title="Desactivar">${icon("trash", 12)}</button>
-                    </td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
+          <div class="card-content" style="padding:0.875rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:0.625rem">
+            <div>
+              <label class="label label-xs">Buscar</label>
+              <input class="input" type="search" id="u-filter-text" value="${esc(uFilterText)}" placeholder="Nombre, usuario o email…" />
+            </div>
+            <div>
+              <label class="label label-xs">Rol</label>
+              <select class="select" id="u-filter-role">
+                <option value="">Todos</option>
+                <option value="admin" ${uFilterRole === "admin" ? "selected" : ""}>Administrador</option>
+                <option value="gestor" ${uFilterRole === "gestor" ? "selected" : ""}>Gestor</option>
+                <option value="warehouse" ${uFilterRole === "warehouse" ? "selected" : ""}>Vendedor de local</option>
+              </select>
+            </div>
           </div>
+          <div id="users-table-wrap" class="overflow-x-auto"></div>
         </div>
       `;
+
+      renderTable();
+
+      // v5.4.0: export CSV de usuarios filtrados
+      content.querySelector("#u-export-csv")?.addEventListener("click", () => {
+        const items = filteredUsers();
+        exportToCSV("usuarios", items.map((u) => ({
+          nombre: u.displayName,
+          usuario: u.username,
+          email: u.email || "",
+          rol: ROLE_LABELS[u.role] || u.role,
+          almacen: u.warehouseName || u.warehouseCode || "",
+          estado: u.active !== false ? "Activo" : "Inactivo",
+        })));
+        toast(`CSV exportado (${items.length} usuarios)`, "success");
+      });
+
       content.querySelector("#new-user").addEventListener("click", () => showUserDialog(null, () => mountUsersPanel(content, tabGeneration)));
-      content.querySelectorAll("[data-edit-user]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const u = users.find((x) => x.id === btn.dataset.editUser);
-          if (u) showUserDialog(u, () => mountUsersPanel(content, tabGeneration));
+
+      const uText = content.querySelector("#u-filter-text");
+      if (uText) {
+        uText.addEventListener("change", () => {
+          uFilterText = uText.value.trim();
+          renderTable();
+          const re = content.querySelector("#u-filter-text");
+          if (re && uFilterText) { re.focus(); re.selectionStart = re.selectionEnd = re.value.length; }
         });
-      });
-      content.querySelectorAll("[data-delete-user]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const u = users.find((x) => x.id === btn.dataset.deleteUser);
-          if (!u) return;
-          confirmDialog(`¿Desactivar a ${esc(u.displayName)}? No podrá iniciar sesión.`, async () => {
-            try {
-              await deleteUser(u.id);
-              toast("Usuario desactivado", "success");
-              mountUsersPanel(content, tabGeneration);
-            } catch (err) {
-              toast(err.message || "Error al desactivar", "error");
-            }
-          });
-        });
-      });
+        uText.addEventListener("keydown", (e) => { if (e.key === "Enter") uText.blur(); });
+      }
+      content.querySelector("#u-filter-role").addEventListener("change", (e) => { uFilterRole = e.target.value; renderTable(); });
     });
   }
 
@@ -1412,71 +1563,258 @@ export function mountAdminView(container, navigateOrUser) {
   function mountProductsPanel(content, gen) {
     gen = gen ?? tabGeneration;
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+    let pFilterText = "";
+    let pFilterCat = "";
+    let pFilterStatus = "";
     Promise.all([listProducts(), listCategories()]).then(([products, categories]) => {
       if (gen !== tabGeneration) return;
+
+      function filteredProducts() {
+        let items = products;
+        if (pFilterText) {
+          const q = pFilterText.toLowerCase();
+          items = items.filter((p) =>
+            (p.name || "").toLowerCase().includes(q) ||
+            (p.brand || "").toLowerCase().includes(q) ||
+            (p.sku || "").toLowerCase().includes(q)
+          );
+        }
+        if (pFilterCat) items = items.filter((p) => (p.categoryId || "") === pFilterCat);
+        if (pFilterStatus === "active") items = items.filter((p) => p.active !== false);
+        if (pFilterStatus === "inactive") items = items.filter((p) => p.active === false);
+        return items;
+      }
+
+      function renderTable() {
+        const wrap = content.querySelector("#products-table-wrap");
+        if (!wrap) return;
+        const items = filteredProducts();
+        wrap.innerHTML = items.length === 0 ? `
+          <div class="empty-state" style="padding:2rem">
+            <div class="empty-state-icon">${icon("tags", 24)}</div>
+            <p class="empty-state-title">Sin resultados</p>
+            <p class="empty-state-desc">No hay productos que coincidan con el filtro aplicado.</p>
+          </div>
+        ` : `
+          <table class="table">
+            <thead><tr><th></th><th>Producto</th><th style="white-space:nowrap">Categoría</th><th class="text-right">Precio</th><th class="text-right" style="white-space:nowrap">Comisiones <span class="text-xs text-muted">G/V</span></th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
+            <tbody>
+              ${items.map((p) => `
+                <tr>
+                  <td style="width:3rem">
+                    ${p.thumbUrl || p.imageUrl
+                      ? `<img src="${esc(p.thumbUrl || p.imageUrl)}" alt="" loading="lazy" style="width:2.5rem;height:2.5rem;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg-soft)" />`
+                      : `<div style="width:2.5rem;height:2.5rem;border-radius:var(--radius-sm);border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-muted)">${icon("image", 14)}</div>`}
+                  </td>
+                  <td class="font-medium">${esc(p.name)}${p.brand ? ` <span class="text-xs text-muted" style="font-weight:400">· ${esc(p.brand)}</span>` : ''}</td>
+                  <td class="text-xs text-muted">${esc(p.categoryName || '—')}</td>
+                  <td class="text-right">${formatMoney(p.salePrice, "USD")}</td>
+                  <td class="text-right text-xs"><span class="badge badge-outline" style="font-size:0.625rem;white-space:nowrap">G ${p.gestorCommission ?? p.commission ?? 0} ${p.gestorCommissionCurrency ?? p.commissionCurrency ?? "USD"} · V ${p.vendorCommission ?? 0} ${p.vendorCommissionCurrency ?? "MN"}</span></td>
+                  <td class="text-center">${p.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
+                  <td class="text-right">
+                    <button class="btn btn-ghost btn-sm" data-stock-product="${esc(p.id)}" title="Añadir / ajustar stock por almacén">${icon("boxes", 12)}</button>
+                    <button class="btn btn-ghost btn-sm" data-edit-product="${esc(p.id)}">Editar</button>
+                    <button class="btn btn-ghost btn-sm text-danger" data-delete-product="${esc(p.id)}" title="Eliminar producto y su imagen">${icon("trash", 12)}</button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          ${items.length !== products.length ? `<div class="text-xs text-muted" style="padding:0.5rem 0.875rem;border-top:1px solid var(--border)">Mostrando ${items.length} de ${products.length} producto(s)</div>` : ""}
+        `;
+        wireRows();
+      }
+
+      function wireRows() {
+        const wrap = content.querySelector("#products-table-wrap");
+        if (!wrap) return;
+        wrap.querySelectorAll("[data-edit-product]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const p = products.find((x) => x.id === btn.dataset.editProduct);
+            if (p) showProductDialog(p, categories, () => mountProductsPanel(content, tabGeneration));
+          });
+        });
+        wrap.querySelectorAll("[data-stock-product]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            listWarehouses().then((whs) => {
+              showStockEntryDialog({
+                products,
+                warehouses: whs,
+                presetProductId: btn.dataset.stockProduct,
+                onSaved: () => mountProductsPanel(content, tabGeneration),
+              });
+            });
+          });
+        });
+        wrap.querySelectorAll("[data-delete-product]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const p = products.find((x) => x.id === btn.dataset.deleteProduct);
+            if (!p) return;
+            confirmDialog(`¿Eliminar ${p.name}?`, async () => {
+              await deleteProduct(p.id);
+              toast("Producto eliminado", "success");
+              mountProductsPanel(content, tabGeneration);
+            });
+          });
+        });
+      }
+
       content.innerHTML = `
         <div class="card">
           <div class="card-header flex justify-between">
             <h2 class="card-title">Productos (${products.length})</h2>
-            <button class="btn btn-primary btn-sm" id="new-product">${icon("plus", 14)} Nuevo</button>
+            <div class="flex gap-2">
+              <button class="btn btn-outline btn-sm" id="p-export-csv" title="Exportar productos filtrados a CSV">${icon("download", 12)} CSV</button>
+              <button class="btn btn-outline btn-sm" id="bulk-prices" title="Cambiar el precio de varios productos a la vez">${icon("dollar", 12)} Precios en lote</button>
+              <button class="btn btn-primary btn-sm" id="new-product">${icon("plus", 14)} Nuevo</button>
+            </div>
           </div>
-          <div class="overflow-x-auto">
-            <table class="table">
-              <thead><tr><th>Nombre</th><th>Marca</th><th>Categoría</th><th class="text-right">Precio</th><th class="text-right">Comisiones<br><span class="text-xs text-muted">G/V</span></th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
-              <tbody>
-                ${products.map((p) => `
-                  <tr>
-                    <td class="font-medium">${esc(p.name)}</td>
-                    <td class="text-xs">${esc(p.brand)}</td>
-                    <td class="text-xs text-muted">${esc(p.categoryName || '—')}</td>
-                    <td class="text-right">${formatMoney(p.salePrice, "USD")}</td>
-                    <td class="text-right text-xs">
-                      <div>G: ${p.gestorCommission ?? p.commission ?? 0} ${p.gestorCommissionCurrency ?? p.commissionCurrency ?? "USD"}</div>
-                      <div style="color:var(--text-muted)">V: ${p.vendorCommission ?? 0} ${p.vendorCommissionCurrency ?? "MN"}</div>
-                    </td>
-                    <td class="text-center">${p.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
-                    <td class="text-right">
-                      <button class="btn btn-ghost btn-sm" data-stock-product="${esc(p.id)}" title="Añadir / ajustar stock por almacén">${icon("boxes", 12)}</button>
-                      <button class="btn btn-ghost btn-sm" data-edit-product="${esc(p.id)}">Editar</button>
-                      <button class="btn btn-ghost btn-sm text-danger" data-delete-product="${esc(p.id)}" title="Eliminar producto y su imagen">${icon("trash", 12)}</button>
-                    </td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
+          <div class="card-content" style="padding:0.875rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:0.625rem">
+            <div>
+              <label class="label label-xs">Buscar</label>
+              <input class="input" type="search" id="p-filter-text" value="${esc(pFilterText)}" placeholder="Nombre, marca o SKU…" />
+            </div>
+            <div>
+              <label class="label label-xs">Categoría</label>
+              <select class="select" id="p-filter-cat">
+                <option value="">Todas</option>
+                ${categories.map((c) => `<option value="${esc(c.id)}" ${pFilterCat === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label class="label label-xs">Estado</label>
+              <select class="select" id="p-filter-status">
+                <option value="">Todos</option>
+                <option value="active" ${pFilterStatus === "active" ? "selected" : ""}>Activos</option>
+                <option value="inactive" ${pFilterStatus === "inactive" ? "selected" : ""}>Inactivos</option>
+              </select>
+            </div>
           </div>
+          <div id="products-table-wrap" class="overflow-x-auto"></div>
         </div>
       `;
+
+      renderTable();
+
       content.querySelector("#new-product").addEventListener("click", () => showProductDialog(null, categories, () => mountProductsPanel(content, tabGeneration)));
-      content.querySelectorAll("[data-edit-product]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const p = products.find((x) => x.id === btn.dataset.editProduct);
-          if (p) showProductDialog(p, categories, () => mountProductsPanel(content, tabGeneration));
-        });
+      content.querySelector("#bulk-prices").addEventListener("click", () => showBulkPriceDialog(filteredProducts, () => mountProductsPanel(content, tabGeneration)));
+
+      // v5.4.0: export CSV de productos filtrados
+      content.querySelector("#p-export-csv")?.addEventListener("click", () => {
+        const items = filteredProducts();
+        exportToCSV("productos", items.map((p) => ({
+          nombre: p.name,
+          marca: p.brand || "",
+          sku: p.sku || "",
+          categoria: p.categoryName || "",
+          precio_usd: p.salePrice,
+          comision_gestor: `${p.gestorCommission ?? p.commission ?? 0} ${p.gestorCommissionCurrency ?? p.commissionCurrency ?? "USD"}`,
+          comision_vendedor: `${p.vendorCommission ?? 0} ${p.vendorCommissionCurrency ?? "MN"}`,
+          estado: p.active !== false ? "Activo" : "Inactivo",
+        })));
+        toast(`CSV exportado (${items.length} productos)`, "success");
       });
-      content.querySelectorAll("[data-stock-product]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          listWarehouses().then((whs) => {
-            showStockEntryDialog({
-              products,
-              warehouses: whs,
-              presetProductId: btn.dataset.stockProduct,
-              onSaved: () => mountProductsPanel(content, tabGeneration),
-            });
-          });
+
+      // Filtros (buscador aplica al perder foco / Enter; restaura el foco tras re-render)
+      const pText = content.querySelector("#p-filter-text");
+      if (pText) {
+        pText.addEventListener("change", () => {
+          pFilterText = pText.value.trim();
+          renderTable();
+          const re = content.querySelector("#p-filter-text");
+          if (re && pFilterText) { re.focus(); re.selectionStart = re.selectionEnd = re.value.length; }
         });
-      });
-      content.querySelectorAll("[data-delete-product]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const p = products.find((x) => x.id === btn.dataset.deleteProduct);
-          if (!p) return;
-          confirmDialog(`¿Eliminar ${p.name}?`, async () => {
-            await deleteProduct(p.id);
-            toast("Producto eliminado", "success");
-            mountProductsPanel(content, tabGeneration);
-          });
-        });
-      });
+        pText.addEventListener("keydown", (e) => { if (e.key === "Enter") pText.blur(); });
+      }
+      content.querySelector("#p-filter-cat").addEventListener("change", (e) => { pFilterCat = e.target.value; renderTable(); });
+      content.querySelector("#p-filter-status").addEventListener("change", (e) => { pFilterStatus = e.target.value; renderTable(); });
+    });
+  }
+
+  /**
+   * Precios en lote: cambia el precio de venta de todos los productos
+   * que coinciden con el filtro actual (por %, monto fijo o precio exacto).
+   */
+  function showBulkPriceDialog(getProducts, onDone) {
+    function computeNewPrice(current, mode, val) {
+      let np;
+      if (mode === "pct") np = current * (1 + val / 100);
+      else if (mode === "fixed") np = current + val;
+      else np = val;
+      return Math.max(0, Math.round(np * 100) / 100);
+    }
+
+    const items = getProducts();
+    const close = showModal({
+      title: "Precios en lote",
+      body: `
+        <div style="display:flex;flex-direction:column;gap:0.75rem">
+          <div style="background: color-mix(in oklab, var(--info) 8%, var(--bg-elevated)); border:1px solid color-mix(in oklab, var(--info) 25%, transparent); border-radius: var(--radius); padding:0.625rem 0.75rem" class="text-xs">
+            Se aplicará a los <strong>${items.length}</strong> producto(s) visibles en la tabla según el filtro actual.
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="label label-xs">Modo</label>
+              <select class="select" id="bp-mode">
+                <option value="pct">Porcentaje (%)</option>
+                <option value="fixed">Monto fijo (± USD)</option>
+                <option value="set">Fijar precio exacto (USD)</option>
+              </select>
+            </div>
+            <div>
+              <label class="label label-xs">Valor *</label>
+              <input class="input" type="number" step="0.01" id="bp-value" placeholder="Ej: 10 (sube 10%) · -5 (baja 5%)" />
+            </div>
+          </div>
+          <div id="bp-preview" class="text-xs text-muted">Escribe un valor para ver la vista previa.</div>
+        </div>
+      `,
+      footer: `<button class="btn btn-outline" id="bp-cancel">Cancelar</button><button class="btn btn-primary" id="bp-apply">${icon("check", 14)} Aplicar</button>`,
+    });
+    document.querySelector("#bp-cancel").addEventListener("click", close);
+
+    // Vista previa de los primeros cambios
+    const updatePreview = () => {
+      const mode = document.querySelector("#bp-mode").value;
+      const val = parseFloat(document.querySelector("#bp-value").value);
+      const box = document.querySelector("#bp-preview");
+      if (!box) return;
+      if (isNaN(val) || items.length === 0) {
+        box.textContent = "Escribe un valor para ver la vista previa.";
+        return;
+      }
+      const sample = items.slice(0, 3).map((p) =>
+        `${p.name}: ${formatMoney(p.salePrice, "USD")} → ${formatMoney(computeNewPrice(p.salePrice, mode, val), "USD")}`
+      ).join(" · ");
+      box.textContent = `Vista previa: ${sample}${items.length > 3 ? ` (+${items.length - 3} más)` : ""}`;
+    };
+    document.querySelector("#bp-mode").addEventListener("change", updatePreview);
+    document.querySelector("#bp-value").addEventListener("input", updatePreview);
+
+    document.querySelector("#bp-apply").addEventListener("click", () => {
+      const mode = document.querySelector("#bp-mode").value;
+      const val = parseFloat(document.querySelector("#bp-value").value);
+      if (isNaN(val)) { toast("Escribe un valor numérico", "error"); return; }
+      const itemsNow = getProducts();
+      if (itemsNow.length === 0) { toast("No hay productos en el filtro actual", "warning"); return; }
+      confirmDialog(
+        `¿Cambiar el precio de <strong>${itemsNow.length}</strong> producto(s)? Ejemplo: ${esc(itemsNow[0].name)} ${formatMoney(itemsNow[0].salePrice, "USD")} → <strong>${formatMoney(computeNewPrice(itemsNow[0].salePrice, mode, val), "USD")}</strong>.`,
+        async () => {
+          close();
+          let ok = 0, fail = 0;
+          for (const p of itemsNow) {
+            try {
+              await saveProduct({ ...p, salePrice: computeNewPrice(p.salePrice, mode, val) });
+              ok++;
+            } catch (err) {
+              fail++;
+              console.error("[bulkPrice] falló:", p.name, err);
+            }
+          }
+          toast(`Precios actualizados: ${ok} OK${fail ? ` · ${fail} fallaron` : ""}`, fail ? "warning" : "success", 4000);
+          onDone();
+        }
+      );
     });
   }
 
@@ -1602,6 +1940,7 @@ export function mountAdminView(container, navigateOrUser) {
     const imagePreview = document.querySelector("#p-image-preview");
     const imageInfo = document.querySelector("#p-image-info");
     let uploadedImageUrl = p.imageUrl || null;
+    let uploadedThumbUrl = p.thumbUrl || null; // miniatura 200px (se genera al subir)
 
     if (uploadBtn) {
       uploadBtn.addEventListener("click", async () => {
@@ -1613,12 +1952,14 @@ export function mountAdminView(container, navigateOrUser) {
 
           const result = await uploadImageAsWebP(file, "products");
           uploadedImageUrl = result.url;
+          uploadedThumbUrl = result.thumbUrl || null;
 
           // Actualizar UI
           imageInput.value = result.url;
-          imagePreview.innerHTML = `<img src="${result.url}" style="width:100%;height:100%;object-fit:cover" />`;
+          imagePreview.innerHTML = `<img src="${result.thumbUrl || result.url}" style="width:100%;height:100%;object-fit:cover" />`;
           const savedText = result.savedPct > 0 ? ` · ${result.savedPct}% más pequeño` : "";
-          imageInfo.innerHTML = `<span style="color:var(--accent)">WebP ${formatBytes(result.webpSize)}${savedText}</span>`;
+          const thumbText = result.thumbUrl ? ` · miniatura ${formatBytes(result.thumbSize)}` : "";
+          imageInfo.innerHTML = `<span style="color:var(--accent)">WebP ${formatBytes(result.webpSize)}${savedText}${thumbText}</span>`;
           toast(`Imagen convertida a WebP${savedText}`, "success");
         } catch (err) {
           if (err.message !== "No se seleccionó ningún archivo") {
@@ -1678,6 +2019,7 @@ export function mountAdminView(container, navigateOrUser) {
         unitsPerBox: unitsPerBoxVal ? parseInt(unitsPerBoxVal) : null,
         wholesaleTiers: wholesaleTiers,
         imageUrl: document.querySelector("#p-image").value.trim() || null,
+        thumbUrl: uploadedThumbUrl,
         active: true,
       };
       if (!data.name || !data.brand) { toast("Nombre y marca son obligatorios", "error"); return; }
@@ -2310,7 +2652,7 @@ export function mountAdminView(container, navigateOrUser) {
         };
         if (!data.name || !data.code) { toast("Nombre y código son obligatorios", "error"); return; }
         if (data.managerType === "LOCAL" && !data.warehouseId) {
-          toast("Seleccioná el almacén del gestor local", "error");
+          toast("Selecciona el almacén del gestor local", "error");
           return;
         }
         if (data.commissionType === "PERCENT" && (data.commission < 0 || data.commission > 100)) {
@@ -2331,18 +2673,63 @@ export function mountAdminView(container, navigateOrUser) {
     Promise.all([
       listStockTransfers({}),
       listWarehouses(),
-    ]).then(([transfers, warehouses]) => {
+      listTransferRequests({ limit: 30 }),
+    ]).then(([transfers, warehouses, requests]) => {
       if (gen !== tabGeneration) return;
       const whMap = new Map(warehouses.map((w) => [w.id, w]));
       const pending = transfers.filter((t) => t.status === "PENDING");
       const completed = transfers.filter((t) => t.status === "COMPLETED");
       const rejected = transfers.filter((t) => t.status === "REJECTED" || t.status === "CANCELLED");
+      const pendingRequests = requests.filter((r) => r.status === "PENDIENTE");
 
       content.innerHTML = `
         <div style="display:flex;flex-direction:column;gap:1rem">
           <div>
             <h1 class="text-2xl font-bold flex items-center gap-2">${icon("arrowLeftRight", 24)} Transferencias</h1>
             <p class="text-sm text-muted">Movimientos de mercancía entre almacenes · ${transfers.length} en total</p>
+          </div>
+
+          <!-- Solicitudes del personal (v5.5.0) -->
+          <div class="card">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+              <h3 class="card-title flex items-center gap-1">${icon("listTree", 16)} Solicitudes del personal</h3>
+              ${pendingRequests.length > 0 ? `<span class="badge badge-warning" style="font-size:0.6875rem">${pendingRequests.length} pendiente(s)</span>` : ''}
+            </div>
+            <div class="card-content" style="padding:0.5rem">
+              ${requests.length === 0 ? `
+                <div class="empty-state" style="padding:1.25rem">
+                  <div class="empty-state-icon">${icon("listTree", 20)}</div>
+                  <p class="empty-state-title">Sin solicitudes</p>
+                  <p class="empty-state-desc">El personal de cada almacén pide stock desde "Otros almacenes → Solicitar traspaso".</p>
+                </div>
+              ` : `
+                <div style="display:flex;flex-direction:column;gap:0.5rem">
+                  ${requests.slice(0, 15).map((r) => {
+                    const fromWh = whMap.get(r.fromWarehouseId);
+                    const toWh = whMap.get(r.toWarehouseId);
+                    const stBadge = { PENDIENTE: 'badge-warning', APROBADA: 'badge-accent', RECHAZADA: 'badge-danger', CANCELADA: 'badge-outline' }[r.status] || '';
+                    const stLabel = { PENDIENTE: 'Pendiente', APROBADA: 'Aprobada', RECHAZADA: 'Rechazada', CANCELADA: 'Cancelada' }[r.status] || r.status;
+                    return `
+                      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.5rem 0.625rem;border:1px solid var(--border);border-radius:var(--radius)" data-request-row>
+                        <div style="min-width:0;flex:1">
+                          <div class="text-sm font-medium">${esc(r.productName || '—')} · <strong>${r.quantity}</strong> u ${r.code ? `<span class="text-xs text-muted font-mono">${esc(r.code)}</span>` : ''}</div>
+                          <div class="text-xs text-muted">
+                            ${fromWh ? esc(fromWh.name) : '—'} → ${toWh ? esc(toWh.name) : '—'} · pide ${esc(r.requestedByName || '—')}${r.note ? ` · "${esc(r.note)}"` : ''}
+                          </div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:0.5rem;flex-shrink:0">
+                          <span class="badge ${stBadge}" style="font-size:0.625rem">${stLabel}</span>
+                          ${r.status === "PENDIENTE" ? `
+                            <button class="btn btn-primary btn-sm" data-approve-request="${esc(r.id)}" title="Mueve el stock del origen al destino">${icon("check", 12)} Aprobar</button>
+                            <button class="btn btn-outline btn-sm text-danger" data-reject-request="${esc(r.id)}">Rechazar</button>
+                          ` : ''}
+                        </div>
+                      </div>
+                    `;
+                  }).join("")}
+                </div>
+              `}
+            </div>
           </div>
 
           <!-- Stats -->
@@ -2489,6 +2876,258 @@ export function mountAdminView(container, navigateOrUser) {
           });
         });
       });
+
+      // v5.5.0: aprobar / rechazar solicitudes del personal
+      content.querySelectorAll("[data-approve-request]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = btn.dataset.approveRequest;
+          const req = requests.find((r) => r.id === id);
+          confirmDialog(
+            req ? `¿Aprobar ${req.quantity} u de "${req.productName}"? Se moverá el stock de ${whMap.get(req.fromWarehouseId)?.name || "origen"} a ${whMap.get(req.toWarehouseId)?.name || "destino"}.` : "¿Aprobar esta solicitud?",
+            async () => {
+              try {
+                await setTransferRequestStatus(id, "APROBADA", user);
+                toast("Solicitud aprobada · Stock movido", "success");
+                mountTransfersPanel(content, tabGeneration);
+                refreshPendingBadge();
+              } catch (err) {
+                toast("Error: " + (err.message || "desconocido"), "error");
+              }
+            }
+          );
+        });
+      });
+      content.querySelectorAll("[data-reject-request]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = btn.dataset.rejectRequest;
+          confirmDialog("¿Rechazar esta solicitud? No se moverá stock.", async () => {
+            try {
+              await setTransferRequestStatus(id, "RECHAZADA", user);
+              toast("Solicitud rechazada", "info");
+              mountTransfersPanel(content, tabGeneration);
+              refreshPendingBadge();
+            } catch (err) {
+              toast("Error: " + (err.message || "desconocido"), "error");
+            }
+          });
+        });
+      });
+    });
+  }
+
+  // ===== CIERRES DE CAJA (v5.5 — panel admin, todos los almacenes) =====
+  function mountClosuresPanel(content, gen) {
+    content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+    Promise.all([
+      listDailyClosures({ limit: 60 }),
+      listWarehouses(),
+    ]).then(([closures, warehouses]) => {
+      if (gen !== tabGeneration) return;
+      const whMap = new Map(warehouses.map((w) => [w.id, w]));
+      const filterWh = container.querySelector("#cl-filter-wh")?.value || "";
+
+      const byWh = {};
+      for (const c of closures) {
+        const key = c.warehouseId || "—";
+        byWh[key] = byWh[key] || { name: c.warehouseName || whMap.get(key)?.name || "—", count: 0, totalUSD: 0 };
+        byWh[key].count++;
+        byWh[key].totalUSD += c.totalUSD || 0;
+      }
+
+      content.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:1rem">
+          <div>
+            <h1 class="text-2xl font-bold flex items-center gap-2">${icon("receipt", 24)} Cierres de caja</h1>
+            <p class="text-sm text-muted">Snapshots diarios que guarda cada almacén · ${closures.length} registro(s)</p>
+          </div>
+
+          <div class="flex gap-2 flex-wrap">
+            <select class="select" id="cl-filter-wh" style="width:14rem" aria-label="Filtrar por almacén">
+              <option value="">Todos los almacenes</option>
+              ${warehouses.map((w) => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join("")}
+            </select>
+            <button class="btn btn-outline btn-sm" id="cl-export-csv" title="Exportar cierres a CSV">${icon("download", 14)} CSV</button>
+          </div>
+
+          <!-- Reporte comparativo del período (v5.6.0) -->
+          <div class="card">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem">
+              <h3 class="card-title flex items-center gap-1">${icon("trendingUp", 16)} Reporte del período</h3>
+              <div style="display:flex;gap:0.25rem">
+                ${[["week", "Esta semana"], ["month", "Este mes"], ["30d", "Últimos 30 días"]].map(([id, lbl]) => `
+                  <button class="btn ${closuresReportPeriod === id ? 'btn-primary' : 'btn-outline'} btn-sm" data-cl-period="${id}" style="font-size:0.6875rem">${lbl}</button>
+                `).join("")}
+              </div>
+            </div>
+            <div class="card-content" style="padding:0.625rem 0.75rem">
+              ${(() => {
+                const range = reportPeriodRange(closuresReportPeriod);
+                const report = aggregateClosuresReport(closures, range);
+
+                if (report.totals.closures === 0) {
+                  return `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">${icon("receipt", 20)}</div><p class="empty-state-title">Sin cierres en el período</p><p class="empty-state-desc">${range.label}: ningún almacén registró cierre de caja.</p></div>`;
+                }
+
+                const maxUSD = Math.max(...report.perWarehouse.map((w) => w.totalUSD), 1);
+                return `
+                  <div class="text-xs text-muted" style="margin-bottom:0.5rem">${range.label} · ${report.days} día(s) con cierre · última actualización ${formatDateShort(range.toMs)}</div>
+
+                  <div class="grid grid-cols-2 md:grid-cols-4 gap-2" style="margin-bottom:0.75rem">
+                    <div class="stat-card"><div class="stat-label">Total recaudado</div><div class="stat-value">${formatMoney(report.totals.totalUSD, "USD")}</div><div class="stat-sub">prom. ${formatMoney(report.totals.totalUSD / report.days, "USD")}/día</div></div>
+                    <div class="stat-card"><div class="stat-label">Ventas</div><div class="stat-value">${report.totals.salesCount}</div><div class="stat-sub">${report.totals.unitsSold} unidades</div></div>
+                    <div class="stat-card"><div class="stat-label">Cierres registrados</div><div class="stat-value">${report.totals.closures}</div><div class="stat-sub">${report.perWarehouse.length} almacén(es)</div></div>
+                    <div class="stat-card"><div class="stat-label">Ticket promedio</div><div class="stat-value">${formatMoney(report.totals.salesCount > 0 ? report.totals.totalUSD / report.totals.salesCount : 0, "USD")}</div><div class="stat-sub">por venta</div></div>
+                  </div>
+
+                  <div class="text-xs font-semibold text-muted" style="margin-bottom:0.375rem">Comparativa por almacén (total USD)</div>
+                  <div style="display:flex;flex-direction:column;gap:0.375rem;margin-bottom:0.75rem">
+                    ${report.perWarehouse.map((w) => `
+                      <div style="display:flex;align-items:center;gap:0.5rem">
+                        <div style="width:9rem;flex-shrink:0" class="text-xs font-medium truncate">${esc(w.name)}</div>
+                        <div style="flex:1;height:1.25rem;background:var(--bg-soft);border-radius:var(--radius-sm);overflow:hidden">
+                          <div style="height:100%;width:${Math.max((w.totalUSD / maxUSD) * 100, 2)}%;background:linear-gradient(90deg,var(--primary),var(--accent));border-radius:var(--radius-sm)" title="${esc(w.name)}: ${formatMoney(w.totalUSD, "USD")}"></div>
+                        </div>
+                        <div style="width:11rem;flex-shrink:0;text-align:right" class="text-xs">
+                          <strong>${formatMoney(w.totalUSD, "USD")}</strong>
+                          <span class="text-muted">· ${w.salesCount} v · ${w.closures} cierre(s) · prom ${formatMoney(w.avgDailyUSD, "USD")}/d</span>
+                        </div>
+                      </div>
+                    `).join("")}
+                  </div>
+
+                  ${report.topProducts.length > 0 ? `
+                    <div class="text-xs font-semibold text-muted" style="margin-bottom:0.375rem">Top productos del período</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:0.375rem;margin-bottom:0.75rem">
+                      ${report.topProducts.map((p) => `<span class="badge badge-accent" style="font-size:0.6875rem">${esc(p.name)} · ${p.qty} u</span>`).join("")}
+                    </div>
+                  ` : ''}
+
+                  <div class="flex gap-2" style="align-items:center;margin-bottom:0.5rem">
+                    <button class="btn btn-outline btn-sm" id="cl-export-report" title="Exportar el reporte del período a CSV">${icon("download", 14)} CSV del reporte</button>
+                    <span class="text-xs text-muted">${report.perWarehouse.length} fila(s)</span>
+                  </div>
+
+                  <div class="overflow-x-auto">
+                    <table class="table">
+                      <thead><tr><th>Almacén</th><th class="text-center">Cierres</th><th class="text-center">Ventas</th><th class="text-center">Unid.</th><th class="text-right">Total (USD)</th><th class="text-right">Prom/día</th><th class="text-right">Ticket prom.</th></tr></thead>
+                      <tbody>
+                        ${report.perWarehouse.map((w) => `
+                          <tr>
+                            <td class="text-xs font-medium">${esc(w.name)}${w.code ? ` <span class="text-muted font-mono text-xs">${esc(w.code)}</span>` : ''}</td>
+                            <td class="text-center text-xs">${w.closures}</td>
+                            <td class="text-center text-xs">${w.salesCount}</td>
+                            <td class="text-center text-xs">${w.unitsSold}</td>
+                            <td class="text-right font-bold">${formatMoney(w.totalUSD, "USD")}</td>
+                            <td class="text-right text-xs">${formatMoney(w.avgDailyUSD, "USD")}</td>
+                            <td class="text-right text-xs">${formatMoney(w.salesCount > 0 ? w.totalUSD / w.salesCount : 0, "USD")}</td>
+                          </tr>
+                        `).join("")}
+                      </tbody>
+                    </table>
+                  </div>
+                `;
+              })()}
+            </div>
+          </div>
+
+          ${Object.keys(byWh).length > 0 ? `
+            <div class="grid md:grid-cols-3 gap-3">
+              ${Object.entries(byWh).slice(0, 6).map(([id, w]) => `
+                <div class="stat-card">
+                  <div class="stat-label">${icon("store", 14)} ${esc(w.name)}</div>
+                  <div class="stat-value">${formatMoney(w.totalUSD, "USD")}</div>
+                  <div class="stat-sub">${w.count} cierre(s) registrado(s)</div>
+                </div>
+              `).join("")}
+            </div>
+          ` : ''}
+
+          <div class="card">
+            <div class="overflow-x-auto">
+              ${closures.length === 0 ? `
+                <div class="empty-state" style="padding:2rem">
+                  <div class="empty-state-icon">${icon("receipt", 24)}</div>
+                  <p class="empty-state-title">Sin cierres</p>
+                  <p class="empty-state-desc">Cada almacén cierra su caja desde el interior de almacén → "Cerrar caja de hoy".</p>
+                </div>
+              ` : `
+                <table class="table">
+                  <thead><tr><th>Fecha</th><th>Almacén</th><th class="text-center">Ventas</th><th class="text-center">Unid.</th><th class="text-right">Total (USD)</th><th>Detalle por moneda</th><th>Cerrado por</th></tr></thead>
+                  <tbody>
+                    ${closures
+                      .filter((c) => !filterWh || c.warehouseId === filterWh)
+                      .map((c) => {
+                        const byCurr = c.byCurrency || {};
+                        const det = Object.entries(byCurr)
+                          .filter(([_, d]) => (d.count || 0) > 0)
+                          .map(([curr, d]) => `${curr}: ${formatMoney(d.amount, curr)}`)
+                          .join(" · ") || "—";
+                        return `
+                          <tr>
+                            <td class="text-xs font-medium">${esc(String(c.closureDate))}${String(c.closureDate) === closureDateKey(Date.now()) ? ' <span class="badge badge-accent" style="font-size:0.5625rem">hoy</span>' : ''}</td>
+                            <td class="text-xs">${esc(c.warehouseName || whMap.get(c.warehouseId)?.name || '—')}</td>
+                            <td class="text-center text-xs">${c.salesCount}</td>
+                            <td class="text-center text-xs">${c.unitsSold}</td>
+                            <td class="text-right font-bold">${formatMoney(c.totalUSD, "USD")}</td>
+                            <td class="text-xs text-muted">${esc(det)}</td>
+                            <td class="text-xs text-muted">${esc(c.createdByName || '—')}</td>
+                          </tr>
+                        `;
+                      }).join("")}
+                  </tbody>
+                </table>
+              `}
+            </div>
+          </div>
+        </div>
+      `;
+
+      content.querySelector("#cl-filter-wh")?.addEventListener("change", () => mountClosuresPanel(content, tabGeneration));
+      content.querySelector("#cl-export-csv")?.addEventListener("click", () => {
+        const rows = closures
+          .filter((c) => !filterWh || c.warehouseId === filterWh)
+          .map((c) => ({
+            fecha: String(c.closureDate),
+            almacen: c.warehouseName || whMap.get(c.warehouseId)?.name || "",
+            ventas: c.salesCount,
+            unidades: c.unitsSold,
+            total_usd: c.totalUSD,
+            usd: c.byCurrency?.USD?.amount || 0,
+            mn: c.byCurrency?.MN?.amount || 0,
+            eur: c.byCurrency?.EUR?.amount || 0,
+            transferencia: c.byCurrency?.TRANSFERENCIA?.amount || 0,
+            cerrado_por: c.createdByName || "",
+          }));
+        exportToCSV("cierres-de-caja", rows);
+        toast(`${rows.length} cierres exportados`, "success");
+      });
+
+      // v5.6.0: período del reporte + export del reporte
+      content.querySelectorAll("[data-cl-period]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          closuresReportPeriod = btn.dataset.clPeriod;
+          mountClosuresPanel(content, tabGeneration);
+        });
+      });
+      content.querySelector("#cl-export-report")?.addEventListener("click", () => {
+        const range = reportPeriodRange(closuresReportPeriod);
+        const report = aggregateClosuresReport(closures, range);
+        const rows = report.perWarehouse.map((w) => ({
+          almacen: w.name,
+          codigo: w.code,
+          cierres: w.closures,
+          ventas: w.salesCount,
+          unidades: w.unitsSold,
+          total_usd: w.totalUSD,
+          promedio_dia_usd: w.avgDailyUSD,
+          ticket_promedio_usd: w.salesCount > 0 ? w.totalUSD / w.salesCount : 0,
+        }));
+        exportToCSV(`reporte-cierres-${closuresReportPeriod}`, rows);
+        toast(`${rows.length} fila(s) exportadas (${range.label})`, "success");
+      });
+    }).catch((err) => {
+      console.error("mountClosuresPanel failed:", err);
+      content.innerHTML = `<div class="empty-state text-danger">Error al cargar cierres: ${esc(err.message || "desconocido")}</div>`;
     });
   }
 
@@ -2952,6 +3591,9 @@ export function mountAdminView(container, navigateOrUser) {
     let filterProduct = "";
     let filterFrom = "";
     let filterTo = "";
+    let filterText = "";
+    let mvPage = 1;
+    const MV_PAGE_SIZE = 50; // paginación client-side (500 filas cargadas)
     let allMovements = [];
     let allWarehouses = [];
     let allProducts = [];
@@ -2986,11 +3628,28 @@ export function mountAdminView(container, navigateOrUser) {
       if (filterProduct) filtered = filtered.filter((m) => m.productId === filterProduct);
       if (filterFrom) filtered = filtered.filter((m) => m.createdAt >= new Date(filterFrom).getTime());
       if (filterTo) filtered = filtered.filter((m) => m.createdAt <= new Date(filterTo).getTime() + 86400000);
+      // Buscador de texto: producto, usuario, nota o motivo
+      if (filterText) {
+        const q = filterText.toLowerCase();
+        filtered = filtered.filter((m) =>
+          (prodMap.get(m.productId)?.name || "").toLowerCase().includes(q) ||
+          (prodMap.get(m.productId)?.sku || "").toLowerCase().includes(q) ||
+          (m.userName || "").toLowerCase().includes(q) ||
+          (m.note || "").toLowerCase().includes(q) ||
+          (m.reason || "").toLowerCase().includes(q)
+        );
+      }
 
-      // Stats
+      // Stats (sobre TODO el filtrado, antes de paginar)
       const totalIn = filtered.filter((m) => (m.delta || 0) > 0).reduce((s, m) => s + m.delta, 0);
       const totalOut = filtered.filter((m) => (m.delta || 0) < 0).reduce((s, m) => s + Math.abs(m.delta), 0);
       const totalMovements = filtered.length;
+
+      // Paginación client-side
+      const totalPages = Math.max(1, Math.ceil(totalMovements / MV_PAGE_SIZE));
+      if (mvPage > totalPages) mvPage = totalPages;
+      if (mvPage < 1) mvPage = 1;
+      const pageRows = filtered.slice((mvPage - 1) * MV_PAGE_SIZE, mvPage * MV_PAGE_SIZE);
 
       const reasonLabels = {
         AJUSTE_MANUAL: "Ajuste manual",
@@ -3019,7 +3678,7 @@ export function mountAdminView(container, navigateOrUser) {
         <div style="display:flex;flex-direction:column;gap:1rem">
           <div>
             <h1 class="text-2xl font-bold flex items-center gap-2">${icon("listTree", 24)} Movimientos de stock</h1>
-            <p class="text-sm text-muted">Auditoría completa · ${totalMovements} movimientos (mostrando últimos 500)</p>
+            <p class="text-sm text-muted">Auditoría completa · ${totalMovements} movimiento(s)${totalPages > 1 ? ` · página ${mvPage} de ${totalPages}` : ""} <span class="text-xs">(mostrando últimos 500 cargados)</span></p>
           </div>
 
           <!-- Stats -->
@@ -3056,7 +3715,11 @@ export function mountAdminView(container, navigateOrUser) {
           <!-- Filtros -->
           <div class="card">
             <div class="card-content" style="padding:0.875rem;display:flex;flex-direction:column;gap:0.625rem">
-              <div class="grid grid-cols-2 md:grid-cols-5 gap-2">
+              <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+                <div>
+                  <label class="label label-xs">Buscar</label>
+                  <input class="input" type="search" id="mv-filter-text" value="${esc(filterText)}" placeholder="Producto, usuario, nota…" />
+                </div>
                 <div>
                   <label class="label label-xs">Almacén</label>
                   <select class="select" id="mv-filter-warehouse">
@@ -3116,7 +3779,7 @@ export function mountAdminView(container, navigateOrUser) {
                     <th>Nota</th>
                   </tr></thead>
                   <tbody>
-                    ${filtered.map((m) => {
+                    ${pageRows.map((m) => {
                       const wh = whMap.get(m.warehouseId);
                       const prod = prodMap.get(m.productId);
                       const isPositive = (m.delta || 0) > 0;
@@ -3143,6 +3806,14 @@ export function mountAdminView(container, navigateOrUser) {
                 </table>
               `}
             </div>
+            <!-- Paginación -->
+            ${totalPages > 1 ? `
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;padding:0.625rem 0.875rem;border-top:1px solid var(--border)">
+                <button class="btn btn-outline btn-sm" id="mv-prev-page" ${mvPage <= 1 ? "disabled" : ""}>${icon("arrowLeft", 12)} Anterior</button>
+                <span class="text-xs text-muted">Página ${mvPage} de ${totalPages} · ${totalMovements} movimiento(s) · ${MV_PAGE_SIZE} por página</span>
+                <button class="btn btn-outline btn-sm" id="mv-next-page" ${mvPage >= totalPages ? "disabled" : ""}>Siguiente ${icon("arrowRight", 12)}</button>
+              </div>
+            ` : ""}
           </div>
         </div>
       `;
@@ -3162,8 +3833,30 @@ export function mountAdminView(container, navigateOrUser) {
         filterReason = "";
         filterFrom = "";
         filterTo = "";
+        filterText = "";
+        mvPage = 1;
         render();
       });
+
+      // Buscador de texto (aplica al perder foco / Enter; restaura el foco tras re-render)
+      const searchInput = content.querySelector("#mv-filter-text");
+      if (searchInput) {
+        searchInput.addEventListener("change", () => {
+          const val = searchInput.value;
+          filterText = val.trim();
+          mvPage = 1;
+          render();
+          const re = content.querySelector("#mv-filter-text");
+          if (re && val) { re.focus(); re.selectionStart = re.selectionEnd = re.value.length; }
+        });
+        searchInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") searchInput.blur();
+        });
+      }
+
+      // Paginación
+      content.querySelector("#mv-prev-page")?.addEventListener("click", () => { if (mvPage > 1) { mvPage--; render(); } });
+      content.querySelector("#mv-next-page")?.addEventListener("click", () => { if (mvPage < totalPages) { mvPage++; render(); } });
 
       // Export CSV con los movimientos filtrados
       const exportBtn = content.querySelector("#mv-export-csv");
@@ -3466,8 +4159,8 @@ export function mountAdminView(container, navigateOrUser) {
       function validateSelection() {
         const from = fromSel.value;
         const to = toSel.value;
-        if (!from) { showError("Seleccioná el almacén origen."); return false; }
-        if (!to) { showError("Seleccioná el almacén destino."); return false; }
+        if (!from) { showError("Selecciona el almacén origen."); return false; }
+        if (!to) { showError("Selecciona el almacén destino."); return false; }
         if (from === to) { showError("El almacén origen y destino deben ser distintos."); return false; }
         showError(null);
         return true;
@@ -3704,7 +4397,7 @@ export function mountAdminView(container, navigateOrUser) {
         const newEnabled = content.querySelector("#wk-enabled").checked;
         const newWhId = content.querySelector("#wk-warehouseId").value;
         if (newEnabled && !newWhId) {
-          toast("Seleccioná un almacén para activar la regla", "error");
+          toast("Selecciona un almacén para activar la regla", "error");
           return;
         }
         await saveSettings({
@@ -3792,7 +4485,7 @@ export function mountAdminView(container, navigateOrUser) {
                           </div>
                         </div>
                         ${cardMovements.length === 0 ? `
-                          <div class="empty-state text-xs">Sin movimientos. Hacé un depósito para empezar a usar la tarjeta.</div>
+                          <div class="empty-state text-xs">Sin movimientos. Haz un depósito para empezar a usar la tarjeta.</div>
                         ` : `
                           <div style="max-height:20rem;overflow-y:auto;display:flex;flex-direction:column;gap:0.375rem">
                             ${cardMovements.slice(0, 30).map((m) => {
