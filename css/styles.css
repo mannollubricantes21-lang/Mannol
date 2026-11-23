@@ -2683,3 +2683,105 @@ h1, h2, h3, .card-title { overflow-wrap: anywhere; }
     transform: none !important;
   }
 }
+
+/* =====================================================
+   v5.7.0 — Interior del almacén (rediseño)
+   Todo con tokens de tema: funciona en claro y oscuro.
+   ===================================================== */
+
+/* Hero de identidad del almacén */
+.wh-hero {
+  padding: 0.875rem 1rem;
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(120% 150% at 100% 0%, var(--primary-tint) 0%, transparent 55%),
+    color-mix(in oklab, var(--primary) 5%, var(--bg-soft));
+  border: 1px solid color-mix(in oklab, var(--primary) 25%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.wh-chip {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  padding: 0.1875rem 0.5rem; border-radius: 999px;
+  background: color-mix(in oklab, var(--primary) 16%, transparent);
+  color: var(--primary); font-weight: 800; font-size: 0.6875rem; letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+.wh-meta {
+  display: flex; flex-wrap: wrap; gap: 0.25rem 0.875rem;
+  color: var(--text-muted); font-size: 0.6875rem; margin-top: 0.4375rem;
+}
+.wh-meta span { display: inline-flex; align-items: center; gap: 0.25rem; }
+
+/* Selector de período tipo segmented control */
+.seg-group {
+  display: inline-flex; gap: 0.125rem; padding: 0.1875rem;
+  background: var(--bg-soft); border-radius: 999px; border: 1px solid var(--border);
+}
+.seg {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--text-muted); font-size: 0.6875rem; font-weight: 700;
+  padding: 0.25rem 0.625rem; border-radius: 999px;
+}
+.seg-on { background: var(--primary); color: var(--primary-foreground); box-shadow: var(--shadow-sm); }
+
+/* KPIs compactos (2×2) */
+.kpi-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
+.kpi-cell {
+  padding: 0.5rem 0.625rem; border-radius: var(--radius);
+  background: var(--bg-soft); border: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 0.0625rem; min-width: 0;
+}
+.kpi-label {
+  font-size: 0.625rem; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;
+}
+.kpi-value { font-size: 1.125rem; font-weight: 800; line-height: 1.15; }
+
+/* Chips por moneda */
+.curr-chip {
+  display: inline-flex; align-items: center; gap: 0.3125rem;
+  padding: 0.25rem 0.5625rem; border-radius: 999px; font-size: 0.6875rem;
+  border: 1px solid var(--border); background: var(--bg-soft);
+}
+.curr-dot { width: 0.5rem; height: 0.5rem; border-radius: 999px; flex-shrink: 0; }
+
+/* CTA principal de venta */
+.cta-sale {
+  height: 3.25rem; font-size: 1rem; font-weight: 800;
+  background: linear-gradient(135deg, var(--primary), color-mix(in oklab, var(--primary) 72%, black));
+  border: none; color: var(--primary-foreground);
+  box-shadow: var(--shadow-primary);
+}
+.cta-sale:active { transform: translateY(1px); }
+
+/* Fila de stats con divisores (cierre de caja) */
+.stat-row { display: flex; }
+.stat-cell { flex: 1; text-align: center; padding: 0.5rem 0; min-width: 0; }
+.stat-cell + .stat-cell { border-left: 1px solid var(--border); }
+
+/* Filas de inventario con estado (barra izquierda + pill de cantidad) */
+.stock-row {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.4688rem 0.625rem 0.4688rem 0.5625rem;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  border-left: 3px solid color-mix(in oklab, var(--accent) 55%, transparent);
+  background: var(--bg-elevated);
+}
+.stock-row.low {
+  border-left-color: color-mix(in oklab, var(--warning) 75%, transparent);
+  background: color-mix(in oklab, var(--warning) 7%, var(--bg-elevated));
+}
+.stock-row.out {
+  border-left-color: color-mix(in oklab, var(--danger) 70%, transparent);
+  background: color-mix(in oklab, var(--danger) 7%, var(--bg-elevated));
+}
+.qty-pill {
+  min-width: 2.375rem; text-align: center; padding: 0.1875rem 0.5rem;
+  border-radius: 999px; font-weight: 800; font-size: 0.8125rem; flex-shrink: 0;
+  background: color-mix(in oklab, var(--accent) 14%, transparent); color: var(--accent);
+}
+.qty-pill.low {
+  background: color-mix(in oklab, var(--warning) 20%, transparent);
+  color: color-mix(in oklab, var(--warning) 65%, var(--text));
+}
+.qty-pill.out { background: color-mix(in oklab, var(--danger) 16%, transparent); color: var(--danger); }

@@ -193,14 +193,7 @@ export function mountWarehouseInterior(container, navigate) {
     const lowStock = stock.filter((s) => s.quantity <= (s.minStock || 5) && s.quantity > 0).length;
     const outOfStock = stock.filter((s) => s.quantity === 0).length;
 
-    // v5.4.0: tiles de monedas con movimiento; las sin actividad van en una línea compacta
-    const CURR_MARK = { USD: "$", MN: "₱", EUR: "€", TRANSFERENCIA: icon("creditCard", 18) };
-    const CURR_BORDER = {
-      USD: "color-mix(in oklab, var(--accent-usd) 30%, transparent)",
-      MN: "color-mix(in oklab, var(--accent-mn) 30%, transparent)",
-      EUR: "color-mix(in oklab, var(--accent-eur) 30%, transparent)",
-      TRANSFERENCIA: "color-mix(in oklab, var(--accent-transfer) 30%, transparent)",
-    };
+    // v5.4.0 → v5.7.0: monedas con movimiento como chips de color
     const CURR_COLOR = {
       USD: "var(--accent-usd)", MN: "var(--accent-mn)", EUR: "var(--accent-eur)", TRANSFERENCIA: "var(--accent-transfer)",
     };
@@ -218,76 +211,83 @@ export function mountWarehouseInterior(container, navigate) {
 
     container.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:0.875rem">
-        <!-- Header del almacén -->
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem">
-          <div style="display:flex;align-items:center;gap:0.5rem;min-width:0">
-            <span class="badge badge-outline" style="font-size:0.75rem;font-weight:700">${esc(warehouse.code)}</span>
-            <h2 class="text-lg font-bold" style="margin:0">${esc(warehouse.name)}</h2>
-          </div>
-          <button class="btn btn-ghost btn-sm" data-nav-back>${icon("arrowLeft", 14)} Volver</button>
-        </div>
-        ${warehouse.address || warehouse.phone ? `
-          <div class="text-xs text-muted" style="display:flex;flex-direction:column;gap:0.125rem">
-            ${warehouse.address ? `<div>${icon("mapPin", 12)} ${esc(warehouse.address)}</div>` : ''}
-            ${warehouse.phone ? `<div>${icon("phone", 12)} ${esc(warehouse.phone)}</div>` : ''}
-          </div>
-        ` : ''}
-
-        <!-- Selector de período -->
-        <div style="display:flex;gap:0.375rem">
-          <button class="btn ${period === 'today' ? 'btn-primary' : 'btn-outline'} btn-sm" data-period="today" style="flex:1">Hoy</button>
-          <button class="btn ${period === 'week' ? 'btn-primary' : 'btn-outline'} btn-sm" data-period="week" style="flex:1">Semana</button>
-          <button class="btn ${period === 'month' ? 'btn-primary' : 'btn-outline'} btn-sm" data-period="month" style="flex:1">Mes</button>
-        </div>
-
-        <!-- Panel de resumen -->
-        <div class="card-dark" style="padding:0.875rem">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.625rem">
-            <h3 class="text-sm font-semibold text-on-dark flex items-center gap-1">${icon("store", 14)} Resumen ${period === 'today' ? 'Hoy' : period === 'week' ? 'Semana' : 'Mes'}</h3>
-            <span class="badge badge-dark">${icon("cart", 10)} ${stats.count} ventas</span>
-          </div>
-
-          <!-- Grid de KPIs: Ventas + monedas activas + Unidades (v5.4.0) -->
-          <div class="grid grid-cols-3 gap-2">
-            <div style="text-align:center;padding:0.5rem;background:var(--bg-dark);border-radius:var(--radius);border:1px solid var(--border-on-dark)">
-              <div style="color:var(--accent-usd);margin-bottom:0.125rem">${icon("cart", 18)}</div>
-              <div class="text-xl font-bold text-on-dark">${stats.count}</div>
-              <div class="text-xs text-muted-on-dark">Ventas</div>
+        <!-- Hero del almacén (v5.7.0) -->
+        <div class="wh-hero">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem">
+            <div style="display:flex;align-items:center;gap:0.5rem;min-width:0">
+              <span class="wh-chip">${icon("store", 11)} ${esc(warehouse.code)}</span>
+              <h2 class="text-lg font-bold" style="margin:0">${esc(warehouse.name)}</h2>
             </div>
-            ${activeCurrs.map((c) => `
-              <div style="text-align:center;padding:0.5rem;background:var(--bg-dark);border-radius:var(--radius);border:1px solid ${CURR_BORDER[c]}">
-                <div style="color:${CURR_COLOR[c]};margin-bottom:0.125rem;font-size:1.125rem;font-weight:700">${CURR_MARK[c]}</div>
-                <div class="text-xl font-bold text-on-dark">${formatMoney(stats.byCurrency[c].amount, CURR_FMT[c])}</div>
-                <div class="text-xs text-muted-on-dark">${CURR_LABEL[c]}</div>
-              </div>
-            `).join("")}
-            <div style="text-align:center;padding:0.5rem;background:var(--bg-dark);border-radius:var(--radius);border:1px solid var(--border-on-dark)">
-              <div style="color:var(--warning);margin-bottom:0.125rem">${icon("boxes", 18)}</div>
-              <div class="text-xl font-bold text-on-dark">${stats.unitsSold}</div>
-              <div class="text-xs text-muted-on-dark">Unidades</div>
-            </div>
+            <button class="btn btn-ghost btn-sm" data-nav-back style="flex-shrink:0">${icon("arrowLeft", 14)} Volver</button>
           </div>
-          ${zeroCurrs.length > 0 ? `
-            <div class="text-xs text-muted-on-dark" style="margin-top:0.375rem">
-              Sin movimiento: ${zeroCurrs.map((c) => CURR_LABEL[c]).join(" · ")}
+          ${warehouse.address || warehouse.phone ? `
+            <div class="wh-meta">
+              ${warehouse.address ? `<span>${icon("mapPin", 11)} ${esc(warehouse.address)}</span>` : ''}
+              ${warehouse.phone ? `<span>${icon("phone", 11)} ${esc(warehouse.phone)}</span>` : ''}
             </div>
           ` : ''}
-
-          ${stats.count > 0 ? `
-            <hr style="border:none;border-top:1px solid var(--border-on-dark);margin:0.625rem 0" />
-            <div class="grid grid-cols-2 gap-2">
-              ${Object.entries(stats.byCurrency).filter(([_, v]) => v.count > 0).map(([curr, data]) => `
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0.5rem;background:var(--bg-dark);border-radius:var(--radius-sm);border:1px solid var(--border-on-dark)">
-                  <span class="text-xs text-muted-on-dark"><strong class="text-on-dark">${esc(curr)}</strong> · ${data.count} venta(s)</span>
-                  <span class="text-xs font-bold text-on-dark">${formatMoney(data.amount, curr)}</span>
-                </div>
-              `).join("")}
-            </div>
-          ` : `<p class="text-xs text-muted-on-dark text-center" style="margin-top:0.5rem">Sin ventas en este período</p>`}
         </div>
 
-        <!-- Botón registrar venta -->
-        <button class="btn btn-primary btn-block btn-lg" id="register-sale-btn" style="font-size:1rem;font-weight:700;height:3rem">
+        <!-- Resumen con período integrado (v5.7.0) -->
+        <div class="card">
+          <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;padding:0.625rem 0.75rem">
+            <h3 class="card-title flex items-center gap-1">${icon("activity", 14)} Resumen</h3>
+            <div class="seg-group">
+              ${[["today", "Hoy"], ["week", "Semana"], ["month", "Mes"]].map(([p, lbl]) => `
+                <button class="seg ${period === p ? 'seg-on' : ''}" data-period="${p}">${lbl}</button>
+              `).join("")}
+            </div>
+          </div>
+          <div class="card-content" style="padding:0.625rem 0.75rem 0.75rem">
+            <div class="kpi-grid">
+              <div class="kpi-cell">
+                <span class="kpi-label">Ventas</span>
+                <span class="kpi-value">${stats.count}</span>
+              </div>
+              <div class="kpi-cell">
+                <span class="kpi-label">Total (USD)</span>
+                <span class="kpi-value" style="color:var(--accent-usd)">${formatMoney(stats.totalUSD, "USD")}</span>
+              </div>
+              <div class="kpi-cell">
+                <span class="kpi-label">Unidades</span>
+                <span class="kpi-value">${stats.unitsSold}</span>
+              </div>
+              <div class="kpi-cell">
+                <span class="kpi-label">Ticket prom.</span>
+                <span class="kpi-value">${formatMoney(stats.count > 0 ? stats.totalUSD / stats.count : 0, "USD")}</span>
+              </div>
+            </div>
+
+            ${activeCurrs.length > 0 ? `
+              <div style="display:flex;flex-wrap:wrap;gap:0.375rem;margin-top:0.5625rem">
+                ${activeCurrs.map((c) => `
+                  <span class="curr-chip">
+                    <span class="curr-dot" style="background:${CURR_COLOR[c]}"></span>
+                    <strong class="text-xs" style="color:${CURR_COLOR[c]}">${CURR_LABEL[c]}</strong>
+                    <strong class="text-xs">${formatMoney(stats.byCurrency[c].amount, CURR_FMT[c])}</strong>
+                    <span class="text-muted" style="font-size:0.625rem">· ${stats.byCurrency[c].count}</span>
+                  </span>
+                `).join("")}
+              </div>
+            ` : ''}
+            ${zeroCurrs.length > 0 ? `
+              <div class="text-xs text-muted" style="margin-top:0.4375rem">
+                Sin movimiento: ${zeroCurrs.map((c) => CURR_LABEL[c]).join(" · ")}
+              </div>
+            ` : ''}
+
+            ${stats.count === 0 ? `
+              <div class="empty-state text-xs" style="padding:0.875rem 0 0.25rem">
+                <div class="empty-state-icon">${icon("cart", 20)}</div>
+                <p style="margin:0.25rem 0 0">Sin ventas en este período.</p>
+                <p class="text-muted" style="font-size:0.6875rem;margin:0.125rem 0 0">Toca <strong>Registrar venta</strong> para empezar el día.</p>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+
+        <!-- Botón registrar venta (v5.7.0) -->
+        <button class="btn cta-sale btn-block" id="register-sale-btn">
           ${icon("cart", 20)} Registrar venta
         </button>
 
@@ -300,16 +300,16 @@ export function mountWarehouseInterior(container, navigate) {
               : `<span class="badge ${todayStats.salesCount > 0 ? 'badge-warning' : ''}" style="font-size:0.625rem">${todayStats.salesCount > 0 ? 'Pendiente de cerrar' : 'Sin ventas hoy'}</span>`}
           </div>
           <div class="card-content" style="padding:0.625rem 0.75rem">
-            <div class="grid grid-cols-3 gap-2">
-              <div style="text-align:center;padding:0.375rem;background:var(--bg-soft);border-radius:var(--radius-sm)">
+            <div class="stat-row">
+              <div class="stat-cell">
                 <div class="text-lg font-bold">${todayStats.salesCount}</div>
                 <div class="text-xs text-muted">Ventas hoy</div>
               </div>
-              <div style="text-align:center;padding:0.375rem;background:var(--bg-soft);border-radius:var(--radius-sm)">
+              <div class="stat-cell">
                 <div class="text-lg font-bold" style="color:var(--accent-usd)">${formatMoney(todayStats.totalUSD, "USD")}</div>
                 <div class="text-xs text-muted">Total (USD)</div>
               </div>
-              <div style="text-align:center;padding:0.375rem;background:var(--bg-soft);border-radius:var(--radius-sm)">
+              <div class="stat-cell">
                 <div class="text-lg font-bold">${todayStats.unitsSold}</div>
                 <div class="text-xs text-muted">Unidades</div>
               </div>
@@ -320,7 +320,7 @@ export function mountWarehouseInterior(container, navigate) {
                 <strong>${formatMoney(d.amount, curr)}</strong>
               </div>
             `).join("")}
-            <button class="btn btn-outline btn-sm btn-block" id="close-cash-btn" style="margin-top:0.5rem">
+            <button class="btn ${!todayClosed && todayStats.salesCount > 0 ? 'btn-primary' : 'btn-outline'} btn-sm btn-block" id="close-cash-btn" style="margin-top:0.5rem">
               ${icon("check", 14)} ${todayClosed ? 'Actualizar cierre de hoy' : 'Cerrar caja de hoy'}
             </button>
             ${recentClosures.length > 0 ? `
@@ -367,21 +367,24 @@ export function mountWarehouseInterior(container, navigate) {
                 <span style="position:absolute;left:0.625rem;top:50%;transform:translateY(-50%);color:var(--text-muted)">${icon("search", 14)}</span>
                 <input class="input" id="stock-search" placeholder="Buscar..." value="${search}" style="padding-left:2rem;font-size:0.8125rem;height:2.25rem" />
               </div>
-              <div style="max-height:18rem;overflow-y:auto;display:flex;flex-direction:column;gap:0.25rem">
+              <div style="max-height:22rem;overflow-y:auto;display:flex;flex-direction:column;gap:0.25rem">
                 ${filteredProducts.map((p) => {
                   const s = stockMap[p.id];
                   const qty = s?.quantity ?? 0;
                   const min = s?.minStock || p.minStock || 5;
                   const isLow = qty > 0 && qty <= min;
                   const isOut = qty === 0;
+                  // v5.7.0: marca solo si NO es MANNOL (evita ruido repetido) + precio para admin + mínimo de referencia
+                  const brandTxt = (p.brand && p.brand !== "MANNOL") ? esc(p.brand) + ' · ' : '';
+                  const adminPrice = isAdmin && (s?.localPrice || p.salePrice) ? formatMoney(s?.localPrice || p.salePrice, "USD") + ' · ' : '';
                   return `
-                    <div style="display:flex;align-items:center;gap:0.5rem;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius)">
+                    <div class="stock-row ${isOut ? 'out' : isLow ? 'low' : ''}">
                       <div style="flex:1;min-width:0">
-                        <div class="text-xs font-medium truncate">${esc(p.name)}</div>
-                        <div class="text-xs text-muted">${esc(p.brand)} ${isAdmin ? '· ' + formatMoney(s?.localPrice || p.salePrice, "USD") : ''}</div>
+                        <div class="text-xs font-semibold truncate" ${isOut ? 'style="color:var(--text-muted)"' : ''}>${esc(p.name)}</div>
+                        <div class="text-xs text-muted truncate">${brandTxt}${adminPrice}<span style="opacity:0.8">mín ${min}</span></div>
                       </div>
-                      <span class="text-sm font-bold ${isOut ? 'text-danger' : isLow ? 'text-warning' : ''}">${qty}</span>
-                      ${isOut ? '<span class="badge badge-danger" style="font-size:0.5rem">Agotado</span>' : isLow ? '<span class="badge badge-warning" style="font-size:0.5rem">Bajo</span>' : ''}
+                      <span class="qty-pill ${isOut ? 'out' : isLow ? 'low' : ''}">${qty}</span>
+                      ${isOut ? '<span class="badge badge-danger" style="font-size:0.5rem;flex-shrink:0">Agotado</span>' : isLow ? '<span class="badge badge-warning" style="font-size:0.5rem;flex-shrink:0">Bajo</span>' : ''}
                       <button class="btn btn-ghost btn-sm" data-view-others="${esc(p.id)}" title="Ver en otros almacenes" style="padding:0.25rem 0.5rem">${icon("mapPin", 12)}</button>
                     </div>
                   `;
@@ -504,7 +507,7 @@ export function mountWarehouseInterior(container, navigate) {
             <div class="card-content" style="padding:0.5rem">
               <div style="max-height:14rem;overflow-y:auto;display:flex;flex-direction:column;gap:0.25rem">
                 ${periodSales.slice(0, 10).map((s) => `
-                  <div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius)">
+                  <div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius);border-left:3px solid ${CURR_COLOR[s.currency] || 'var(--accent)'}">
                     <div>
                       <div class="text-xs font-medium">${esc(s.code)} · ${esc(s.managerName || s.userName || '—')}</div>
                       <div class="text-xs text-muted">${s.items.length} items · ${formatDate(s.createdAt)}</div>

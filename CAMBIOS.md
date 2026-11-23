@@ -1,5 +1,34 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.7.0 (2026-11-23) — DISEÑO: rediseño del interior del almacén
+
+> Preview comparativo con capturas antes/después: `preview-rediseno.html` (en la carpeta de descargas).
+
+### Qué cambió en la vista del almacén (empleado)
+- **Hero de identidad**: tarjeta con gradiente esmeralda, chip del código, nombre grande y
+  dirección/teléfono en una línea de metadatos (antes: texto suelto en dos líneas grises).
+- **Resumen rediseñado**: el selector Hoy/Semana/Mes ahora es un segmented control DENTRO del
+  card (una fila menos); KPIs en grid 2×2 — Ventas, **Total USD** (siempre visible, antes solo
+  con movimiento), Unidades y **Ticket promedio** (nuevo); detalle por moneda como chips de
+  color con punto del acento; estado vacío con icono y guía ("Toca Registrar venta").
+- **Inventario con estados visibles**: barra de color izquierda (verde ok / ámbar bajo /
+  rojo agotado), cantidad en pill del color del estado, mínimo de referencia («mín 5»),
+  marca solo si es distinta de MANNOL (menos ruido) y nombre atenuado en agotados.
+  La lista sube su límite de alto (18→22rem) para ver más productos de un golpe.
+- **CTA «Registrar venta»** con gradiente y sombra propia; **«Cerrar caja de hoy»** se pone
+  verde cuando hay ventas pendientes de cerrar.
+- **Cierre de caja compacto**: stats en una fila con divisores (menos cajas dentro de cajas).
+- **Ventas recientes** con borde izquierdo del color de la moneda.
+- Todo con tokens del tema: respeta claro/oscuro sin duplicar estilos. Constantes sin uso
+  del resumen viejo eliminadas.
+
+### Técnico
+- `css/styles.css`: nuevas clases `wh-hero`, `wh-chip`, `wh-meta`, `seg/seg-on`, `kpi-grid`,
+  `kpi-cell`, `curr-chip`, `cta-sale`, `stat-row/cell`, `stock-row(.low/.out)`, `qty-pill`.
+- `js/views/warehouse-interior.js`: template del dashboard/inventario reorganizado (mismos
+  handlers y flujos; sin cambios de lógica de datos).
+- 107 tests OK. `sw.js` caché v26. Sin migración SQL.
+
 ## v5.6.1 (2026-11-23) — FIX: PIN del almacén (incorrecto siempre + demora)
 
 ### Qué pasaba
