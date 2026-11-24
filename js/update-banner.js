@@ -79,11 +79,17 @@ export function setupUpdateBanner({ register = false } = {}) {
   };
 
   if (register) {
-    window.addEventListener("load", () => {
+    const doRegister = () => {
       navigator.serviceWorker.register("./sw.js", { scope: "./" })
         .then(activate)
         .catch((err) => console.warn("[SW] registration failed:", err));
-    });
+    };
+    // v5.13.0: index.html carga app.js con import() dinámico, que casi
+    // siempre termina DESPUÉS del evento "load" de la página. Antes el
+    // registro esperaba ese evento ya pasado → el service worker NUNCA se
+    // registraba y la app no podía abrir sin conexión.
+    if (document.readyState === "complete") doRegister();
+    else window.addEventListener("load", doRegister, { once: true });
   } else {
     navigator.serviceWorker.getRegistration("./").then((reg) => {
       if (reg) activate(reg);

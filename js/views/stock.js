@@ -4,8 +4,11 @@
 
 import { getStore } from "../store.js";
 import { subscribeProducts, subscribeStock, adjustStock, listStock, listProducts, listCategories } from "../db.js";
+import { indexCategories, topCategoryId, sortCategories, knownBrandNames, normalizeKey } from "../catalog-facets.js";
 import { formatMoney, skeletonStatCard, skeletonRow } from "../currency.js";
 import { toast, icon, showModal, esc } from "../ui.js";
+import { findProductByCode } from "../sales-stats.js";
+import { openScanner, canUseCamera } from "../barcode-scanner.js";
 import { STOCK_REASONS, STOCK_REASON_LABELS } from "../types.js";
 import { exportToCSV } from "../csv-export.js";
 
@@ -38,7 +41,7 @@ export function mountStockView(container, navigate) {
             <h1 class="text-2xl font-bold flex items-center gap-2">${icon("boxes", 24)} Inventario</h1>
             <p class="text-sm text-muted">Cargando productos y stock…</p>
           </div>
-          <div class="grid md:grid-cols-3 gap-3">${skeletonStatCard(3)}</div>
+          <div class="grid md:grid-cols-3 gap-3 inv-kpis">${skeletonStatCard(3)}</div>
           <div class="card">
             <div class="overflow-x-auto">
               <table class="table"><thead><tr><th>Producto</th><th>Marca</th><th class="text-center">Cantidad</th><th class="text-center">Mínimo</th><th class="text-center">Estado</th></tr></thead>
@@ -53,7 +56,9 @@ export function mountStockView(container, navigate) {
     const stockMap = {};
     stock.forEach((s) => (stockMap[s.productId] = s));
 
-    // Filtros combinados
+    // Filtros combinados (v5.12.0: el tipo incluye sus subcategorías; la marca
+    // se compara sin mayúsculas/tildes)
+    const catIdx = indexCategories(categories);
     const filtered = products.filter((p) => {
       // Búsqueda por texto
       if (search) {
@@ -64,9 +69,9 @@ export function mountStockView(container, navigate) {
             !(p.viscosity || "").toLowerCase().includes(q)) return false;
       }
       // Filtro por categoría
-      if (filterCategory && p.categoryId !== filterCategory) return false;
+      if (filterCategory && p.categoryId !== filterCategory && topCategoryId(p, catIdx) !== filterCategory) return false;
       // Filtro por marca
-      if (filterBrand && p.brand !== filterBrand) return false;
+      if (filterBrand && normalizeKey(p.brand) !== normalizeKey(filterBrand)) return false;
       // Filtro por estado
       if (filterStatus !== "all") {
         const s = stockMap[p.id];
@@ -80,7 +85,7 @@ export function mountStockView(container, navigate) {
     });
 
     // Marcas únicas
-    const uniqueBrands = Array.from(new Set(products.map((p) => p.brand).filter(Boolean))).sort();
+    const uniqueBrands = knownBrandNames([], products);
 
     const totalUnits = stock.reduce((s, x) => s + x.quantity, 0);
     const totalValue = isAdmin ? stock.reduce((s, x) => {
@@ -100,7 +105,7 @@ export function mountStockView(container, navigate) {
           </p>
         </div>
 
-        <div class="grid md:grid-cols-3 gap-3">
+        <div class="grid md:grid-cols-3 gap-3 inv-kpis">
           <div class="stat-card">
             <div class="stat-label">${icon("boxes", 14)} Total unidades</div>
             <div class="stat-value">${totalUnits}</div>
@@ -118,14 +123,15 @@ export function mountStockView(container, navigate) {
           </div>
         </div>
 
-        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
-          <div style="position:relative;flex:1;min-width:12rem">
+        <div class="inv-filters" style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
+          <div class="${canUseCamera() ? "input-scan" : ""}" style="position:relative;flex:1;min-width:12rem">
             <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)" aria-hidden="true">${icon("search", 16)}</span>
             <input class="input" placeholder="Buscar por nombre, marca, SKU o viscosidad..." id="search-input" value="${esc(search)}" style="padding-left:2.25rem" aria-label="Buscar producto" />
+            ${canUseCamera() ? `<button type="button" class="scan-btn" id="scan-stock-btn" aria-label="Buscar escaneando el código de barras" title="Escanear código de barras">${icon("scan", 18)}</button>` : ""}
           </div>
           <select class="select" id="cat-filter" style="min-width:10rem" aria-label="Filtrar por categoría">
             <option value="">Todas las categorías</option>
-            ${categories.filter(c => !c.parentId).map((c) => `<option value="${esc(c.id)}" ${filterCategory === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+            ${sortCategories(categories.filter(c => !c.parentId)).map((c) => `<option value="${esc(c.id)}" ${filterCategory === c.id ? 'selected' : ''}>${esc(c.icon ? `${c.icon} ` : "")}${esc(c.name)}</option>`).join('')}
           </select>
           <select class="select" id="brand-filter" style="min-width:8rem" aria-label="Filtrar por marca">
             <option value="">Todas las marcas</option>
@@ -143,7 +149,7 @@ export function mountStockView(container, navigate) {
 
         <div class="card">
           <div class="overflow-x-auto">
-            <table class="table">
+            <table class="table table-cards">
               <thead><tr><th>Producto</th><th>Marca</th>${isAdmin ? '<th class="text-right">Precio</th>' : ''}<th class="text-center">Cantidad</th><th class="text-center">Mínimo</th><th class="text-center">Estado</th>${canEdit ? '<th class="text-right">Acciones</th>' : ''}</tr></thead>
               <tbody>
                 ${filtered.length === 0 ? `<tr><td colspan="${canEdit ? 7 : 6}"><div class="empty-state"><div class="empty-state-icon">${icon("boxes", 24)}</div><p class="empty-state-title">Sin productos</p><p class="empty-state-desc">No hay productos que coincidan con los filtros.</p></div></td></tr>` :
@@ -221,6 +227,21 @@ export function mountStockView(container, navigate) {
         if (newInput) { newInput.focus(); newInput.setSelectionRange(search.length, search.length); }
       });
     }
+
+    // v5.10.0: buscar un producto escaneando su código de barras
+    container.querySelector("#scan-stock-btn")?.addEventListener("click", () => {
+      openScanner({
+        title: "Buscar producto",
+        hint: "Apunta al código de barras del producto",
+        onCode: (code) => {
+          const p = findProductByCode(products, code);
+          if (!p) return { ok: false, message: `El código ${code} no está asignado a ningún producto` };
+          search = p.sku || p.name || code;
+          render();
+          return { ok: true, message: p.name };
+        },
+      });
+    });
 
     const catFilter = container.querySelector("#cat-filter");
     if (catFilter) catFilter.addEventListener("change", (e) => { filterCategory = e.target.value; render(); });

@@ -2,17 +2,38 @@
 // MANNOL POS — Service Worker
 // Cache-first for static assets, network-first for navigation.
 // Bump CACHE_VERSION on every release to force clients to refresh.
+//
+// v5.13.0 — La app ABRE y FUNCIONA SIN CONEXIÓN:
+//  · La librería de Supabase ahora es local (js/supabase-js.min.js) y se
+//    guarda aquí junto con js/supabase-config.js → sin internet ya no cae
+//    en "modo demo" con almacenes y productos de prueba.
+//  · Lecturas de Supabase (almacenes, productos, stock, ventas, gestores…):
+//    red primero; si no hay red (o no responde en 6 s) se usa la última
+//    respuesta guardada. Esta caché de datos NO se borra al actualizar.
+//  · Escrituras (ventas, RPC) nunca se guardan aquí: van a la red, y si no
+//    hay conexión la app las deja en su cola y las sube después.
+//  · Páginas: cada una se guarda con su propia clave (antes todas iban a
+//    "./" y, sin conexión, index.html podía abrir el panel admin), y si la
+//    red no responde en 4 s se abre la copia guardada.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v26";
+const CACHE_VERSION = "mannol-pos-supabase-v33";
+const DATA_CACHE = "mannol-pos-data-v1"; // respuestas de Supabase (se conserva entre versiones)
+const NAV_TIMEOUT_MS = 4000;
+const API_TIMEOUT_MS = 6000;
+const DATA_CACHE_MAX = 300;
+
 const STATIC_ASSETS = [
   "./",
   "./index.html",
   "./admin.html",
   "./css/styles.css",
+  "./css/mobile-ux.css",
   "./js/app.js",
   "./js/admin-app.js",
   "./js/supabase.js",
+  "./js/supabase-js.min.js",   // v5.13.0: librería local (abre sin conexión)
+  "./js/supabase-config.js",   // v5.13.0: la config real (404 tolerado si no existe)
   "./js/supabase-config.example.js",
   "./js/store.js",
   "./js/auth.js",
@@ -23,6 +44,7 @@ const STATIC_ASSETS = [
   "./js/types.js",
   "./js/demo-data.js",
   "./js/offline-sync.js",
+  "./js/offline-queue.js",     // v5.13.0: cola de ventas sin conexión
   "./js/image-upload.js",
   "./js/github-storage.js",
   "./js/github-config.example.js",
@@ -32,6 +54,11 @@ const STATIC_ASSETS = [
   "./js/global-search.js",
   "./js/update-banner.js",
   "./js/pin-rate-limit.js",
+  "./js/barcode-scanner.js", // v5.10.0 (js/zxing.min.js se guarda al usarse por primera vez)
+  "./js/sales-stats.js",     // v5.10.0: faltaban (cierre, más vendidos, PIN sin conexión)
+  "./js/pin-utils.js",
+  "./js/viscosity.js",
+  "./js/catalog-facets.js", // v5.12.0: tipos y marcas del catálogo
   "./js/components/sync-banner.js",
   "./js/views/home.js",
   "./js/views/pin-login.js",
@@ -72,58 +99,189 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(
-        keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k))
+        // La caché de DATOS se conserva: así, tras actualizar la app, sigue
+        // abriendo sin conexión con los últimos datos reales.
+        keys.filter((k) => k !== CACHE_VERSION && k !== DATA_CACHE).map((k) => caches.delete(k))
       )
     )
   );
   self.clients.claim();
 });
 
+// ===== Helpers =====
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("timeout")), ms);
+    promise.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); }
+    );
+  });
+}
+
+const swOffline = () => self.navigator && self.navigator.onLine === false;
+
+// Lectura de la API REST de Supabase (otro origen)
+function isSupabaseRead(request, url) {
+  if (!url.pathname.includes("/rest/v1/")) return false;
+  if (url.pathname.includes("/rest/v1/rpc/")) return false; // RPC: siempre red
+  return request.headers.has("apikey") || url.hostname.endsWith(".supabase.co");
+}
+
+// Consultas que SIEMPRE deben ser frescas (nunca desde la caché):
+// la comprobación "¿ya se subió esta venta?" (client_ref) de la cola.
+function mustBeFresh(url) {
+  return url.search.includes("client_ref=");
+}
+
+// Quién pregunta (rol + usuario del token): la copia del panel admin no se
+// mezcla con la de una sesión PIN en el mismo equipo. Estable aunque el
+// token se renueve cada hora.
+function authScope(request) {
+  const token = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  const parts = token.split(".");
+  if (parts.length !== 3) return "none";
+  try {
+    const json = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return `${json.role || "?"}:${json.sub || ""}`;
+  } catch {
+    return "none";
+  }
+}
+
+// Clave de caché: la URL + quién pregunta (+ tipo de respuesta si se pidió un solo objeto)
+function dataKey(request) {
+  const u = new URL(request.url);
+  const accept = request.headers.get("accept") || "";
+  if (accept.includes("vnd.pgrst.object")) u.searchParams.set("__mannol_accept", "object");
+  u.searchParams.set("__mannol_scope", authScope(request));
+  return u.toString();
+}
+
+let _trimTimer = null;
+function trimDataCacheSoon() {
+  if (_trimTimer) return;
+  _trimTimer = setTimeout(async () => {
+    _trimTimer = null;
+    try {
+      const cache = await caches.open(DATA_CACHE);
+      const keys = await cache.keys();
+      const extra = keys.length - DATA_CACHE_MAX;
+      for (let i = 0; i < extra; i++) await cache.delete(keys[i]);
+    } catch {}
+  }, 4000);
+}
+
+async function apiNetworkFirst(request) {
+  const cache = await caches.open(DATA_CACHE);
+  const key = dataKey(request);
+  const network = fetch(request).then((res) => {
+    if (res && res.status === 200) {
+      cache.put(key, res.clone()).then(trimDataCacheSoon).catch(() => {});
+    }
+    return res;
+  });
+
+  // Sin red declarada: la copia guardada al instante
+  if (swOffline()) {
+    const cached = await cache.match(key);
+    if (cached) {
+      network.catch(() => {});
+      return cached;
+    }
+    return network; // fallará y la app mostrará su estado sin datos
+  }
+
+  try {
+    const res = await withTimeout(network, API_TIMEOUT_MS);
+    if (res.status >= 500) {
+      const cached = await cache.match(key);
+      return cached || res;
+    }
+    return res; // 2xx / 4xx: respuesta real del servidor
+  } catch {
+    // Sin red o sin respuesta a tiempo → última copia guardada
+    const cached = await cache.match(key);
+    if (cached) {
+      network.catch(() => {});
+      return cached;
+    }
+    return network; // sin copia: esperar a la red (o fallar)
+  }
+}
+
+// Clave de página: la ruta sin parámetros (index.html, admin.html, "./"…)
+function pageKey(url) {
+  return url.origin + url.pathname;
+}
+
+async function navigationHandler(request) {
+  const url = new URL(request.url);
+  const cache = await caches.open(CACHE_VERSION);
+  const key = pageKey(url);
+  const network = fetch(request).then((res) => {
+    if (res && res.ok && res.type === "basic" && !res.redirected) {
+      cache.put(key, res.clone()).catch(() => {});
+    }
+    return res;
+  });
+  try {
+    return await withTimeout(network, swOffline() ? 1 : NAV_TIMEOUT_MS);
+  } catch {
+    let cached = await cache.match(key);
+    if (!cached && url.pathname.endsWith("/")) {
+      cached = (await cache.match("./index.html")) || (await cache.match("./"));
+    }
+    if (!cached && /\/index\.html$/.test(url.pathname)) {
+      cached = await cache.match("./");
+    }
+    if (cached) {
+      network.catch(() => {});
+      return cached;
+    }
+    try {
+      return await network;
+    } catch {
+      return (await cache.match("./offline.html")) || Response.error();
+    }
+  }
+}
+
 // ===== Fetch handler =====
 self.addEventListener("fetch", (event) => {
   const { request } = event;
+  if (request.method !== "GET") return; // escrituras: siempre a la red
   const url = new URL(request.url);
 
-  // Skip cross-origin
-  if (url.origin !== self.location.origin) return;
+  // Otro origen: solo las lecturas de Supabase (con copia para sin conexión)
+  if (url.origin !== self.location.origin) {
+    if (isSupabaseRead(request, url) && !mustBeFresh(url)) {
+      event.respondWith(apiNetworkFirst(request));
+    }
+    return;
+  }
 
-  // Navigation: network-first, fallback to cache
+  // Navigation: network-first (con tiempo límite), fallback to cache
   if (request.mode === "navigate") {
-    event.respondWith(
-      (async () => {
-        try {
-          const fresh = await fetch(request);
-          const cache = await caches.open(CACHE_VERSION);
-          cache.put("./", fresh.clone());
-          return fresh;
-        } catch {
-          const cache = await caches.open(CACHE_VERSION);
-          const cached = await cache.match("./");
-          return cached || (await cache.match("./offline.html"));
-        }
-      })()
-    );
+    event.respondWith(navigationHandler(request));
     return;
   }
 
   // Static assets: cache-first
-  if (request.method === "GET") {
-    event.respondWith(
-      (async () => {
-        const cache = await caches.open(CACHE_VERSION);
-        const cached = await cache.match(request);
-        if (cached) return cached;
-        try {
-          const fresh = await fetch(request);
-          cache.put(request, fresh.clone());
-          return fresh;
-        } catch {
-          return new Response("", { status: 504 });
-        }
-      })()
-    );
-    return;
-  }
+  event.respondWith(
+    (async () => {
+      const cache = await caches.open(CACHE_VERSION);
+      const cached = await cache.match(request);
+      if (cached) return cached;
+      try {
+        const fresh = await fetch(request);
+        if (fresh && fresh.ok) cache.put(request, fresh.clone());
+        return fresh;
+      } catch {
+        return new Response("", { status: 504 });
+      }
+    })()
+  );
 });
 
 // ===== Background sync =====

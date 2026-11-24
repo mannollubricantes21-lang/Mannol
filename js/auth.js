@@ -5,8 +5,17 @@
 // (user-login.js, dashboard.js) don't change.
 // =====================================================
 
-import { getSupabase } from "./supabase.js";
+import { getSupabase, hasPersistedSupabaseSession } from "./supabase.js";
 import { getStore } from "./store.js";
+
+// v5.13.0: sin conexión el token vencido no se puede renovar y getSession()
+// devuelve null aunque el usuario NO cerró sesión. Mientras la sesión siga
+// guardada en el equipo no se avisa "sin usuario": la app conserva el perfil
+// guardado y el vendedor puede seguir trabajando sin internet.
+const isOnline = () => typeof navigator === "undefined" || navigator.onLine !== false;
+function keepLocalUser() {
+  return hasPersistedSupabaseSession() && !!getStore().getState().currentUser;
+}
 
 async function sb() {
   return await getSupabase();
@@ -94,37 +103,45 @@ export function subscribeAuth(cb) {
       const { getUserByEmail } = await import("./db.js");
       // Supabase: onAuthStateChange fires on init + changes
       const { data } = s.auth.onAuthStateChange(async (_event, session) => {
+        if (_event === "SIGNED_OUT") { cb(null); return; }
         if (!session?.user) {
           // Check if there's a persisted session we should restore
-          const { data: restored } = await s.auth.getSession();
+          let restored = null;
+          try { ({ data: restored } = await s.auth.getSession()); } catch {}
           if (!restored?.session) {
+            if (keepLocalUser()) return; // sin red: token sin renovar, sesión intacta
             cb(null);
             return;
           }
         }
         try {
           const email = session?.user?.email;
-          if (!email) { cb(null); return; }
+          if (!email) { if (!keepLocalUser()) cb(null); return; }
           const profile = await getUserByEmail(email);
+          if (!profile && !isOnline()) return; // sin red: perfil no disponible, se conserva el local // perfil no disponible sin red
           cb(profile);
         } catch (err) {
           console.error("Profile load failed:", err);
+          if (!isOnline() || keepLocalUser()) return;
           cb(null);
         }
       });
       unsub = () => { try { data.subscription.unsubscribe(); } catch {} };
 
       // Also trigger initial check
-      const { data: session } = await s.auth.getSession();
+      let session = null;
+      try { ({ data: session } = await s.auth.getSession()); } catch {}
       if (session?.session?.user?.email) {
         try {
           const profile = await getUserByEmail(session.session.user.email);
+          if (!profile && !isOnline()) return; // sin red: perfil no disponible, se conserva el local
           cb(profile);
         } catch (err) {
           console.error("Initial profile load failed:", err);
+          if (!isOnline() || keepLocalUser()) return;
           cb(null);
         }
-      } else {
+      } else if (!keepLocalUser()) {
         cb(null);
       }
     } catch (err) {

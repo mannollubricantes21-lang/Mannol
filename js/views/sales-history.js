@@ -4,7 +4,7 @@
 
 import { getStore } from "../store.js";
 import { subscribeSales, updateSaleStatus } from "../db.js";
-import { formatMoney, formatDate, formatDateShort, CURRENCY_LABELS, STATUS_LABELS, skeletonStatCard, skeletonRow } from "../currency.js";
+import { formatMoney, formatDate, formatDateShort, formatWhen, CURRENCY_LABELS, STATUS_LABELS, skeletonStatCard, skeletonRow } from "../currency.js";
 import { toast, icon, showModal, closeModal, esc } from "../ui.js";
 import { exportToCSV } from "../csv-export.js";
 import { notifySaleCompleted } from "../push-notify.js";
@@ -85,7 +85,7 @@ export function mountSalesHistoryView(container, navigate) {
             <p class="text-sm text-muted">${warehouse ? `Almacén: ${esc(warehouse.name)}` : 'Todos los almacenes'} · ${filtered.length} ventas${filtered.length > PAGE_SIZE ? ` (página ${currentPage} de ${totalPages})` : ''}</p>
           </div>
 
-        <div class="grid md:grid-cols-3 gap-3">
+        <div class="grid md:grid-cols-3 gap-3 stat-trio">
           <div class="stat-card">
             <div class="stat-label" style="color:var(--accent)">${icon("check", 14)} Completadas</div>
             <div class="stat-value text-accent">${formatMoney(totalCompleted, "USD")}</div>
@@ -105,7 +105,7 @@ export function mountSalesHistoryView(container, navigate) {
 
         <div class="card">
           <div class="card-header">
-            <div class="flex gap-2 flex-wrap" style="gap:0.5rem">
+            <div class="flex gap-2 flex-wrap hist-filters" style="gap:0.5rem">
               <div style="position:relative;flex:1;min-width:12rem">
                 <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)" aria-hidden="true">${icon("search", 16)}</span>
                 <input class="input" placeholder="Buscar por código, vendedor, gestor, cliente, nota o producto..." id="search-input" value="${search}" style="padding-left:2.25rem" aria-label="Buscar ventas" />
@@ -122,29 +122,43 @@ export function mountSalesHistoryView(container, navigate) {
             </div>
           </div>
           <div class="overflow-x-auto">
-            <table class="table">
+            <table class="table table-list">
               <thead><tr><th>Código</th><th>Fecha</th><th>Vendedor</th><th>Gestor</th><th class="text-center">Items</th><th class="text-center">Pago</th><th class="text-right">Total</th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
               <tbody>
                 ${pagedSales.length === 0 ? `<tr><td colspan="9"><div class="empty-state"><div class="empty-state-icon">${icon("receipt", 24)}</div><p class="empty-state-title">Sin ventas</p><p class="empty-state-desc">No hay ventas que coincidan con los filtros seleccionados.</p></div></td></tr>` :
                   pagedSales.map((s) => `
                     <tr>
-                      <td class="text-xs font-mono">${esc(s.code)}${s.saleType === "WHOLESALE" ? ` <span class="badge badge-accent" style="font-size:0.5625rem">MAY</span>` : ''}</td>
-                      <td class="text-xs">${formatDate(s.createdAt)}</td>
-                      <td class="text-sm">${esc(s.userName || 'Empleado PIN')}</td>
-                      <td class="text-sm">${esc(s.managerName || '—')}</td>
-                      <td class="text-center">${s.items.length}</td>
-                      <td class="text-center"><span class="badge badge-outline">${s.paymentMode === 'MULTI' ? 'Multi' : esc(s.currency || '—')}</span></td>
-                      <td class="text-right font-bold">${formatMoney(s.totalAmount, "USD")}</td>
-                      <td class="text-center">
+                      <td class="text-xs font-mono tl-hide">${esc(s.code)}${s.saleType === "WHOLESALE" ? ` <span class="badge badge-accent" style="font-size:0.5625rem">MAY</span>` : ''}${s.pendingSync ? ` <span class="badge badge-warning badge-pending-sync" style="font-size:0.5625rem" title="Guardada en este equipo · se sube sola">Por subir</span>` : ''}</td>
+                      <td class="text-xs tl-hide">${formatDate(s.createdAt)}</td>
+                      <td class="text-sm tl-hide">${esc(s.userName || 'Empleado PIN')}</td>
+                      <td class="text-sm tl-hide">${esc(s.managerName || '—')}</td>
+                      <td class="text-center tl-hide">${s.items.length}</td>
+                      <td class="text-center tl-hide"><span class="badge badge-outline">${s.paymentMode === 'MULTI' ? 'Multi' : esc(s.currency || '—')}</span></td>
+                      <td class="text-right font-bold tl-hide">${formatMoney(s.totalAmount, "USD")}</td>
+                      <td class="text-center tl-hide">
                         <span class="badge ${s.status === 'COMPLETADA' ? 'badge-accent' : s.status === 'CANCELADA' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.5625rem">
                           ${STATUS_LABELS[s.status] || esc(s.status)}
                         </span>
                       </td>
-                      <td class="text-right">
+                      <td class="tl-only">
+                        <button type="button" class="tl-tile tl-${s.status === 'COMPLETADA' ? 'ok' : s.status === 'CANCELADA' ? 'bad' : 'warn'}" data-view-sale="${esc(s.id)}" title="Ver detalle">
+                          <span class="tl-top">
+                            <span class="tl-code">${esc(s.code)}</span>
+                            ${s.saleType === "WHOLESALE" ? `<span class="badge badge-accent tl-mini">MAY</span>` : ''}
+                            ${s.pendingSync ? `<span class="badge badge-warning tl-mini badge-pending-sync" title="Guardada en este equipo · se sube sola">Por subir</span>` : ''}
+                            <span class="badge badge-outline tl-mini">${s.paymentMode === 'MULTI' ? 'Multi' : s.currency === 'TRANSFERENCIA' ? 'Transf.' : esc(s.currency || '—')}</span>
+                            <span class="badge ${s.status === 'COMPLETADA' ? 'badge-accent' : s.status === 'CANCELADA' ? 'badge-danger' : 'badge-warning'} tl-mini">${STATUS_LABELS[s.status] || esc(s.status)}</span>
+                            <span class="tl-amount">${formatMoney(s.totalAmount, "USD")}</span>
+                          </span>
+                          <span class="tl-meta">${formatWhen(s.createdAt)} · ${s.items.length} ${s.items.length === 1 ? 'ítem' : 'ítems'}${s.managerName ? ` · ${esc(s.managerName)}` : ''} · ${esc(s.userName || 'Empleado PIN')}</span>
+                          <span class="tl-chevron" aria-hidden="true">${icon("chevronRight", 16)}</span>
+                        </button>
+                      </td>
+                      <td class="text-right tl-hide">
                         <button class="btn btn-ghost btn-icon btn-sm" data-view-sale="${esc(s.id)}" title="Ver detalle">${icon("eye", 14)}</button>
-                        ${s.status === 'PENDIENTE' ? `<button class="btn btn-ghost btn-icon btn-sm text-accent" data-complete="${esc(s.id)}" title="Completar">${icon("check", 14)}</button>` : ''}
-                        ${s.status === 'COMPLETADA' ? `<button class="btn btn-ghost btn-icon btn-sm text-danger" data-cancel="${esc(s.id)}" title="Cancelar">${icon("ban", 14)}</button>` : ''}
-                        ${s.status === 'CANCELADA' ? `<button class="btn btn-ghost btn-icon btn-sm text-warning" data-reopen="${esc(s.id)}" title="Reabrir">${icon("refresh", 14)}</button>` : ''}
+                        ${!s.pendingSync && s.status === 'PENDIENTE' ? `<button class="btn btn-ghost btn-icon btn-sm text-accent" data-complete="${esc(s.id)}" title="Completar">${icon("check", 14)}</button>` : ''}
+                        ${!s.pendingSync && s.status === 'COMPLETADA' ? `<button class="btn btn-ghost btn-icon btn-sm text-danger" data-cancel="${esc(s.id)}" title="Cancelar">${icon("ban", 14)}</button>` : ''}
+                        ${!s.pendingSync && s.status === 'CANCELADA' ? `<button class="btn btn-ghost btn-icon btn-sm text-warning" data-reopen="${esc(s.id)}" title="Reabrir">${icon("refresh", 14)}</button>` : ''}
                       </td>
                     </tr>
                   `).join('')
@@ -266,6 +280,7 @@ export function mountSalesHistoryView(container, navigate) {
             <div><div class="label label-xs">Estado</div><span class="badge ${sale.status === 'COMPLETADA' ? 'badge-accent' : sale.status === 'CANCELADA' ? 'badge-danger' : 'badge-warning'}">${STATUS_LABELS[sale.status] || esc(sale.status)}</span></div>
             <div><div class="label label-xs">Modo de pago</div><div>${esc(sale.paymentMode || '')} · ${esc(sale.currency || '')}</div></div>
           </div>
+          ${sale.pendingSync ? `<div class="pending-sync-note">${icon("clock", 14)} <span><strong>Por subir:</strong> guardada en este equipo. Se sube sola a <strong>${esc(sale.warehouseName || sale.warehouseCode || "su almacén")}</strong> al haber conexión. Cuando suba podrás cancelarla o editarla.</span></div>` : ''}
           ${sale.note ? `<div class="text-xs" style="background: var(--bg-soft); padding: 0.5rem; border-radius: var(--radius); border: 1px solid var(--border)"><strong>Nota:</strong> ${esc(sale.note)}</div>` : ''}
           ${sale.cancelReason ? `<div class="text-xs text-danger" style="background: color-mix(in oklab, var(--danger) 10%, transparent); padding: 0.5rem; border-radius: var(--radius); border: 1px solid color-mix(in oklab, var(--danger) 30%, transparent)"><strong>Motivo de cancelación:</strong> ${esc(sale.cancelReason)}</div>` : ''}
           <hr class="separator" />
@@ -305,13 +320,38 @@ export function mountSalesHistoryView(container, navigate) {
           </div>
         </div>
       `,
-      footer: `<button class="btn btn-outline" id="close-detail">Cerrar</button>`,
+      footer: `
+        ${!sale.pendingSync && sale.status === 'PENDIENTE' ? `<button class="btn btn-primary" type="button" data-detail-action="complete">${icon("check", 14)} Completar</button>` : ''}
+        ${!sale.pendingSync && sale.status === 'COMPLETADA' ? `<button class="btn btn-outline text-danger" type="button" data-detail-action="cancel">${icon("ban", 14)} Cancelar venta</button>` : ''}
+        ${!sale.pendingSync && sale.status === 'CANCELADA' ? `<button class="btn btn-outline text-warning" type="button" data-detail-action="reopen">${icon("refresh", 14)} Reabrir</button>` : ''}
+        <button class="btn btn-outline" id="close-detail">Cerrar</button>`,
     });
     document.querySelector("#close-detail").addEventListener("click", closeModal);
+    // v5.11.0: acciones también desde el detalle (en el móvil la lista no muestra botones)
+    document.querySelectorAll("[data-detail-action]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const action = btn.dataset.detailAction;
+        closeModal();
+        if (action === "complete") showStatusDialog(sale, "COMPLETADA");
+        else if (action === "cancel") showStatusDialog(sale, "CANCELADA");
+        else if (action === "reopen") {
+          try {
+            await updateSaleStatus(sale.id, "PENDIENTE", null, user?.id, user?.displayName);
+            toast("Venta reabierta", "success");
+          } catch (err) {
+            toast("Error al reabrir venta", "error");
+          }
+        }
+      });
+    });
   }
 
   // ===== Paginación =====
   function renderPagination(total, totalPages) {
+    // v5.13.0: antes usaba pageStart/pageEnd de render() (fuera de alcance) →
+    // ReferenceError y el historial no abría con más de 50 ventas.
+    const pageStart = (currentPage - 1) * PAGE_SIZE;
+    const pageEnd = pageStart + PAGE_SIZE;
     const pages = [];
     // Mostrar máx 5 botones de página alrededor de la actual
     const windowSize = 5;

@@ -71,15 +71,25 @@ export const DEMO_CARDS = [
   { id: "card-004", name: "BPA Secundaria", number: "9225-7777-8888-9999", bank: "BPA", active: true, createdAt: Date.now() - 86400000 * 35 },
 ];
 
+// v5.12.0: tipos de producto para filtrar el catálogo de venta
+// (Refrigerante, Líquido de freno, Filtros, Lubricantes, Aditivos + uno propio)
 export const DEMO_CATEGORIES = [
-  { id: "cat-1", name: "Aceites de Motor", slug: "aceites-motor", color: "emerald", icon: "🛢️", parentId: null, sortOrder: 1, active: true },
-  { id: "cat-1-1", name: "Sintéticos", slug: "sinteticos", color: "emerald", parentId: "cat-1", sortOrder: 1, active: true },
-  { id: "cat-1-2", name: "Minerales", slug: "minerales", color: "emerald", parentId: "cat-1", sortOrder: 2, active: true },
-  { id: "cat-2", name: "Filtros", slug: "filtros", color: "blue", icon: "🔧", parentId: null, sortOrder: 2, active: true },
+  { id: "cat-ref", name: "Refrigerante", slug: "refrigerante", color: "cyan", icon: "❄️", parentId: null, sortOrder: 1, active: true },
+  { id: "cat-fre", name: "Líquido de freno", slug: "liquido-de-freno", color: "rose", icon: "🛑", parentId: null, sortOrder: 2, active: true },
+  { id: "cat-2", name: "Filtros", slug: "filtros", color: "blue", icon: "🔧", parentId: null, sortOrder: 3, active: true },
   { id: "cat-2-1", name: "Aceite", slug: "aceite", color: "blue", parentId: "cat-2", sortOrder: 1, active: true },
   { id: "cat-2-2", name: "Aire", slug: "aire", color: "blue", parentId: "cat-2", sortOrder: 2, active: true },
-  { id: "cat-3", name: "Líquidos", slug: "liquidos", color: "cyan", icon: "💧", parentId: null, sortOrder: 3, active: true },
-  { id: "cat-4", name: "Accesorios", slug: "accesorios", color: "amber", icon: "⚙️", parentId: null, sortOrder: 4, active: true },
+  { id: "cat-1", name: "Lubricantes", slug: "lubricantes", color: "emerald", icon: "🛢️", parentId: null, sortOrder: 4, active: true },
+  { id: "cat-1-1", name: "Sintéticos", slug: "sinteticos", color: "emerald", parentId: "cat-1", sortOrder: 1, active: true },
+  { id: "cat-1-2", name: "Minerales", slug: "minerales", color: "emerald", parentId: "cat-1", sortOrder: 2, active: true },
+  { id: "cat-adi", name: "Aditivos", slug: "aditivos", color: "violet", icon: "🧪", parentId: null, sortOrder: 5, active: true },
+  { id: "cat-4", name: "Limpieza y cuidado", slug: "limpieza-y-cuidado", color: "teal", icon: "🧽", parentId: null, sortOrder: 6, active: true },
+];
+
+// v5.12.0: marcas (Admin → Marcas)
+export const DEMO_BRANDS = [
+  { id: "br-mannol", name: "MANNOL", slug: "mannol", color: "amber", sortOrder: 1, active: true },
+  { id: "br-royal", name: "Royal", slug: "royal", color: "indigo", sortOrder: 2, active: true },
 ];
 
 export const DEMO_PRODUCTS = [
@@ -144,16 +154,29 @@ export const DEMO_PRODUCTS = [
     categoryId: "cat-2-2", categoryName: "Aire", active: true, createdAt: Date.now() - 86400000 * 35 },
   { id: "pr-009", name: "Líquido Frenos Mannol DOT 4", brand: "MANNOL", sku: "MN-9890", volumeLiters: 1, costPrice: 3, salePrice: 5, minStock: 10,
     gestorCommission: 0.5, gestorCommissionCurrency: "USD", vendorCommission: 20, vendorCommissionCurrency: "MN",
-    categoryId: "cat-3", categoryName: "Líquidos", active: true, createdAt: Date.now() - 86400000 * 30 },
+    categoryId: "cat-fre", categoryName: "Líquido de freno", active: true, createdAt: Date.now() - 86400000 * 30 },
   { id: "pr-010", name: "Refrigerante Mannol G12+", brand: "MANNOL", sku: "MN-4012", volumeLiters: 1, costPrice: 4, salePrice: 7, minStock: 10,
     gestorCommission: 0.7, gestorCommissionCurrency: "USD", vendorCommission: 25, vendorCommissionCurrency: "MN",
-    categoryId: "cat-3", categoryName: "Líquidos", active: true, createdAt: Date.now() - 86400000 * 28 },
+    categoryId: "cat-ref", categoryName: "Refrigerante", active: true, createdAt: Date.now() - 86400000 * 28 },
   { id: "pr-011", name: "Líquido Limpiaparabrisas -10°C", brand: "MANNOL", sku: "MN-9930", volumeLiters: 4, costPrice: 4, salePrice: 7, minStock: 8,
     gestorCommission: 0.7, gestorCommissionCurrency: "USD", vendorCommission: 25, vendorCommissionCurrency: "MN",
-    categoryId: "cat-3", categoryName: "Líquidos", active: true, createdAt: Date.now() - 86400000 * 25 },
+    categoryId: "cat-4", categoryName: "Limpieza y cuidado", active: true, createdAt: Date.now() - 86400000 * 25 },
   { id: "pr-012", name: "Grasa Multiuso Mannol 400g", brand: "MANNOL", sku: "MN-8020", costPrice: 4, salePrice: 7, minStock: 8,
     gestorCommission: 0.7, gestorCommissionCurrency: "USD", vendorCommission: 25, vendorCommissionCurrency: "MN",
-    categoryId: "cat-4", categoryName: "Accesorios", active: true, createdAt: Date.now() - 86400000 * 20 },
+    categoryId: "cat-1", categoryName: "Lubricantes", active: true, createdAt: Date.now() - 86400000 * 20 },
+  // v5.12.0: productos de otra marca y aditivos (para ver los filtros por tipo y marca)
+  { id: "pr-013", name: "Royal Refrigerante Verde 50/50 1L", brand: "Royal", sku: "RY-2010", volumeLiters: 1, costPrice: 3.5, salePrice: 6, minStock: 8,
+    gestorCommission: 0.5, gestorCommissionCurrency: "USD", vendorCommission: 20, vendorCommissionCurrency: "MN",
+    categoryId: "cat-ref", categoryName: "Refrigerante", active: true, createdAt: Date.now() - 86400000 * 18 },
+  { id: "pr-014", name: "Royal Líquido de Frenos DOT 3 500ml", brand: "Royal", sku: "RY-3050", volumeLiters: 0.5, costPrice: 2.5, salePrice: 4.5, minStock: 8,
+    gestorCommission: 0.4, gestorCommissionCurrency: "USD", vendorCommission: 15, vendorCommissionCurrency: "MN",
+    categoryId: "cat-fre", categoryName: "Líquido de freno", active: true, createdAt: Date.now() - 86400000 * 16 },
+  { id: "pr-015", name: "Royal Aditivo Limpia Inyectores 300ml", brand: "Royal", sku: "RY-4030", costPrice: 3.5, salePrice: 6.5, minStock: 6,
+    gestorCommission: 0.5, gestorCommissionCurrency: "USD", vendorCommission: 20, vendorCommissionCurrency: "MN",
+    categoryId: "cat-adi", categoryName: "Aditivos", active: true, createdAt: Date.now() - 86400000 * 14 },
+  { id: "pr-016", name: "MANNOL Aditivo Stop Fugas de Aceite 300ml", brand: "MANNOL", sku: "MN-9910", costPrice: 4, salePrice: 7.5, minStock: 6,
+    gestorCommission: 0.6, gestorCommissionCurrency: "USD", vendorCommission: 25, vendorCommissionCurrency: "MN",
+    categoryId: "cat-adi", categoryName: "Aditivos", active: true, createdAt: Date.now() - 86400000 * 12 },
 ];
 
 // Generar stock para cada producto en cada almacén

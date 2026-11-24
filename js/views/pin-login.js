@@ -7,7 +7,19 @@ import { getSettings, listWarehouses } from "../db.js";
 import { isSupabaseConfigured } from "../supabase.js";
 import { toast, icon } from "../ui.js";
 import { canAttemptPin, recordPinAttempt, clearPinAttempts, getPinBlockRemainingSec } from "../pin-rate-limit.js";
-import { resolveExpectedPin, pinMatches } from "../pin-utils.js";
+import { resolveExpectedPin, pinMatches, normalizePin } from "../pin-utils.js";
+
+// v5.8 (móvil): puntos del PIN (mínimo 4, crecen hasta 8 si el PIN es más largo)
+function renderPinDots(filled) {
+  const total = Math.min(8, Math.max(4, filled));
+  let html = "";
+  for (let i = 0; i < total; i++) html += `<span class="pin-dot ${i < filled ? "filled" : ""}"></span>`;
+  return html;
+}
+
+const isTouchDevice = () => {
+  try { return window.matchMedia("(pointer: coarse)").matches; } catch { return false; }
+};
 
 export function renderPinLoginView() {
   const store = getStore();
@@ -33,11 +45,11 @@ export function renderPinLoginView() {
     <div class="mobile-shell">
       <div class="bg-diagonal"></div>
       <main class="mobile-main" style="display:flex;flex-direction:column;gap:1rem">
-        <button class="flex items-center gap-1.5 text-sm text-muted" style="background:transparent;border:none;cursor:pointer;width:fit-content" data-nav="home">
-          ${icon("arrowLeft", 14)} Volver
+        <button class="flex items-center gap-1.5 text-sm text-muted pin-back" style="background:transparent;border:none;cursor:pointer;width:fit-content" data-nav="home">
+          ${icon("arrowLeft", 16)} Volver
         </button>
 
-        <form id="pin-form" class="card" style="padding:1.5rem;display:flex;flex-direction:column;gap:1rem">
+        <form id="pin-form" class="card pin-card" style="padding:1.5rem;display:flex;flex-direction:column;gap:1rem" novalidate>
           <div class="text-center">
             <div class="brand-logo brand-logo-lg mx-auto mb-3" style="background: var(--primary-tint); color: var(--primary)">
               ${icon("lock", 28)}
@@ -56,9 +68,13 @@ export function renderPinLoginView() {
             </div>
           ` : ''}
 
-          <div id="pin-error" class="hidden" style="background: color-mix(in oklab, var(--danger) 10%, transparent); border: 1px solid color-mix(in oklab, var(--danger) 30%, transparent); color: var(--danger); padding: 0.5rem 0.75rem; border-radius: var(--radius); font-size: 0.875rem;"></div>
+          <div id="pin-error" class="hidden" role="alert" style="background: color-mix(in oklab, var(--danger) 10%, transparent); border: 1px solid color-mix(in oklab, var(--danger) 30%, transparent); color: var(--danger); padding: 0.5rem 0.75rem; border-radius: var(--radius); font-size: 0.875rem;"></div>
 
-          <div style="max-width: 18rem; margin: 0 auto; width: 100%;">
+          <!-- v5.8 (móvil): indicador de dígitos + teclado numérico grande (estilo cajero) -->
+          <div class="pin-dots" id="pin-dots" aria-hidden="true">${renderPinDots(0)}</div>
+
+          <div class="pin-input-wrap" style="max-width: 18rem; margin: 0 auto; width: 100%;">
+            <label for="pin-input" class="sr-only">PIN del almacén</label>
             <input
               type="password"
               inputMode="numeric"
@@ -66,11 +82,18 @@ export function renderPinLoginView() {
               class="pin-input-large"
               id="pin-input"
               placeholder="••••"
-              autoFocus
+              maxlength="8"
             />
           </div>
 
-          <div class="flex justify-center gap-2">
+          <div class="pin-pad" role="group" aria-label="Teclado numérico">
+            ${["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => `<button type="button" class="pin-key" data-key="${d}">${d}</button>`).join("")}
+            <button type="button" class="pin-key pin-key-ghost" data-key="del" aria-label="Borrar último dígito">${icon("arrowLeft", 22)}</button>
+            <button type="button" class="pin-key" data-key="0">0</button>
+            <button type="submit" class="pin-key pin-key-ok" id="pin-ok" aria-label="Entrar">${icon("check", 24)}</button>
+          </div>
+
+          <div class="flex justify-center gap-2 pin-classic-actions">
             <button type="button" class="btn btn-outline" data-nav="home">Cancelar</button>
             <button type="submit" class="btn btn-primary" id="pin-submit" style="min-width: 8rem">
               ${icon("lock", 14)} Entrar
@@ -90,7 +113,11 @@ export function mountPinLoginView(container, navigate) {
   const errorBox = container.querySelector("#pin-error");
   const submit = container.querySelector("#pin-submit");
 
-  if (input) input.focus();
+  const dotsEl = container.querySelector("#pin-dots");
+  const padKeys = container.querySelectorAll(".pin-pad .pin-key");
+
+  // En táctil NO se enfoca el input: el teclado del sistema tapaba media pantalla.
+  if (input && !isTouchDevice()) input.focus();
 
   // Handle nav
   container.querySelectorAll("[data-nav]").forEach((btn) => {
@@ -98,6 +125,57 @@ export function mountPinLoginView(container, navigate) {
   });
 
   if (!form) return () => {};
+
+  // ===== v5.8 (móvil): teclado numérico =====
+  const selectedWh = getStore().getState()._selectedWarehouse;
+  // Si el almacén tiene PIN propio, se envía solo al completar los dígitos
+  const autoLen = normalizePin(selectedWh?.pin).length || 0;
+
+  function updateDots() {
+    if (!dotsEl) return;
+    dotsEl.classList.remove("error");
+    dotsEl.innerHTML = renderPinDots(input.value.length);
+  }
+
+  function setPadDisabled(disabled) {
+    padKeys.forEach((k) => { k.disabled = disabled; });
+  }
+
+  function pinFeedbackError() {
+    if (!dotsEl) return;
+    dotsEl.classList.remove("shake");
+    void dotsEl.offsetWidth; // reinicia la animación
+    dotsEl.classList.add("shake", "error");
+    try { navigator.vibrate?.(140); } catch {}
+  }
+
+  function maybeAutoSubmit() {
+    if (autoLen > 0 && input.value.length === autoLen && !submit._submitting) {
+      if (form.requestSubmit) form.requestSubmit();
+      else form.dispatchEvent(new Event("submit", { cancelable: true }));
+    }
+  }
+
+  container.querySelectorAll(".pin-key[data-key]").forEach((key) => {
+    key.addEventListener("click", () => {
+      if (input.disabled || submit._submitting) return;
+      const k = key.dataset.key;
+      if (k === "del") {
+        input.value = input.value.slice(0, -1);
+      } else if (input.value.length < 8) {
+        input.value += k;
+      }
+      errorBox.classList.add("hidden");
+      updateDots();
+      maybeAutoSubmit();
+    });
+  });
+
+  input.addEventListener("input", () => {
+    input.value = input.value.replace(/\D/g, "").slice(0, 8);
+    updateDots();
+    maybeAutoSubmit();
+  });
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -108,6 +186,7 @@ export function mountPinLoginView(container, navigate) {
     if (!pin) {
       errorBox.textContent = "Ingresa el PIN del almacén";
       errorBox.classList.remove("hidden");
+      pinFeedbackError();
       return;
     }
 
@@ -119,6 +198,8 @@ export function mountPinLoginView(container, navigate) {
       errorBox.classList.remove("hidden");
       input.disabled = true;
       submit.disabled = true;
+      setPadDisabled(true);
+      pinFeedbackError();
       return;
     }
 
@@ -126,6 +207,7 @@ export function mountPinLoginView(container, navigate) {
     if (submit._submitting) return;
     submit._submitting = true;
     submit.disabled = true;
+    setPadDisabled(true);
     submit.innerHTML = `<div class="spinner spinner-sm"></div> Entrando...`;
     errorBox.classList.add("hidden");
 
@@ -142,6 +224,7 @@ export function mountPinLoginView(container, navigate) {
         errorBox.classList.remove("hidden");
         submit.disabled = false;
         submit._submitting = false;
+        setPadDisabled(false);
         submit.innerHTML = `${icon("lock", 14)} Entrar`;
         return;
       }
@@ -160,8 +243,16 @@ export function mountPinLoginView(container, navigate) {
         submit.disabled = false;
         submit._submitting = false;
         submit.innerHTML = `${icon("lock", 14)} Entrar`;
+        pinFeedbackError();
         input.value = "";
-        input.focus();
+        setTimeout(() => updateDots(), 450);
+        if (remaining > 0) {
+          input.disabled = true;
+          setPadDisabled(true);
+        } else {
+          setPadDisabled(false);
+          if (!isTouchDevice()) input.focus();
+        }
         return;
       }
       // PIN correcto: limpiar historial y crear sesión
@@ -187,6 +278,7 @@ export function mountPinLoginView(container, navigate) {
       errorBox.classList.remove("hidden");
       submit.disabled = false;
       submit._submitting = false;
+      setPadDisabled(false);
       submit.innerHTML = `${icon("lock", 14)} Entrar`;
     }
   });

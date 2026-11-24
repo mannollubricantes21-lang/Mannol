@@ -4,7 +4,7 @@
 
 import { getStore } from "../store.js";
 import { listTransfers, listCards } from "../db.js";
-import { formatMoney, formatDate, maskCard, CARD_BRANDS, skeletonStatCard, skeletonRow } from "../currency.js";
+import { formatMoney, formatDate, formatWhen, maskCard, CARD_BRANDS, skeletonStatCard, skeletonRow } from "../currency.js";
 import { icon, toast, esc } from "../ui.js";
 import { exportToCSV } from "../csv-export.js";
 
@@ -67,7 +67,7 @@ export function mountTransfersView(container, navigate) {
           <button class="btn btn-outline btn-sm" id="export-csv-btn" title="Exportar transferencias a CSV" aria-label="Exportar a CSV">${icon("download", 14)} CSV</button>
         </div>
 
-        <div class="grid md:grid-cols-2 gap-3">
+        <div class="grid md:grid-cols-2 gap-3 stat-duo">
           ${loading ? skeletonStatCard(2) : `
           <div class="stat-card">
             <div class="stat-label">${icon("creditCard", 14)} Total transferencias</div>
@@ -88,7 +88,7 @@ export function mountTransfersView(container, navigate) {
             <div class="card-content">
               <div class="grid grid-cols-2 gap-2">
                 ${Object.entries(byCard).map(([key, c]) => `
-                  <div class="border rounded p-2" style="border-color:var(--border)">
+                  <div class="border rounded p-2 tile" style="border-color:var(--border)">
                     <div class="text-xs text-muted">${esc(c.name)}</div>
                     <div class="text-xs font-mono">${maskCard(c.number)}</div>
                     <div class="flex justify-between mt-1">
@@ -107,22 +107,33 @@ export function mountTransfersView(container, navigate) {
           <div class="overflow-x-auto">
             ${loading ? `<table class="table"><thead><tr><th>Código</th><th>Fecha</th><th>Tarjeta</th><th class="text-right">Monto</th><th class="text-center">Estado</th></tr></thead><tbody>${skeletonRow(5, 5)}</tbody></table>` :
               filtered.length === 0 ? `<div class="empty-state"><div class="empty-state-icon">${icon("creditCard", 24)}</div><p class="empty-state-title">Sin transferencias</p><p class="empty-state-desc">No hay transferencias que mostrar.</p></div>` :
-              `<table class="table">
+              `<table class="table table-list">
                 <thead><tr><th>Código</th><th>Fecha</th><th>Tarjeta</th><th>Almacén</th><th>Gestor</th><th>Productos</th><th class="text-right">Monto</th><th class="text-center">Estado</th></tr></thead>
                 <tbody>
                   ${filtered.slice(0, 100).map((t) => `
                     <tr>
-                      <td class="text-xs font-mono">${esc(t.code)}</td>
-                      <td class="text-xs">${formatDate(t.createdAt)}</td>
-                      <td class="text-xs">
+                      <td class="text-xs font-mono tl-hide">${esc(t.code)}</td>
+                      <td class="text-xs tl-hide">${formatDate(t.createdAt)}</td>
+                      <td class="text-xs tl-hide">
                         <div>${esc(t.cardName || '—')}</div>
                         <div class="font-mono text-muted">${maskCard(t.cardNumber)}</div>
                       </td>
-                      <td class="text-xs">${esc(t.warehouseName || '—')}</td>
-                      <td class="text-xs">${esc(t.managerName || '—')}</td>
-                      <td class="text-xs text-muted truncate" style="max-width:200px">${esc(t.productsSummary || '')}</td>
-                      <td class="text-right font-bold">${formatMoney(t.transferAmount || t.totalAmount, "USD")}</td>
-                      <td class="text-center"><span class="badge ${t.status === 'COMPLETADA' ? 'badge-accent' : t.status === 'CANCELADA' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.5625rem">${esc(t.status)}</span></td>
+                      <td class="text-xs tl-hide">${esc(t.warehouseName || '—')}</td>
+                      <td class="text-xs tl-hide">${esc(t.managerName || '—')}</td>
+                      <td class="text-xs text-muted truncate tl-hide" style="max-width:200px">${esc(t.productsSummary || '')}</td>
+                      <td class="text-right font-bold tl-hide">${formatMoney(t.transferAmount || t.totalAmount, "USD")}</td>
+                      <td class="text-center tl-hide"><span class="badge ${t.status === 'COMPLETADA' ? 'badge-accent' : t.status === 'CANCELADA' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.5625rem">${esc(t.status)}</span></td>
+                      <td class="tl-only">
+                        <div class="tl-tile tl-${t.status === 'COMPLETADA' ? 'ok' : t.status === 'CANCELADA' ? 'bad' : 'warn'}">
+                          <span class="tl-top">
+                            <span class="tl-code">${esc(t.code)}</span>
+                            <span class="badge ${t.status === 'COMPLETADA' ? 'badge-accent' : t.status === 'CANCELADA' ? 'badge-danger' : 'badge-warning'} tl-mini">${esc(t.status)}</span>
+                            <span class="tl-amount">${formatMoney(t.transferAmount || t.totalAmount, "USD")}</span>
+                          </span>
+                          <span class="tl-meta"><strong>${esc(t.cardName || '—')}</strong> <span class="font-mono">${maskCard(t.cardNumber)}</span> · ${formatWhen(t.createdAt)} · ${esc(t.warehouseName || '—')}${t.managerName ? ` · ${esc(t.managerName)}` : ''}</span>
+                          ${t.productsSummary ? `<span class="tl-note">${esc(t.productsSummary)}</span>` : ''}
+                        </div>
+                      </td>
                     </tr>
                   `).join('')}
                 </tbody>

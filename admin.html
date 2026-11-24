@@ -237,6 +237,9 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
+  <!-- v5.9.0: mismo estilo que la app (tarjetas flotantes, líneas definidas, tablas legibles
+       en móvil). Va DESPUÉS del <style> de arriba para que sus reglas manden. -->
+  <link rel="stylesheet" href="./css/mobile-ux.css" />
 </head>
 <body>
   <div id="admin-app">

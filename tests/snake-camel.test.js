@@ -1,5 +1,5 @@
 // =====================================================
-// Tests: Store (enqueueOfflineSale cap, cart, payments)
+// Tests: Store (cola sin conexión, cart, payments)
 // =====================================================
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -13,13 +13,15 @@ const storage = {
 };
 global.localStorage = storage;
 
-describe("store.js — offline queue cap", () => {
+describe("store.js — cola de ventas sin conexión", () => {
   beforeEach(() => {
     storage.clear();
     vi.resetModules();
   });
 
-  it("cap de 500 ventas en la cola offline", async () => {
+  // v5.13.0: antes había un tope de 500 que DESCARTABA las ventas más viejas
+  // sin subir (se perdían). Ahora ninguna venta pendiente se descarta.
+  it("no descarta ventas pendientes aunque pasen de 500 (antes se perdían)", async () => {
     const { getStore } = await import("../js/store.js");
     const store = getStore();
 
@@ -29,9 +31,33 @@ describe("store.js — offline queue cap", () => {
     }
 
     const queue = store.getState().offlineQueue;
-    expect(queue.length).toBe(500); // cap aplicado
-    expect(queue[0].id).toBe("s-50"); // las primeras 50 fueron descartadas
-    expect(queue[499].id).toBe("s-549"); // la última
+    expect(queue.length).toBe(550); // ninguna perdida
+    expect(queue[0].id).toBe("s-0"); // la más vieja sigue ahí
+    expect(queue[549].id).toBe("s-549"); // la última
+  });
+
+  it("la cola vive aparte del estado general (no se pisa al guardar el estado)", async () => {
+    const { getStore } = await import("../js/store.js");
+    const store = getStore();
+    store.enqueueOfflineSale({ id: "s-a", code: "VIB-A" });
+    store.setState({ theme: "dark" }); // cualquier guardado del estado
+    const state = JSON.parse(storage.data["almacen-pos-state-v1"] || "{}");
+    expect(state.offlineQueue).toBeUndefined();
+    expect(JSON.parse(storage.data["mannol-offline-queue-v2"]).map((s) => s.id)).toEqual(["s-a"]);
+  });
+
+  it("migra la cola de versiones anteriores sin perder ventas", async () => {
+    storage.data["almacen-pos-state-v1"] = JSON.stringify({
+      theme: "light",
+      offlineQueue: [{ id: "old-1", code: "V-11111", clientRef: "r-1" }, { id: "old-2", code: "V-22222" }],
+    });
+    const { getStore } = await import("../js/store.js");
+    const store = getStore();
+    expect(store.getState().offlineQueue.map((s) => s.id)).toEqual(["old-1", "old-2"]);
+    expect(JSON.parse(storage.data["mannol-offline-queue-v2"]).map((s) => s.id)).toEqual(["old-1", "old-2"]);
+    // y el estado general ya no la lleva dentro
+    store.setState({ theme: "dark" });
+    expect(JSON.parse(storage.data["almacen-pos-state-v1"]).offlineQueue).toBeUndefined();
   });
 
   it("no descarta nada si la cola está por debajo del cap", async () => {

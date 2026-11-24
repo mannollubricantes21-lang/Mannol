@@ -18,7 +18,7 @@
 import { getStore, applyTheme } from "./store.js";
 import { getSupabase, isSupabaseConfiguredAsync, isSupabaseConfigured } from "./supabase.js";
 import { logout, loginWithEmail } from "./auth.js";
-import { toast, icon, esc } from "./ui.js";
+import { toast, icon, esc, setupTableCards } from "./ui.js";
 import { setupGlobalSearch } from "./global-search.js";
 import { setupUpdateBanner } from "./update-banner.js";
 import { notifyLowStock } from "./push-notify.js";
@@ -42,6 +42,7 @@ async function init() {
     console.error("[Admin] #admin-app container not found");
     return;
   }
+  setupTableCards(container); // v5.10.0: tablas como tarjetas en el móvil (etiquetas por columna)
 
   // Check if Supabase is configured
   const configured = await isSupabaseConfiguredAsync();

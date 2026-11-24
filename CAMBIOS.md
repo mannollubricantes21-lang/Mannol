@@ -1,5 +1,267 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.13.0 (2026-11-23) — Abrir y vender sin conexión, sin mezclar almacenes
+
+- **La app abre sin internet.** La versión publicada nunca llegaba a instalar su modo sin conexión:
+  el service worker se registraba al evento `load` de la página, que ya había pasado cuando cargaba
+  `app.js` (verificado en el sitio publicado: 0 registros). Ahora se registra siempre.
+  - La librería de Supabase va incluida en la app (`js/supabase-js.min.js`, antes venía de un CDN que
+    sin internet fallaba y la app caía en **modo demo con almacenes de prueba**).
+  - Sin conexión la app usa los últimos datos reales guardados en el equipo (almacenes, PIN, tasas,
+    productos, stock, tipos, marcas, tarjetas, gestores). **Basta abrirla una vez con internet**: en
+    segundo plano guarda lo necesario para vender en *cualquier* almacén de ese equipo.
+  - El modo demo depende solo de la configuración (sin internet ya no aparecen datos de prueba).
+  - Inicio sin conexión: aviso "almacenes guardados en este equipo"; si es la primera vez y no hay
+    datos, lo explica con un botón Reintentar.
+- **Cada venta se guarda primero en el equipo** (cola propia, ya no dentro del estado general donde
+  podía pisarse; sin el tope de 500 que descartaba las más viejas) y se sube sola al volver internet
+  (al reconectar, al abrir la app y cada 30 s; reintentos con espera creciente).
+  - Ticket inmediato; sin conexión dice "Pendiente de subir" y a qué almacén se subirá.
+  - "N por subir" en la venta; "Por subir" en el historial (sin acciones de estado hasta que suba).
+  - Aviso con las ventas en espera: las de **este almacén** y, aparte, las de **otros almacenes**
+    hechas en el mismo equipo. "Ver" las lista agrupadas por almacén; "Subir ahora".
+  - El stock a la vista ya descuenta las ventas pendientes del mismo almacén.
+- **Nunca se mezclan almacenes:**
+  - Código de venta con el prefijo del almacén y sin repetirse (`VIB-2Q7P30RH`; el anterior `V-12345`
+    se repetía cada 100 segundos).
+  - Cada venta sube a SU almacén y descuenta SU stock, en una sola transacción en la nube (RPC
+    `register_sale`, migración v5.13): o se guarda todo o nada.
+  - Sin duplicados aunque la conexión se corte justo al subir (la nube reconoce la venta por su
+    referencia única y no la guarda ni descuenta dos veces).
+  - Ventas hechas con almacenes/productos de prueba o cuyo almacén ya no existe quedan "para revisar"
+    (no se suben a otro almacén); se pueden copiar o descartar desde "Ver".
+  - Antes una venta que fallaba a medias se reintentaba sin descontar el stock, y sin la librería
+    cargada se daba por subida sin subirse: corregido.
+- **Correcciones:**
+  - Historial: con más de 50 ventas la vista fallaba (ReferenceError en la paginación).
+  - Cancelar una venta completada no devolvía el stock (la función de la BD leía `productId` y las
+    ventas guardan `product_id`) — corregido en la migración v5.13.
+  - El indicador "Sin conexión" tapaba los botones de la cabecera; ahora cuelga bajo la cabecera y
+    se oculta donde ya hay aviso. Textos de aviso con más contraste.
+  - Los atajos de teclado respetan los permisos del menú (un PIN ya no abre Historial ni Gestores).
+  - Doble toque en "Registrar venta" ya no puede registrar dos veces.
+  - Con una hoja abierta (ticket, ventas en espera…) los avisos salen arriba: abajo tapaban el
+    final del ticket.
+- Pruebas: 181 (antes 139): cola, códigos, subida con nube simulada (respuesta perdida, sin red,
+  almacén borrado, dos almacenes), historial. E2E con service worker real: primera visita con
+  internet → sin conexión → ventas en dos almacenes → al volver internet cada una en su almacén, una
+  sola vez, con el stock correcto. Migración probada en PostgreSQL 17 (dos veces seguidas, rol anon,
+  concurrencia).
+- **Pasos:** ejecutar `supabase/migration-v5.13-offline-sales.sql` una vez en Supabase → SQL Editor;
+  luego abrir la app una vez con internet en cada equipo.
+
+## v5.12.0 (2026-11-23) — Catálogo de venta por tipo y marca
+
+- **Catálogo de venta con filtros de un toque** ("Abrir catálogo" / "Agregar más productos"):
+  - Fila **Tipo**: Refrigerante, Líquido de freno, Filtros, Lubricantes, Aditivos y los que se creen
+    en el admin. Fila **Marca**: MANNOL, Royal y las que se añadan. Cada chip dice cuántos productos
+    hay; se combinan entre sí y con el buscador (p. ej. Royal + Refrigerante).
+  - Los contadores se cruzan: al elegir una marca se ve cuántos hay de cada tipo en esa marca (los
+    que quedan en 0 se atenúan). Tocar el chip elegido lo quita.
+  - Solo aparecen tipos y marcas con productos; la fila de marcas, cuando hay 2 o más.
+  - Si una búsqueda no da resultados con los filtros puestos, ofrece "Ver N en todo el catálogo".
+  - El buscador ignora tildes y mayúsculas y busca todas las palabras (nombre, marca, código, viscosidad).
+  - **En vivo**: lo que el admin cambia aparece en la venta sin recargar.
+- **Admin → Categorías** (tipos de producto): botón "Crear las que faltan" para los 5 tipos, cuántos
+  productos tiene cada uno, y al eliminar una categoría se elige a qué tipo pasan sus productos. Al
+  borrar una subcategoría sus productos pasan a la principal. Ya no dice "guardada" si Supabase la
+  rechazó (antes el error se perdía).
+- **Admin → Marcas** (nuevo): lista con colores y orden, cuántos productos tiene cada una, "Añadir
+  MANNOL y Royal" y "Añadir las marcas de tus productos". Al renombrar una marca se puede cambiar
+  también en sus productos. Si falta la tabla en Supabase, explica los 4 pasos y copia el SQL.
+- **Admin → Productos → "Tipos y marcas"** (Organizar productos): todos los productos en una lista
+  con su tipo y su marca para cambiarlos de una vez; "Sugerir automáticamente" propone el tipo por el
+  nombre (filtro, freno/DOT, refrigerante, aditivo, aceite/viscosidad) y la marca. Solo cambia tipo y
+  marca (no toca precios ni imágenes). Unifica marcas escritas distinto ("mannol" → "MANNOL").
+- Formulario de producto: la marca se elige de la lista (o se escribe una nueva, que se añade sola a
+  Marcas; en minúsculas se capitaliza). El tipo muestra su ícono y las subcategorías.
+- Filtros por tipo y marca también en Admin → Productos e Inventario (incluyen subcategorías; antes
+  "Aceites de motor" no mostraba los productos de "Sintéticos").
+- La tabla de productos del admin muestra el nombre actual de la categoría (antes, el guardado en el
+  producto, que quedaba viejo al cambiarla).
+- **Supabase**: `supabase/migration-v5.12-brands.sql` (una vez, en SQL Editor). Crea la tabla `brands`
+  (todos leen, solo el admin escribe), añade MANNOL, Royal y las marcas de los productos, y crea los
+  tipos que falten sin tocar las categorías existentes. Probado en PostgreSQL 17 con el esquema real:
+  2 ejecuciones seguidas sin duplicar, permisos por rol (PIN lee; vendedor no escribe; admin sí).
+- Modo demo (vista previa): categorías, marcas y productos editados en el admin quedan guardados en
+  el navegador y la app los ve al instante. Datos demo con los 5 tipos y productos Royal.
+- Tests: `tests/catalog-facets.test.js` (14 nuevos · 139 en total).
+- Archivos: `js/catalog-facets.js` y `supabase/migration-v5.12-brands.sql` (nuevos) · `js/db.js` ·
+  `js/demo-data.js` · `js/supabase.js` · `js/ui.js` · `js/views/` sales, admin, stock, catalog ·
+  `css/mobile-ux.css` (§10) · `supabase/README.md` · `sw.js` (v32) · `js/version.js` · `package.json`.
+
+## v5.11.0 (2026-11-23) — Pulido móvil: más relieve, menos peso
+
+- **Textos apretados en una columna (0 en toda la app; antes 3)**:
+  - **Admin → Transferencias → Solicitudes del personal**: el nombre del producto salía en 6 líneas
+    de ~59 px y los datos en 17. Ahora cada solicitud es una ficha: producto + cantidad + estado
+    arriba, origen → destino con el código como etiqueta, "Pedido por…", la nota y
+    **Aprobar / Rechazar** como dos botones iguales debajo (en computadora, los botones a la derecha).
+  - **Admin → Movimientos**: el aviso "¿Querés mover mercancía…?" (título en 5 líneas de 80 px)
+    ahora tiene el texto a lo ancho y el botón "Nueva transferencia" debajo. Faltaba su icono.
+- **Más relieve**: tres niveles de superficie en los dos temas (página → tarjeta → lo de adentro).
+  Las filas dentro de una tarjeta (saldos de tarjetas, ranking, ventas recientes, solicitudes, filas
+  de las tablas-tarjeta) tienen su propio tono, borde y canto de luz; en oscuro, la página es más
+  oscura y las tarjetas un poco más claras, con bordes más visibles.
+- **Secciones pesadas en el teléfono** (−16 % de alto en las 25 pantallas de largo fijo):
+  - **Stock general**: los 4 almacenes en un carrusel que se desliza (antes uno debajo de otro);
+    casillas "Solo bajo mínimo / agotados" como botones de 44 px. 3172 → 2061 px.
+  - **Inventario** (app) y **Productos/Usuarios/Gestores** (admin): las tarjetas ponen los datos en
+    una cuadrícula de 4 columnas según su largo (cortos de a 4, medianos de a 2, largos a lo ancho).
+    Inventario 3521 → 2210 px.
+  - **Movimientos**: filtros plegables (cerrados en el móvil, con el número de filtros activos).
+  - **Dashboard admin**: KPIs compactos, accesos rápidos en una fila que se desliza, gráfica más
+    baja; el ranking mostraba "1…" en vez del número; "Evolución" plana → una línea de texto.
+  - **Inicio del vendedor**: gráfica de 7 días sin el hueco de debajo, la cifra del centro de la
+    dona era ilegible (7 px) y ahora escala; KPIs compactos.
+  - Pestañas de Transferencias en una fila deslizable; subtítulo genérico de la barra superior oculto.
+- **Historial de ventas y Transferencias (app) en el móvil**: la tabla de 8–9 columnas escondía el
+  total, el estado y las acciones fuera de la pantalla. Ahora cada venta es una ficha de 2 líneas
+  (código, moneda, estado y total arriba; "Hoy, 14:05 · 3 ítems · gestor · vendedor" abajo) con un
+  borde del color del estado; ocupa lo mismo que una fila de la tabla (65 px). Al tocarla se abre el detalle, que ahora trae **Completar /
+  Cancelar venta / Reabrir**. En computadora sigue siendo la tabla de siempre.
+- Catálogo, Usuarios y Comisiones (app) también como tarjetas en el móvil; Gestores (app): "Ver
+  ventas" siempre a la derecha del nombre.
+- Gráficas: etiquetas en HTML (antes texto SVG estirado e ilegible), líneas de 1–2 px reales.
+- Iconos que faltaban: `info` y `activity` (dejaban un recuadro vacío).
+- Tests: 4 nuevos (cuadrícula de las tarjetas y `formatWhen`) · 125 en total.
+- Archivos: `css/mobile-ux.css` (§9) · `js/ui.js` · `js/charts.js` · `js/currency.js` ·
+  `js/views/` admin, dashboard, sales-history, transfers, managers, catalog, users, commissions,
+  warehouse-interior · `tests/pos-features.test.js` · `sw.js` (v31) · `js/version.js` · `package.json`.
+
+## v5.10.0 (2026-11-23) — Escáner de códigos, más vendidos, conversor, cierre por WhatsApp
+
+- **Escáner de códigos de barras con la cámara** (`js/barcode-scanner.js`, nuevo):
+  - **Venta**: botón en el buscador → se escanean varios productos seguidos (pitido + vibración,
+    contador, linterna si el teléfono la tiene, "Escribir código" si la cámara no está disponible).
+  - **Admin → Productos → Nuevo/Editar**: botón en el campo **"SKU / código de barras"** → escanea el
+    envase y guarda el código. Avisa si otro producto ya tiene ese código.
+  - **Inventario**: buscar un producto escaneándolo.
+  - Usa el lector nativo del teléfono (Chrome/Android) y, si no hay, **ZXing** (`js/zxing.min.js`,
+    MIT, 336 KB) que solo se descarga la primera vez que se escanea en ese teléfono.
+  - El código se busca en el SKU (tolera guiones/espacios y EAN-13 ↔ UPC-A).
+- **Más vendidos en la venta**: hasta 6 botones con los productos que más salieron en ese almacén
+  (últimos 30 días, con stock). Un toque = +1 unidad; muestra cuántas lleva la venta.
+- **Conversor USD / EUR / MN en el inicio**: botón "Convertir" o tocar una tasa. Montos rápidos,
+  separador de miles y las mismas tasas del día (con el margen incluido).
+- **Cierre de caja por WhatsApp**: "Enviar por WhatsApp" arma el resumen del día (ventas, unidades,
+  total, por moneda, más vendidos, quién cerró) y abre WhatsApp para elegir el chat. "Copiar" para
+  Telegram/SMS. Muestra exactamente los montos de la tarjeta de cierre.
+- **Inventario compacto en el móvil**: las 3 tarjetas de resumen en una fila (de ~700 px a 98 px),
+  filtros en 2 filas y productos como tarjetas.
+- **Tablas como tarjetas en el móvil** (≤ 640 px): Usuarios, Productos, Almacenes, Gestores y
+  Transferencias del admin + Inventario. Cada fila es una tarjeta con etiquetas; en computadora
+  siguen siendo tablas. Los reportes siguen deslizándose de lado.
+- Otros: `addProduct` ya no añade productos agotados que no estaban en la venta; el icono del botón
+  "Compartir" del ticket no se veía (faltaba `zap`); el service worker precarga `sales-stats.js`,
+  `pin-utils.js` y `viscosity.js` (faltaban para usar la app sin conexión).
+- Tests: `tests/pos-features.test.js` (14 nuevos · 121 en total).
+- Archivos: `js/barcode-scanner.js` y `js/zxing.min.js` (nuevos) · `js/ui.js` · `js/currency.js` ·
+  `js/sales-stats.js` · `js/app.js` · `js/admin-app.js` · `js/views/home.js` · `js/views/sales.js` ·
+  `js/views/warehouse-interior.js` · `js/views/stock.js` · `js/views/admin.js` · `css/mobile-ux.css` §8 ·
+  `sw.js` caché v30.
+
+## v5.9.0 (2026-11-23) — PANEL ADMIN con el mismo estilo + tablas legibles en móvil
+
+- **Admin con el estilo de la app**: `admin.html` ahora enlaza `css/mobile-ux.css` (después de su
+  `<style>` propio). Fondo, bordes definidos y tarjetas flotantes iguales a la app; barra superior
+  blanca translúcida con línea nítida; en escritorio la barra lateral flota separada de los bordes;
+  accesos rápidos con relieve.
+- **Tablas arregladas en móvil (admin y app)**: la regla anti-desborde de `styles.css` §17
+  (`overflow-wrap:anywhere`) dejaba cada celda con ancho de UNA letra → "Producto", "Dirección"…
+  se apilaban letra por letra (Productos medía 7256 px de alto, Almacenes 1941 px). Ahora cada fila
+  ocupa una línea y la tabla se desliza de lado dentro de su tarjeta, con sombra que avisa que hay
+  más columnas. Productos: 7256 → 1351 px; Ganancia: 5928 → 1466 px; Cierres: 3435 → 1245 px.
+- **Admin táctil**: botones de 44 px en móvil (213 → 63 por debajo de 44 px en las 17 secciones),
+  textos ≥ 11 px (55 → 17), KPIs en 2×2, aviso de comisiones con el botón en su propia línea,
+  respeto de la muesca del iPhone (`viewport-fit=cover`).
+- **Mini-gráficas del dashboard** (`js/charts.js`): el relleno usaba "x,y" donde solo va la x
+  (`L97.00,17.04,30`, path inválido + 6 errores en consola). Corregido; además los puntos ya no se
+  deforman en óvalos y la línea tiene grosor uniforme.
+- `admin.html` · `css/mobile-ux.css` §7 · `js/charts.js` · `js/views/admin.js` (clase del aviso) ·
+  `sw.js` caché v29.
+
+## v5.8.1 (2026-11-23) — DISEÑO: líneas más definidas y tarjetas flotantes
+
+- **Tarjetas flotantes**: sombra en capas (contacto + ambiente + caída larga y suave) en
+  resumen, cierre de caja, inventario, ventas recientes, tasas, PIN y panel de venta.
+  El fondo de la página baja un punto (gris azulado muy suave) para que las tarjetas
+  blancas se despeguen. Las tarjetas dentro de otra tarjeta quedan planas, con borde,
+  para no apilar sombras.
+- **Líneas más definidas**: bordes y divisores con más contraste (`--border` 0.90 → 0.85,
+  `--border-strong` 0.80 → 0.72); campos de texto con borde propio más marcado; pestañas
+  activas con contorno.
+- **Almacenes del inicio**: cada uno es su propia tarjeta flotante (antes una lista unida);
+  al tocar, la tarjeta "baja" hacia la página (y en escritorio sube al pasar el ratón).
+- **Header** blanco translúcido con línea inferior nítida (el del almacén tenía el fondo fijado
+  en línea en `dashboard.js` y no respondía al CSS).
+- **Teclas del PIN** con canto inferior, como botones físicos.
+- **Modo oscuro**: fondo más profundo, bordes al 15 % y fondo "soft" distinto del de la tarjeta
+  (antes KPIs y teclas se confundían con su tarjeta).
+- `css/mobile-ux.css` §6 · `js/views/dashboard.js` · `sw.js` caché v28.
+
+## v5.8.0 (2026-11-23) — DISEÑO: experiencia móvil (navegación, cobro, PIN, inicio)
+
+> Medido en un teléfono de 390×844 (modo demo), mismo recorrido antes/después.
+
+### 1. Barra inferior fija + botón de venta siempre a mano (BUG de raíz)
+- **Qué pasaba**: la regla `[aria-label] { position: relative; }` (bloque «Tooltip» de
+  `styles.css`) tenía la misma especificidad que `.bottom-nav` y `.fab` pero venía después,
+  así que les quitaba el `position: fixed`. Resultado: Inicio / Ventas / Inventario / Más y el
+  botón del carrito aparecían **al final de la página** (y=1766 px en una pantalla de 844 px).
+  Ningún tooltip dependía de esa regla → eliminada.
+- El header «sticky» tampoco se quedaba arriba: `.mobile-shell` tenía `overflow-x: hidden`,
+  que lo convierte en contenedor de scroll y anula el sticky → `overflow-x: clip`.
+- Barra con safe-area del iPhone, pestaña activa con «pill», FAB acoplado al centro; el FAB se
+  oculta en Ventas (ya estás vendiendo). Al cambiar de sección se vuelve arriba.
+- El botón flotante de «modo kiosko» tapaba la pestaña Inicio y en iPhone no funciona
+  (Safari no tiene Fullscreen API) → pasa al menú lateral («Pantalla completa»), solo si el
+  navegador lo soporta. Los atajos de teclado del menú se ocultan en pantallas táctiles.
+- Toasts abajo y a todo el ancho (arriba tapaban el header).
+
+### 2. Ventas: total y «Cobrar» siempre visibles
+- Barra de cobro fija sobre la navegación (`#checkout-bar`): unidades, líneas, total y botón
+  **Cobrar** que baja a la sección de pago. Se oculta sola cuando el botón real
+  «Registrar venta» ya está a la vista (IntersectionObserver). Antes había que hacer ~480 px
+  de scroll a ciegas para ver el total.
+- Modales como **hoja inferior** en móvil (catálogo, menús, ticket): alcanzables con el pulgar.
+  En táctil ya no se enfoca automáticamente el buscador (abría el teclado y tapaba el catálogo).
+- Nombres de producto en 2 líneas (antes «MANNOL Ene…» no distinguía 5W-30 de 10W-40).
+- Etiquetas cortas «Por unidad / Mayorista · caja» (partían en 2 líneas) y «TRANSF.» (se salía
+  de la tarjeta).
+
+### 3. Inicio compacto
+- Sin el hero duplicado (logo + «MANNOL» ya están en el header) y con un solo aviso de margen.
+- Almacenes como **lista táctil**: toda la fila entra (antes tarjeta de ~190 px + botón
+  repetido), botón **Llamar** (`tel:`) que no dispara el PIN. Los 4 almacenes caben en la
+  primera pantalla (antes 2).
+- Sin la banda oscura diagonal en móvil: al ser `position: fixed` cortaba las tarjetas en
+  diagonal (mitad blanca / mitad gris) y bajaba el contraste de los títulos.
+- El botón ☰ del inicio no hacía nada (emitía `open-drawer` sin listener) → abre un menú
+  (actualizar tasas, tema, pantalla completa, asistente) con la versión de la app.
+
+### 4. PIN con teclado numérico propio
+- Teclado 3×4 de 60 px, puntos de progreso, **envío automático** al completar los dígitos del
+  PIN del almacén, vibración + «shake» al fallar. En táctil no se abre el teclado del sistema.
+  Con teclado físico se sigue pudiendo escribir (input oculto accesible). Misma lógica de
+  validación y límite de intentos (`pin-rate-limit.js`).
+- El candado ahora se centra (faltaba la utilidad `.mx-auto`); «Volver» con área de 44 px.
+
+### 5. Tacto y legibilidad
+- Objetivos táctiles ≥ 44 px en pantallas táctiles (header, steppers, filas de stock, tabs);
+  controles compactos (Hoy/Semana/Mes, filtro «bajo») con área ampliada invisible.
+- Campos de texto a 16 px en táctil: iPhone ya no hace zoom al tocar buscar / vuelto / nota.
+- Textos mínimos de 11 px (había badges de 8–10 px con estilo inline).
+
+### Técnico
+- `css/mobile-ux.css` (nuevo, cargado después de `styles.css`): toda la capa móvil agrupada
+  por idea; solo tokens del tema (claro/oscuro).
+- `css/styles.css`: eliminada la regla `[aria-label] { position: relative; }`.
+- `js/views/home.js` (hero, tasas, lista de almacenes, menú), `js/views/pin-login.js`
+  (teclado), `js/views/sales.js` (barra de cobro), `js/views/dashboard.js` (vista activa,
+  pantalla completa en el menú), `js/ui.js` (foco de modales en táctil).
+- `sw.js` caché v27 (+ `css/mobile-ux.css`). Sin migración SQL. Sin cambios en datos/lógica.
+
 ## v5.7.0 (2026-11-23) — DISEÑO: rediseño del interior del almacén
 
 > Preview comparativo con capturas antes/después: `preview-rediseno.html` (en la carpeta de descargas).

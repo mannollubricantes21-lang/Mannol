@@ -220,11 +220,87 @@ import {
 import { getStore } from "./store.js";
 import { validateTransferRequest, canTransitionRequest } from "./sales-stats.js";
 import {
-  DEMO_WAREHOUSES, DEMO_MANAGERS, DEMO_CARDS, DEMO_CATEGORIES,
+  DEMO_WAREHOUSES, DEMO_MANAGERS, DEMO_CARDS, DEMO_CATEGORIES, DEMO_BRANDS,
   DEMO_PRODUCTS, DEMO_STOCK, DEMO_SALES, DEMO_RATE_CONFIG, DEMO_TODAY_RATES,
 } from "./demo-data.js";
+import { slugify, normalizeKey } from "./catalog-facets.js";
+import { readQueue, subscribeQueue, mergePendingSales, applyPendingToStock } from "./offline-queue.js";
 
 const noopUnsub = () => {};
+
+// =====================================================
+// v5.12.0 — Modo demo: catálogo editable guardado en este navegador
+// =====================================================
+// En la vista previa (sin Supabase) las categorías, marcas y productos que se
+// crean o editan desde el admin quedan en localStorage y la app los ve al
+// instante (misma pestaña: aviso directo; otra pestaña/marco: evento "storage").
+const DEMO_CATALOG_KEY = "mannol-demo-catalog-v1";
+const DEMO_CATALOG_SEED = 2; // subir si cambian los datos demo del catálogo
+const _demoCatalogListeners = new Set();
+let _demoCatalogStorageHooked = false;
+
+function freshDemoCatalog() {
+  const clone = (arr) => JSON.parse(JSON.stringify(arr || []));
+  return { seed: DEMO_CATALOG_SEED, categories: clone(DEMO_CATEGORIES), brands: clone(DEMO_BRANDS), products: clone(DEMO_PRODUCTS) };
+}
+function loadDemoCatalog() {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(DEMO_CATALOG_KEY) : null;
+    if (raw) {
+      const c = JSON.parse(raw);
+      if (c && c.seed === DEMO_CATALOG_SEED && Array.isArray(c.categories) && Array.isArray(c.brands) && Array.isArray(c.products)) return c;
+    }
+  } catch {}
+  return freshDemoCatalog();
+}
+function emitDemoCatalog(c) {
+  for (const fn of [..._demoCatalogListeners]) {
+    try { fn(c); } catch (err) { console.warn("[demo catalog] listener:", err); }
+  }
+}
+function updateDemoCatalog(mutator) {
+  const c = loadDemoCatalog();
+  const result = mutator(c); // si lanza, no se guarda nada
+  try { localStorage.setItem(DEMO_CATALOG_KEY, JSON.stringify(c)); } catch {}
+  emitDemoCatalog(c);
+  return result;
+}
+function subscribeDemoCatalog(pick, cb) {
+  if (!_demoCatalogStorageHooked && typeof window !== "undefined") {
+    _demoCatalogStorageHooked = true;
+    window.addEventListener("storage", (e) => {
+      if (e.key === DEMO_CATALOG_KEY) emitDemoCatalog(loadDemoCatalog());
+    });
+  }
+  const fn = (c) => cb(pick(c));
+  _demoCatalogListeners.add(fn);
+  fn(loadDemoCatalog());
+  return () => _demoCatalogListeners.delete(fn);
+}
+function demoId(prefix) {
+  return `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+// ¿El error es "esa tabla no existe" (migración sin ejecutar)?
+function isMissingTableError(err, table) {
+  if (err?.code === "PGRST205" || err?.code === "42P01") return true;
+  const msg = String(err?.message || err?.details || err || "");
+  return msg.includes(table) && /(schema cache|does not exist|no existe)/i.test(msg);
+}
+
+// Mensaje entendible para los errores más comunes de Supabase
+function friendlyDbError(err, fallback) {
+  const code = err?.code || "";
+  const msg = String(err?.message || "");
+  if (code === "42501" || /row-level security|permission denied/i.test(msg)) {
+    return "Sin permiso para guardar: entra con un usuario administrador.";
+  }
+  if (code === "23505" || /duplicate key/i.test(msg)) return "Ya existe uno con ese nombre.";
+  if (isMissingTableError(err, "brands")) {
+    return "Falta crear la tabla de marcas en Supabase (Admin → Marcas explica cómo).";
+  }
+  return msg || fallback;
+}
 const DEFAULT_SETTINGS = {
   pinCode: "2025",
   elToqueEnabled: true,
@@ -247,11 +323,98 @@ let _demoChecked = false;
 let _isDemo = true;
 async function isDemo() {
   if (_demoChecked) return _isDemo;
-  const s = await sb();
-  _isDemo = !s;
+  // v5.13.0: el modo demo depende SOLO de la configuración. Antes era
+  // "!cliente": sin internet la librería no cargaba y la app mostraba
+  // almacenes y productos de PRUEBA; las ventas hechas así subían después
+  // sin almacén (mezcladas). Ahora, configurado + sin red = datos reales
+  // guardados (service worker + copia local), nunca datos demo.
+  let configured = false;
+  try { configured = await isSupabaseConfiguredAsync(); } catch { configured = false; }
+  _isDemo = !configured;
   _demoChecked = true;
   return _isDemo;
 }
+
+// =====================================================
+// v5.13.0 — Copia local de datos críticos para abrir sin conexión
+// =====================================================
+// Almacenes (con su PIN), ajustes, gestores y tarjetas: se guarda la última
+// respuesta buena. Si la red falla y el service worker no tiene la respuesta,
+// se usa esta copia → el PIN y el almacén de cada venta siguen siendo reales.
+const MIRROR_PREFIX = "mannol-mirror-v1:";
+function mirrorSave(name, data) {
+  try { localStorage.setItem(MIRROR_PREFIX + name, JSON.stringify({ ts: Date.now(), data })); } catch {}
+}
+function mirrorLoad(name) {
+  try {
+    const raw = localStorage.getItem(MIRROR_PREFIX + name);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    return v && v.data !== undefined ? v.data : null;
+  } catch { return null; }
+}
+/** Fecha (ms) de la última copia buena guardada de `name`, o null. */
+export function getMirrorTimestamp(name) {
+  try {
+    const v = JSON.parse(localStorage.getItem(MIRROR_PREFIX + name) || "null");
+    return v && v.ts ? v.ts : null;
+  } catch { return null; }
+}
+
+// =====================================================
+// v5.13.0 — Precarga para trabajar sin conexión
+// =====================================================
+// Las copias sin conexión (sw.js / supabase.js) se guardan por URL exacta.
+// Para que "abrir la app una vez con internet" baste para vender después
+// sin conexión en CUALQUIER almacén del equipo, se piden en segundo plano
+// las mismas consultas que hace la pantalla de venta (mismo orden y filtros
+// → misma URL → misma copia). Una vez cada 20 min como máximo.
+const WARM_KEY = "mannol-offline-warm-v1";
+const WARM_EVERY_MS = 20 * 60 * 1000;
+
+export async function warmOfflineCache({ force = false } = {}) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return { skipped: "offline" };
+  if (await isDemo()) return { skipped: "demo" };
+  try {
+    const last = Number(localStorage.getItem(WARM_KEY) || 0);
+    if (!force && Date.now() - last < WARM_EVERY_MS) return { skipped: "recent" };
+  } catch {}
+  const s = await sb();
+  if (!s) return { skipped: "no-client" };
+  const warehouses = await listWarehouses(); // también actualiza su copia local
+  const ids = (warehouses || [])
+    .filter((w) => w && w.active !== false && isUuid(String(w.id)))
+    .map((w) => w.id);
+  const tasks = [
+    // mismas consultas que subscribeProducts / subscribeStock / subscribeCategories
+    () => s.from("products").select("*").order("created_at", { ascending: true }),
+    () => s.from("categories").select("*").order("sort_order", { ascending: true }),
+    () => fetchBrands(),
+    () => listCards(),
+    () => listManagers(),
+    () => getSettings(),
+    ...ids.map((id) => () => s.from("stock").select("*").eq("warehouse_id", id)),
+  ];
+  let ok = 0;
+  for (const task of tasks) {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) break;
+    try {
+      const r = await task();
+      if (!r || !r.error) ok++;
+    } catch {}
+    await new Promise((res) => setTimeout(res, 120)); // sin ráfagas
+  }
+  if (ok === tasks.length) {
+    try { localStorage.setItem(WARM_KEY, String(Date.now())); } catch {}
+  }
+  return { ok, total: tasks.length, warehouses: ids.length };
+}
+
+// Firma de la cola: cambia solo si entran/salen ventas (no con reintentos)
+function queueSignature(q) {
+  return (q || []).map((x) => `${x.id}${x._blocked ? "!" : ""}`).join(",");
+}
+const isOnlineNow = () => typeof navigator === "undefined" || navigator.onLine !== false;
 
 // =====================================================
 // Conversion helpers
@@ -292,6 +455,7 @@ function toRow(obj) {
 // re-fetches the full list on any change (simple + reliable).
 function subscribeTable({ channelName, table, filter, order, fn, demoData, isDemoMode }) {
   let unsub = noopUnsub;
+  let delivered = false; // v5.13.0: con red inestable se conserva la última lista buena
   (async () => {
     if (isDemoMode) {
       cb_with_demo();
@@ -316,13 +480,13 @@ function subscribeTable({ channelName, table, filter, order, fn, demoData, isDem
       };
     } catch (err) {
       console.error(`subscribe ${table} failed:`, err);
-      fn([]);
+      if (!delivered) fn([]);
     }
   })();
 
   async function refresh() {
     const s = await sb();
-    if (!s) { fn([]); return; }
+    if (!s) { if (!delivered) fn([]); return; }
     try {
       let query = s.from(table).select("*");
       if (filter) {
@@ -336,9 +500,10 @@ function subscribeTable({ channelName, table, filter, order, fn, demoData, isDem
       const { data, error } = await query;
       if (error) throw error;
       fn(rows(data));
+      delivered = true;
     } catch (err) {
       console.error(`refresh ${table} failed:`, err);
-      fn([]);
+      if (!delivered) fn([]);
     }
   }
 
@@ -375,7 +540,7 @@ export async function getSettings() {
     return { ..._settingsCache.data };
   }
   const s = await sb();
-  if (!s) return { ...DEFAULT_SETTINGS };
+  if (!s) return { ...DEFAULT_SETTINGS, ...(mirrorLoad("settings") || {}) };
   try {
     const { data, error } = await s.from("settings").select("*").eq("id", "global").maybeSingle();
     if (error) throw error;
@@ -388,6 +553,7 @@ export async function getSettings() {
         merged.pinCode = DEFAULT_SETTINGS.pinCode;
       }
       _settingsCache = { ts: Date.now(), data: merged };
+      mirrorSave("settings", merged);
       return { ...merged };
     }
     // Create default row if missing
@@ -399,6 +565,9 @@ export async function getSettings() {
     return { ...def };
   } catch (err) {
     console.warn("Settings load failed:", err);
+    // v5.13.0: sin conexión → últimos ajustes reales (PIN global incluido)
+    const mirror = mirrorLoad("settings");
+    if (mirror) return { ...DEFAULT_SETTINGS, ...mirror };
     return { ...DEFAULT_SETTINGS };
   }
 }
@@ -549,17 +718,22 @@ export async function listWarehouses() {
   const demo = await isDemo();
   if (demo) return DEMO_WAREHOUSES;
   const s = await sb();
-  if (!s) return [];
+  if (!s) return mirrorLoad("warehouses") || [];
   if (_whCache.data && Date.now() - _whCache.ts < WH_CACHE_TTL) {
     return _whCache.data.map((w) => ({ ...w }));
   }
   try {
     const { data, error } = await s.from("warehouses").select("*").order("created_at", { ascending: true });
     if (error) throw error;
-    _whCache = { ts: Date.now(), data: rows(data) };
-    return rows(data);
+    const list = rows(data);
+    _whCache = { ts: Date.now(), data: list };
+    mirrorSave("warehouses", list);
+    return list.map((w) => ({ ...w }));
   } catch (err) {
     console.error("listWarehouses failed:", err);
+    // v5.13.0: sin conexión → últimos almacenes REALES guardados (nunca demo)
+    const mirror = mirrorLoad("warehouses");
+    if (Array.isArray(mirror) && mirror.length) return mirror;
     return [];
   }
 }
@@ -815,26 +989,51 @@ export async function deleteUser(id) {
 // =====================================================
 
 export function subscribeCategories(cb) {
-  return subscribeTable({
-    channelName: "categories-ch",
-    table: "categories",
-    order: ["sort_order", "asc"],
-    fn: cb,
-    demoData: DEMO_CATEGORIES,
-    isDemoMode: false,
-  });
+  let unsub = noopUnsub;
+  let stopped = false;
+  (async () => {
+    if (await isDemo()) {
+      if (!stopped) unsub = subscribeDemoCatalog((c) => c.categories, cb);
+      return;
+    }
+    if (stopped) return;
+    unsub = subscribeTable({
+      channelName: "categories-ch",
+      table: "categories",
+      order: ["sort_order", "asc"],
+      fn: cb,
+      demoData: [],
+      isDemoMode: false,
+    });
+  })();
+  return () => { stopped = true; unsub(); };
 }
 
+/**
+ * Crea o actualiza una categoría. v5.12.0: lanza el error real (antes lo
+ * tragaba y la pantalla decía "guardada" aunque Supabase la rechazara).
+ */
 export async function saveCategory(c) {
+  // Normalize: support both 'order' (legacy) and 'sortOrder' (canonical)
+  const normalized = { ...c };
+  if (normalized.order !== undefined && normalized.sortOrder === undefined) {
+    normalized.sortOrder = normalized.order;
+    delete normalized.order;
+  }
+  if (await isDemo()) {
+    return updateDemoCatalog((cat) => {
+      if (normalized.id) {
+        const i = cat.categories.findIndex((x) => x.id === normalized.id);
+        if (i >= 0) { cat.categories[i] = { ...cat.categories[i], ...normalized }; return normalized.id; }
+      }
+      const id = normalized.id || demoId("cat");
+      cat.categories.push({ active: true, parentId: null, sortOrder: 0, ...normalized, id, createdAt: Date.now() });
+      return id;
+    });
+  }
   const s = await sb();
-  if (!s) return "demo-id";
+  if (!s) throw new Error("Sin conexión con la base de datos");
   try {
-    // Normalize: support both 'order' (legacy) and 'sortOrder' (canonical)
-    const normalized = { ...c };
-    if (normalized.order !== undefined && normalized.sortOrder === undefined) {
-      normalized.sortOrder = normalized.order;
-      delete normalized.order;
-    }
     const r = toRow(normalized);
     if (c.id) {
       const { error } = await s.from("categories").update(r).eq("id", c.id);
@@ -846,19 +1045,236 @@ export async function saveCategory(c) {
     return data.id;
   } catch (err) {
     console.error("saveCategory failed:", err);
-    return "demo-id";
+    throw new Error(friendlyDbError(err, "No se pudo guardar la categoría"));
   }
 }
 
 export async function deleteCategory(id) {
-  const s = await sb();
-  if (!s) return;
-  try {
-    const { error } = await s.from("categories").delete().eq("id", id);
-    if (error) throw error;
-  } catch (err) {
-    console.error("deleteCategory failed:", err);
+  if (await isDemo()) {
+    updateDemoCatalog((cat) => {
+      // Igual que la BD: las subcategorías se borran en cascada y los
+      // productos quedan sin categoría.
+      const doomed = new Set([id]);
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const x of cat.categories) {
+          if (x.parentId && doomed.has(x.parentId) && !doomed.has(x.id)) { doomed.add(x.id); grew = true; }
+        }
+      }
+      cat.categories = cat.categories.filter((x) => !doomed.has(x.id));
+      for (const p of cat.products) {
+        if (doomed.has(p.categoryId)) { p.categoryId = null; p.categoryName = null; }
+      }
+    });
+    return;
   }
+  const s = await sb();
+  if (!s) throw new Error("Sin conexión con la base de datos");
+  const { error } = await s.from("categories").delete().eq("id", id);
+  if (error) {
+    console.error("deleteCategory failed:", error);
+    throw new Error(friendlyDbError(error, "No se pudo eliminar la categoría"));
+  }
+}
+
+// =====================================================
+// ============ Brands (v5.12.0) ============
+// =====================================================
+// Tabla `brands` (supabase/migration-v5.12-brands.sql). Si la migración aún
+// no se ejecutó, la lista sale vacía con `missingTable: true` y el catálogo
+// sigue mostrando las marcas que usan los productos.
+let _brandsTableMissing = false;
+
+/** @returns {Promise<{brands: Object[], missingTable: boolean, error?: string}>} */
+export async function fetchBrands() {
+  if (await isDemo()) return { brands: loadDemoCatalog().brands, missingTable: false };
+  const s = await sb();
+  if (!s) return { brands: [], missingTable: false };
+  try {
+    const { data, error } = await s.from("brands").select("*")
+      .order("sort_order", { ascending: true })
+      .order("name", { ascending: true });
+    if (error) throw error;
+    _brandsTableMissing = false;
+    return { brands: rows(data), missingTable: false };
+  } catch (err) {
+    if (isMissingTableError(err, "brands")) {
+      _brandsTableMissing = true;
+      return { brands: [], missingTable: true };
+    }
+    console.error("fetchBrands failed:", err);
+    return { brands: [], missingTable: false, error: err?.message || String(err) };
+  }
+}
+
+export async function listBrands() {
+  return (await fetchBrands()).brands;
+}
+
+export function isBrandsTableMissing() {
+  return _brandsTableMissing;
+}
+
+export function subscribeBrands(cb) {
+  let unsub = noopUnsub;
+  let stopped = false;
+  (async () => {
+    if (await isDemo()) {
+      if (!stopped) unsub = subscribeDemoCatalog((c) => c.brands, cb);
+      return;
+    }
+    const s = await sb();
+    if (!s) { cb([]); return; }
+    const refresh = async () => {
+      const { brands, missingTable } = await fetchBrands();
+      if (!stopped) cb(brands);
+      return missingTable;
+    };
+    const missing = await refresh();
+    if (missing || stopped) return; // sin tabla no hay cambios que escuchar
+    try {
+      const channel = s.channel("brands-ch");
+      channel.on("postgres_changes", { event: "*", schema: "public", table: "brands" }, () => refresh());
+      channel.subscribe();
+      unsub = () => { try { s.client.removeChannel(channel); } catch {} };
+    } catch (err) {
+      console.error("subscribeBrands failed:", err);
+    }
+  })();
+  return () => { stopped = true; unsub(); };
+}
+
+/** Crea o actualiza una marca. Lanza el error real (duplicada, sin permiso, sin tabla…). */
+export async function saveBrand(b) {
+  const data = { ...b, name: String(b?.name || "").replace(/\s+/g, " ").trim() };
+  if (!data.name) throw new Error("El nombre de la marca es obligatorio");
+  data.slug = slugify(data.name) || data.slug || demoId("marca");
+  if (await isDemo()) {
+    return updateDemoCatalog((cat) => {
+      const dup = cat.brands.find((x) => x.slug === data.slug && x.id !== data.id);
+      if (dup) throw new Error(`Ya existe la marca «${dup.name}».`);
+      if (data.id) {
+        const i = cat.brands.findIndex((x) => x.id === data.id);
+        if (i >= 0) { cat.brands[i] = { ...cat.brands[i], ...data }; return data.id; }
+      }
+      const id = data.id || demoId("br");
+      cat.brands.push({ color: "slate", sortOrder: 0, active: true, ...data, id, createdAt: Date.now() });
+      return id;
+    });
+  }
+  const s = await sb();
+  if (!s) throw new Error("Sin conexión con la base de datos");
+  try {
+    const r = toRow(data);
+    if (data.id) {
+      const { error } = await s.from("brands").update(r).eq("id", data.id);
+      if (error) throw error;
+      return data.id;
+    }
+    const { data: created, error } = await s.from("brands").insert(r).select().single();
+    if (error) throw error;
+    return created.id;
+  } catch (err) {
+    console.error("saveBrand failed:", err);
+    if (err?.code === "23505" || /duplicate key/i.test(String(err?.message || ""))) {
+      throw new Error(`Ya existe la marca «${data.name}».`);
+    }
+    throw new Error(friendlyDbError(err, "No se pudo guardar la marca"));
+  }
+}
+
+export async function deleteBrand(id) {
+  if (await isDemo()) {
+    updateDemoCatalog((cat) => { cat.brands = cat.brands.filter((x) => x.id !== id); });
+    return;
+  }
+  const s = await sb();
+  if (!s) throw new Error("Sin conexión con la base de datos");
+  const { error } = await s.from("brands").delete().eq("id", id);
+  if (error) {
+    console.error("deleteBrand failed:", error);
+    throw new Error(friendlyDbError(error, "No se pudo eliminar la marca"));
+  }
+}
+
+/**
+ * Cambia la marca escrita en los productos (p. ej. al renombrar "Mannol" →
+ * "MANNOL"). Compara sin mayúsculas/tildes/espacios. Devuelve cuántos cambió.
+ */
+export async function renameBrandInProducts(oldName, newName) {
+  const to = String(newName || "").replace(/\s+/g, " ").trim();
+  const fromKey = normalizeKey(oldName);
+  if (!fromKey || !to) return 0;
+  if (await isDemo()) {
+    return updateDemoCatalog((cat) => {
+      let n = 0;
+      for (const p of cat.products) {
+        if (normalizeKey(p.brand) === fromKey && p.brand !== to) { p.brand = to; n++; }
+      }
+      return n;
+    });
+  }
+  const s = await sb();
+  if (!s) throw new Error("Sin conexión con la base de datos");
+  const { data: prods, error: e1 } = await s.from("products").select("id, brand");
+  if (e1) throw new Error(friendlyDbError(e1, "No se pudieron leer los productos"));
+  const ids = (prods || []).filter((p) => normalizeKey(p.brand) === fromKey && p.brand !== to).map((p) => p.id);
+  if (!ids.length) return 0;
+  const { error } = await s.from("products").update({ brand: to }).in("id", ids);
+  if (error) throw new Error(friendlyDbError(error, "No se pudo cambiar la marca en los productos"));
+  return ids.length;
+}
+
+/**
+ * v5.12.0: cambia SOLO el tipo (categoría) y/o la marca de varios productos
+ * (Admin → Organizar productos). No toca precios, imágenes ni comisiones.
+ * @param {{id:string, categoryId?:string|null, categoryName?:string|null, brand?:string}[]} updates
+ * @param {(done:number, total:number) => void} [onProgress]
+ * @returns {Promise<{ok:number, failed:{id:string, error:string}[]}>}
+ */
+export async function updateProductsCatalogFields(updates, onProgress) {
+  const clean = (u) => {
+    const o = {};
+    if ("categoryId" in u) o.categoryId = u.categoryId || null;
+    if ("categoryName" in u) o.categoryName = u.categoryName || null;
+    if ("brand" in u && String(u.brand || "").trim()) o.brand = String(u.brand).replace(/\s+/g, " ").trim();
+    return o;
+  };
+  const list = (updates || []).filter((u) => u && u.id);
+  if (await isDemo()) {
+    updateDemoCatalog((cat) => {
+      for (const u of list) {
+        const p = cat.products.find((x) => x.id === u.id);
+        if (p) Object.assign(p, clean(u));
+      }
+    });
+    onProgress?.(list.length, list.length);
+    return { ok: list.length, failed: [] };
+  }
+  const s = await sb();
+  if (!s) throw new Error("Sin conexión con la base de datos");
+  let ok = 0;
+  let done = 0;
+  const failed = [];
+  for (let i = 0; i < list.length; i += 6) { // de a 6 en paralelo
+    await Promise.all(list.slice(i, i + 6).map(async (u) => {
+      const r = toRow(clean(u));
+      try {
+        if (Object.keys(r).length) {
+          const { error } = await s.from("products").update(r).eq("id", u.id);
+          if (error) throw error;
+        }
+        ok++;
+      } catch (err) {
+        console.error("updateProductsCatalogFields:", u.id, err);
+        failed.push({ id: u.id, error: friendlyDbError(err, "No se pudo guardar") });
+      } finally {
+        onProgress?.(++done, list.length);
+      }
+    }));
+  }
+  return { ok, failed };
 }
 
 export function subscribeSubcategories(cb) {
@@ -919,7 +1335,7 @@ export function subscribeProducts(cb) {
   let unsub = noopUnsub;
   (async () => {
     const demo = await isDemo();
-    if (demo) { cb(DEMO_PRODUCTS); return; }
+    if (demo) { unsub = subscribeDemoCatalog((c) => c.products, cb); return; }
     const s = await sb();
     if (!s) { cb([]); return; }
     try {
@@ -980,7 +1396,18 @@ function sanitizeProductRow(r) {
  */
 export async function saveProduct(p) {
   const s = await sb();
-  if (!s) return "demo-id";
+  if (!s) {
+    // v5.12.0: en demo el producto queda guardado en este navegador
+    return updateDemoCatalog((cat) => {
+      if (p.id) {
+        const i = cat.products.findIndex((x) => x.id === p.id);
+        if (i >= 0) { cat.products[i] = { ...cat.products[i], ...p }; return p.id; }
+      }
+      const id = p.id || demoId("pr");
+      cat.products.push({ active: true, ...p, id, createdAt: p.createdAt || Date.now() });
+      return id;
+    });
+  }
   try {
     // Detectar imagen reemplazada para borrar la huérfana
     if (p.id && p.imageUrl) {
@@ -1022,7 +1449,10 @@ export async function saveProduct(p) {
  */
 export async function deleteProduct(id) {
   const s = await sb();
-  if (!s) return;
+  if (!s) {
+    updateDemoCatalog((cat) => { cat.products = cat.products.filter((x) => x.id !== id); });
+    return;
+  }
   try {
     // 1. Obtener la imagen antes de borrar el producto, para limpiar storage
     try {
@@ -1096,7 +1526,7 @@ async function deleteStorageImageByUrl(s, imageUrl) {
  */
 export async function listProducts() {
   const demo = await isDemo();
-  if (demo) return DEMO_PRODUCTS;
+  if (demo) return loadDemoCatalog().products;
   const s = await sb();
   if (!s) return [];
   try {
@@ -1113,7 +1543,7 @@ export async function listProducts() {
  */
 export async function listCategories() {
   const demo = await isDemo();
-  if (demo) return DEMO_CATEGORIES;
+  if (demo) return loadDemoCatalog().categories;
   const s = await sb();
   if (!s) return [];
   try {
@@ -1148,12 +1578,28 @@ export function stockDocId(warehouseId, productId) {
  */
 export function subscribeStock(warehouseId, cb) {
   let unsub = noopUnsub;
+  let last = null;       // filas tal como llegan (nube / caché / demo)
+  let stopped = false;
+  let refreshFn = null;
+  let sig = queueSignature(readQueue());
+  // v5.13.0: el stock que ve el vendedor descuenta las ventas que siguen en
+  // cola DE ESTE almacén (hechas sin conexión) → no vende lo que ya salió.
+  const emit = () => { if (!stopped && last) cb(applyPendingToStock(last, readQueue(), warehouseId)); };
+  const unsubQueue = subscribeQueue((q) => {
+    const nextSig = queueSignature(q);
+    const changed = nextSig !== sig;
+    sig = nextSig;
+    // Si entró/salió una venta y hay red, se relee el stock real de la nube
+    if (changed && refreshFn && isOnlineNow()) refreshFn();
+    else emit();
+  });
   (async () => {
     const demo = await isDemo();
-    if (demo) { cb(DEMO_STOCK.filter((s) => s.warehouseId === warehouseId)); return; }
+    if (demo) { last = DEMO_STOCK.filter((s) => s.warehouseId === warehouseId); emit(); return; }
     const s = await sb();
-    if (!s) { cb([]); return; }
+    if (!s) { last = []; emit(); return; }
     try {
+      refreshFn = refresh;
       await refresh();
       const channel = s.channel(`stock-${warehouseId}-ch`);
       channel.on("postgres_changes",
@@ -1164,20 +1610,21 @@ export function subscribeStock(warehouseId, cb) {
       unsub = () => { try { s.client.removeChannel(channel); } catch {} };
     } catch (err) {
       console.error("subscribeStock failed:", err);
-      cb([]);
+      if (!last) { last = []; emit(); }
     }
     async function refresh() {
       try {
         const { data, error } = await s.from("stock").select("*").eq("warehouse_id", warehouseId);
         if (error) throw error;
-        cb(rows(data));
+        last = rows(data);
       } catch (err) {
         console.error("refresh stock failed:", err);
-        cb([]);
+        if (!last) last = []; // se conserva el último stock bueno
       }
+      emit();
     }
   })();
-  return () => unsub();
+  return () => { stopped = true; unsubQueue(); unsub(); };
 }
 
 /**
@@ -1286,7 +1733,7 @@ export async function deductSaleStockAtomic(sale) {
  */
 export async function listStock(warehouseId) {
   const demo = await isDemo();
-  if (demo) return warehouseId ? DEMO_STOCK.filter((s) => s.warehouseId === warehouseId) : DEMO_STOCK;
+  if (demo) return warehouseId ? applyPendingToStock(DEMO_STOCK.filter((s) => s.warehouseId === warehouseId), readQueue(), warehouseId) : DEMO_STOCK;
   const s = await sb();
   if (!s) return [];
   try {
@@ -1294,7 +1741,8 @@ export async function listStock(warehouseId) {
     if (warehouseId) query = query.eq("warehouse_id", warehouseId);
     const { data, error } = await query;
     if (error) throw error;
-    return rows(data);
+    // v5.13.0: descontar las ventas en cola de ESTE almacén (solo con filtro)
+    return warehouseId ? applyPendingToStock(rows(data), readQueue(), warehouseId) : rows(data);
   } catch {
     return [];
   }
@@ -1338,18 +1786,35 @@ export async function listStockMovements(filters = {}) {
  */
 export function subscribeSales(cb, filters = {}) {
   let unsub = noopUnsub;
+  let last = null;
+  let stopped = false;
+  let refreshFn = null;
+  let sig = queueSignature(readQueue());
+  // v5.13.0: las ventas que siguen en cola en ESTE equipo aparecen en la
+  // lista marcadas "pendiente de subir" — solo si cumplen el filtro (p. ej.
+  // el almacén): nunca se muestran en la lista de otro almacén.
+  const emit = () => { if (!stopped && last) cb(mergePendingSales(last, readQueue(), filters)); };
+  const unsubQueue = subscribeQueue((q) => {
+    const nextSig = queueSignature(q);
+    const changed = nextSig !== sig;
+    sig = nextSig;
+    if (changed && refreshFn && isOnlineNow()) refreshFn();
+    else emit();
+  });
   (async () => {
     const demo = await isDemo();
     if (demo) {
       let items = [...DEMO_SALES];
       if (filters.warehouseId) items = items.filter((s) => s.warehouseId === filters.warehouseId);
       items.sort((a, b) => b.createdAt - a.createdAt);
-      cb(items);
+      last = items;
+      emit();
       return;
     }
     const s = await sb();
-    if (!s) { cb([]); return; }
+    if (!s) { last = []; emit(); return; }
     try {
+      refreshFn = refresh;
       await refresh();
       const channelName = `sales-${filters.warehouseId || "all"}-ch`;
       const channel = s.channel(channelName);
@@ -1360,7 +1825,7 @@ export function subscribeSales(cb, filters = {}) {
       unsub = () => { try { s.client.removeChannel(channel); } catch {} };
     } catch (err) {
       console.error("subscribeSales failed:", err);
-      cb([]);
+      if (!last) { last = []; emit(); }
     }
     async function refresh() {
       try {
@@ -1375,14 +1840,15 @@ export function subscribeSales(cb, filters = {}) {
         if (filters.from) items = items.filter((i) => i.createdAt >= filters.from);
         if (filters.to) items = items.filter((i) => i.createdAt <= filters.to);
         if (filters.status) items = items.filter((i) => i.status === filters.status);
-        cb(items);
+        last = items;
       } catch (err) {
         console.error("refresh sales failed:", err);
-        cb([]);
+        if (!last) last = []; // se conserva la última lista buena
       }
+      emit();
     }
   })();
-  return () => unsub();
+  return () => { stopped = true; unsubQueue(); unsub(); };
 }
 
 /**
@@ -1400,10 +1866,10 @@ export async function listSales(filters = {}) {
     if (filters.from) items = items.filter((s) => s.createdAt >= filters.from);
     if (filters.to) items = items.filter((s) => s.createdAt <= filters.to);
     items.sort((a, b) => b.createdAt - a.createdAt);
-    return items;
+    return mergePendingSales(items, readQueue(), filters);
   }
   const s = await sb();
-  if (!s) return [];
+  if (!s) return mergePendingSales([], readQueue(), filters);
   try {
     let query = s.from("sales").select("*");
     if (filters.warehouseId) query = query.eq("warehouse_id", filters.warehouseId);
@@ -1419,9 +1885,10 @@ export async function listSales(filters = {}) {
     if (filters.from) items = items.filter((i) => i.createdAt >= filters.from);
     if (filters.to) items = items.filter((i) => i.createdAt <= filters.to);
     if (filters.status) items = items.filter((i) => i.status === filters.status);
-    return items;
+    // v5.13.0: + ventas aún en cola de este equipo que cumplan el filtro
+    return mergePendingSales(items, readQueue(), filters);
   } catch {
-    return [];
+    return mergePendingSales([], readQueue(), filters);
   }
 }
 
@@ -1535,6 +2002,49 @@ export async function saveSale(sale) {
   } catch (err) {
     console.error("saveSale failed:", err);
     throw err;
+  }
+}
+
+/**
+ * v5.13.0 — Sube UNA venta de la cola con la RPC `register_sale`
+ * (supabase/migration-v5.13-offline-sales.sql): guarda la venta y descuenta
+ * el stock de SU almacén en UNA sola transacción, y es idempotente por
+ * client_ref (si la venta ya estaba, no guarda ni descuenta nada otra vez).
+ * Así un reintento tras un corte de red nunca duplica la venta ni el stock.
+ *
+ * Lanza Error code="RPC_MISSING" si la base de datos aún no tiene la RPC
+ * (el llamador usa entonces el método anterior).
+ *
+ * @param {Sale} sale
+ * @param {{timeoutMs?: number}} [opts]
+ * @returns {Promise<{ok: boolean, duplicate: boolean, sale_id?: string, deducted?: number, shortages?: Array}>}
+ */
+export async function registerSaleRemote(sale, { timeoutMs = 20000 } = {}) {
+  const s = await sb();
+  if (!s) {
+    const e = new Error("RPC_MISSING");
+    e.code = "RPC_MISSING";
+    throw e;
+  }
+  const row = sanitizeSaleRow(toRow({ ...sale, syncedAt: Date.now() }));
+  const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  try {
+    let q = s.client.rpc("register_sale", { p_sale: row });
+    if (ctrl && typeof q.abortSignal === "function") q = q.abortSignal(ctrl.signal);
+    const { data, error } = await q;
+    if (error) {
+      const msg = String(error.message || "");
+      if (error.code === "PGRST202" || /could not find the function|schema cache|function public\.register_sale.* does not exist/i.test(msg)) {
+        const e = new Error("RPC_MISSING");
+        e.code = "RPC_MISSING";
+        throw e;
+      }
+      throw error;
+    }
+    return data || { ok: true, duplicate: false, shortages: [] };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -2325,7 +2835,7 @@ export async function listManagers() {
     });
   }
   const s = await sb();
-  if (!s) return [];
+  if (!s) return mirrorLoad("managers") || [];
   try {
     // Select managers + join warehouses para LOCAL
     const { data, error } = await s
@@ -2337,7 +2847,7 @@ export async function listManagers() {
       .order("created_at", { ascending: true });
     if (error) throw error;
     // Aplanar el join
-    return (data || []).map((row) => {
+    const list = (data || []).map((row) => {
       const r = rows([row])[0];
       // El join retorna warehouse como objeto o null
       const wh = row.warehouse;
@@ -2351,9 +2861,11 @@ export async function listManagers() {
         warehouseCode: wh?.code || null,
       };
     });
+    mirrorSave("managers", list);
+    return list;
   } catch (err) {
     console.error("listManagers failed:", err);
-    return [];
+    return mirrorLoad("managers") || []; // v5.13.0: sin conexión, últimos gestores
   }
 }
 
@@ -2395,12 +2907,14 @@ export async function listCards() {
   const demo = await isDemo();
   if (demo) return DEMO_CARDS;
   const s = await sb();
-  if (!s) return [];
+  if (!s) return mirrorLoad("cards") || [];
   try {
     const { data, error } = await s.from("cards").select("*").order("created_at", { ascending: true });
     if (error) throw error;
-    return rows(data);
-  } catch { return []; }
+    const list = rows(data);
+    mirrorSave("cards", list);
+    return list;
+  } catch { return mirrorLoad("cards") || []; } // v5.13.0: sin conexión, últimas tarjetas
 }
 
 export async function saveCard(c) {
@@ -2580,7 +3094,7 @@ export async function addCardMovement(data) {
  * Registrar automáticamente un movimiento SALE cuando se hace una venta
  * con TRANSFERENCIA a una tarjeta. Se llama desde saveSale().
  */
-async function recordCardMovementForSale(sale) {
+export async function recordCardMovementForSale(sale) {
   if (!sale.cardId || sale.paymentMethod !== "TRANSFERENCIA") return;
   const amount = sale.transferAmount || sale.paidTransfer || sale.totalAmount || 0;
   if (!amount) return;
@@ -3305,7 +3819,7 @@ export async function getAllDataForExport() {
   try {
     // Hacer todas las consultas en paralelo para optimizar
     const tables = [
-      "warehouses", "products", "categories", "subcategories", "managers",
+      "warehouses", "products", "categories", "subcategories", "brands", "managers",
       "cards", "users", "sales", "stock", "stock_movements",
       "card_movements", "stock_transfers", "commission_payouts",
       "settings", "rates", "rate_config",

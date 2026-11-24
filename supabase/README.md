@@ -56,6 +56,8 @@ Script de mantenimiento manual/ejecutable vía `pg_cron` (plan Pro):
 | `migration-v5.1.3-pin-stock.sql` | Lectura de stock para accesos por PIN (rol anon) + opcionales (movimientos, asignar almacenes a un usuario) | **⚠️ EJECUTAR en una BD existente si el stock no se ve desde el almacén (PIN)** |
 | `migration-v5.1.6-sales-pin.sql` | INSERT + SELECT de ventas para accesos por PIN (rol anon) + verificación automática | **⚠️ EJECUTAR en una BD existente si las ventas se quedan "pendientes" y nunca se suben (PIN)** |
 | `migration-v5.1.7-sales-weekend.sql` | Columnas de fin de semana faltantes en `sales` y `settings` (idempotente) | **⚠️ EJECUTAR en una BD existente si las ventas siguen fallando con PGRST204 ("Could not find the 'weekend_redirect' column")** |
+| `migration-v5.12-brands.sql` | Tabla `brands` (marcas, RLS + realtime) + MANNOL, Royal y las marcas de tus productos + tipos de producto que falten (Refrigerante, Líquido de freno, Filtros, Lubricantes, Aditivos). Idempotente | **⚠️ EJECUTAR en una BD existente para usar Admin → Marcas (v5.12)** |
+| `migration-v5.13-offline-sales.sql` | RPC `register_sale`: sube cada venta de la cola sin conexión en UNA transacción (venta + descuento de stock de SU almacén), sin duplicar aunque se reintente (por `client_ref`) y sin dejar stock negativo. Corrige `update_sale_status` (al cancelar una venta completada no devolvía el stock). Idempotente | **⚠️ EJECUTAR en una BD existente para las ventas sin conexión (v5.13)** |
 | `migration-v4-transfer-reasons.sql` | Solo motivos de transferencia | Alternativa mínima (incluida en la v5.1) |
 | `lifecycle-cleanup.sql` | Mantenimiento periódico | Cada 3-6 meses |
 

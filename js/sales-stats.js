@@ -206,3 +206,108 @@ export function aggregateClosuresReport(closures, { fromMs, toMs }) {
 
   return { perWarehouse, topProducts, totals, days };
 }
+
+// =====================================================
+// v5.10.0 — Más vendidos · mensaje de cierre · códigos de barras
+// =====================================================
+
+/**
+ * Más vendidos de un almacén: suma las unidades de cada producto en las
+ * ventas COMPLETADAS (opcionalmente solo desde `sinceMs`).
+ * @param {Array} sales
+ * @param {{limit?: number, sinceMs?: number}} [opts]
+ * @returns {Array<{productId: string, name: string, qty: number}>} de mayor a menor
+ */
+export function computeTopSellers(sales, { limit = 6, sinceMs = 0 } = {}) {
+  const agg = new Map();
+  for (const s of sales || []) {
+    if (!s || s.status !== "COMPLETADA") continue;
+    if (sinceMs && !(s.createdAt >= sinceMs)) continue;
+    for (const it of s.items || []) {
+      if (!it || !it.productId) continue;
+      const qty = Number(it.quantity) || 0;
+      if (qty <= 0) continue;
+      const prev = agg.get(it.productId) || { productId: it.productId, name: it.name || "—", qty: 0 };
+      prev.qty += qty;
+      agg.set(it.productId, prev);
+    }
+  }
+  return [...agg.values()]
+    .sort((a, b) => b.qty - a.qty || String(a.name).localeCompare(String(b.name)))
+    .slice(0, Math.max(0, limit));
+}
+
+const CLOSURE_CURR_LABEL = { USD: "USD", MN: "MN", EUR: "EUR", TRANSFERENCIA: "Transferencia" };
+
+/**
+ * Texto del cierre de caja listo para WhatsApp (*negritas* de WhatsApp).
+ * Usa los MISMOS montos que la tarjeta "Cierre de caja" (stats de computeClosureStats).
+ * @param {object} p
+ * @param {string} p.warehouseName
+ * @param {string} [p.warehouseCode]
+ * @param {number} p.dateMs
+ * @param {object} p.stats - resultado de computeClosureStats
+ * @param {string|null} [p.closedBy] - quién cerró la caja (null = aún no se cerró)
+ * @param {(amount: number, currency: string) => string} [p.fmt] - formateador de dinero
+ */
+export function buildClosureShareText({ warehouseName, warehouseCode, dateMs, stats, closedBy = null, fmt }) {
+  const money = fmt || ((n, c) => `${(Number(n) || 0).toFixed(2)} ${c}`);
+  const st = stats || { salesCount: 0, unitsSold: 0, totalUSD: 0, byCurrency: {}, topProducts: [] };
+  let date = "";
+  try {
+    date = new Date(dateMs).toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  } catch {
+    date = new Date(dateMs).toISOString().slice(0, 10);
+  }
+  const lines = [];
+  lines.push("*MANNOL · Cierre de caja*");
+  lines.push(`${warehouseName || "Almacén"}${warehouseCode ? ` (${warehouseCode})` : ""} · ${date}`);
+  lines.push("");
+  lines.push(`Ventas: *${st.salesCount}* · Unidades: *${st.unitsSold}*`);
+  lines.push(`Total: *${money(st.totalUSD, "USD")}*`);
+  const currs = ["USD", "MN", "EUR", "TRANSFERENCIA"].filter((c) => (st.byCurrency?.[c]?.count || 0) > 0);
+  if (currs.length) {
+    lines.push("");
+    lines.push("*Por moneda*");
+    for (const c of currs) {
+      const d = st.byCurrency[c];
+      lines.push(`• ${CLOSURE_CURR_LABEL[c]}: ${money(d.amount, c)} (${d.count} venta${d.count === 1 ? "" : "s"})`);
+    }
+  }
+  if (st.topProducts?.length) {
+    lines.push("");
+    lines.push("*Más vendidos*");
+    st.topProducts.slice(0, 3).forEach((p, i) => lines.push(`${i + 1}. ${p.name} — ${p.qty} u`));
+  }
+  lines.push("");
+  lines.push(closedBy ? `Caja cerrada por ${closedBy}` : (st.salesCount > 0 ? "Caja pendiente de cerrar" : "Sin ventas hoy"));
+  return lines.join("\n");
+}
+
+/**
+ * Normaliza un código escaneado o escrito: sin espacios, guiones ni puntos; en mayúsculas.
+ * @param {string} code
+ */
+export function normalizeCode(code) {
+  return String(code ?? "").trim().toUpperCase().replace(/[\s\-_.]/g, "");
+}
+
+/**
+ * Producto cuyo SKU coincide con el código escaneado (el SKU guarda el código de barras).
+ * Tolera EAN-13 con 0 inicial ↔ UPC-A (12 dígitos) y SKUs escritos con guiones/espacios.
+ * @param {Array} products
+ * @param {string} code
+ * @returns {object|null}
+ */
+export function findProductByCode(products, code) {
+  const c = normalizeCode(code);
+  if (!c) return null;
+  const variants = new Set([c]);
+  if (/^\d{13}$/.test(c) && c.startsWith("0")) variants.add(c.slice(1));
+  if (/^\d{12}$/.test(c)) variants.add("0" + c);
+  for (const p of products || []) {
+    const sku = normalizeCode(p?.sku);
+    if (sku && variants.has(sku)) return p;
+  }
+  return null;
+}

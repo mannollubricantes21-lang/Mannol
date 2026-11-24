@@ -27,37 +27,41 @@ const COLORS = {
  * @param {Object} opts - { height, max, formatValue }
  */
 export function barChart(data, opts = {}) {
+  // v5.11.0: mismas razones que lineChart → etiquetas en HTML (antes texto SVG
+  // estirado e ilegible) y líneas guía de 1 px reales (vector-effect).
   const height = opts.height || 160;
   const maxVal = opts.max || Math.max(...data.map((d) => d.value), 1);
   const width = 100;
-  const barWidth = data.length > 0 ? (width / data.length) * 0.7 : 0;
-  const gap = data.length > 0 ? (width / data.length) * 0.3 : 0;
-  const padding = 4;
-  const chartHeight = height - 20; // leave space for labels (más compacto)
+  const n = data.length || 1;
+  const slot = width / n;
+  const barWidth = slot * 0.62;
+  const labelsH = 20;
+  const chartHeight = Math.max(40, height - labelsH);
+  const padTop = 4;
+  const fmt = (v) => (opts.formatValue ? opts.formatValue(v) : v);
 
   // Líneas guía horizontales (grid) a 25%, 50%, 75%, 100%
   const gridLines = [0.25, 0.5, 0.75, 1].map((p) => {
-    const y = chartHeight - (chartHeight - padding * 2) * p;
-    return `<line x1="0" y1="${y}" x2="${width}" y2="${y}" stroke="var(--border)" stroke-width="0.15" stroke-dasharray="0.5 0.5" opacity="0.5"/>`;
+    const y = Math.round((chartHeight - (chartHeight - padTop) * p) * 100) / 100;
+    return `<line x1="0" y1="${y}" x2="${width}" y2="${y}" stroke="var(--border)" stroke-width="1" stroke-dasharray="3 4" vector-effect="non-scaling-stroke"/>`;
   }).join("");
 
   const bars = data.map((d, i) => {
-    const barHeight = (d.value / maxVal) * (chartHeight - padding * 2);
-    const x = i * (barWidth + gap) + gap / 2;
-    const y = chartHeight - barHeight;
-    const color = d.color || COLORS.primary;
-    return `
-      <rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" rx="0.6" fill="${color}" opacity="0.88">
-        <title>${d.label}: ${opts.formatValue ? opts.formatValue(d.value) : d.value}</title>
-      </rect>
-      <text x="${x + barWidth / 2}" y="${chartHeight + 3}" text-anchor="middle" font-size="2.8" font-weight="600" fill="${COLORS.textMuted}">${d.label}</text>
-    `;
+    const barHeight = Math.max(d.value > 0 ? 1.5 : 0, (d.value / maxVal) * (chartHeight - padTop));
+    const x = Math.round((i * slot + (slot - barWidth) / 2) * 100) / 100;
+    const y = Math.round((chartHeight - barHeight) * 100) / 100;
+    return `<rect x="${x}" y="${y}" width="${Math.round(barWidth * 100) / 100}" height="${Math.round(barHeight * 100) / 100}" rx="0.6" fill="${d.color || COLORS.primary}" opacity="0.9"><title>${d.label}: ${fmt(d.value)}</title></rect>`;
   }).join("");
 
-  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" style="width:100%;height:${height}px;display:block">
-    ${gridLines}
-    ${bars}
-  </svg>`;
+  const labels = data.map((d) => `<span style="text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.label}</span>`).join("");
+
+  return `<div class="bar-chart">
+    <svg viewBox="0 0 ${width} ${chartHeight}" preserveAspectRatio="none" style="width:100%;height:${chartHeight}px;display:block" role="img" aria-label="${opts.ariaLabel || "Gráfico de barras"}">
+      ${gridLines}
+      ${bars}
+    </svg>
+    <div class="bar-chart-labels" style="display:grid;grid-template-columns:repeat(${n},minmax(0,1fr));margin-top:4px;font-size:0.6875rem;font-weight:600;line-height:1.2;color:${COLORS.textMuted}">${labels}</div>
+  </div>`;
 }
 
 /**
@@ -66,46 +70,57 @@ export function barChart(data, opts = {}) {
  * @param {Object} opts - { height, color }
  */
 export function lineChart(data, opts = {}) {
+  // v5.11.0: el SVG se estira a lo ancho (preserveAspectRatio="none"), así que los
+  // textos dentro del SVG salían de ~2,5 px de alto y estirados, y los puntos eran
+  // óvalos. Ahora: trazo uniforme (vector-effect), puntos redondos (trazo de largo
+  // cero con punta redonda) y las fechas como texto HTML normal debajo del gráfico.
   const height = opts.height || 160;
   const color = opts.color || COLORS.primary;
   const width = 100;
-  const padding = 4;
-  const chartHeight = height - 24;
-  const chartWidth = width - padding * 2;
+  const padX = 2;
+  const labelsH = 18;
+  const chartHeight = Math.max(40, height - labelsH);
+  const padY = 6;
 
   if (data.length === 0) return "";
   const maxVal = Math.max(...data.map((d) => d.value), 1);
   const minVal = Math.min(...data.map((d) => d.value), 0);
   const range = maxVal - minVal || 1;
+  const innerW = width - padX * 2;
 
   const points = data.map((d, i) => {
-    const x = padding + (data.length === 1 ? chartWidth / 2 : (i / (data.length - 1)) * chartWidth);
-    const y = chartHeight - ((d.value - minVal) / range) * (chartHeight - padding * 2);
+    const x = padX + (data.length === 1 ? innerW / 2 : (i / (data.length - 1)) * innerW);
+    const y = padY + (1 - (d.value - minVal) / range) * (chartHeight - padY * 2);
     return { x, y, label: d.label, value: d.value };
   });
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"}${r2(p.x)},${r2(p.y)}`).join(" ");
+  const areaD = `${pathD} L${r2(points[points.length - 1].x)},${chartHeight} L${r2(points[0].x)},${chartHeight} Z`;
+  const fmt = (v) => (opts.formatValue ? opts.formatValue(v) : v);
 
-  const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
-  const areaD = `${pathD} L${points[points.length - 1].x},${chartHeight} L${points[0].x},${chartHeight} Z`;
+  // Puntos solo si no son demasiados (con 90/365 días quedaba una línea de bolitas)
+  const dots = points.length <= 45 ? points.map((p) => `
+    <path d="M${r2(p.x)},${r2(p.y)}h0" stroke="${color}" stroke-width="5" stroke-linecap="round" vector-effect="non-scaling-stroke">
+      <title>${p.label}: ${fmt(p.value)}</title>
+    </path>`).join("") : "";
 
-  const dots = points.map((p) => `
-    <circle cx="${p.x}" cy="${p.y}" r="1.2" fill="${color}" stroke="var(--bg)" stroke-width="0.5">
-      <title>${p.label}: ${opts.formatValue ? opts.formatValue(p.value) : p.value}</title>
-    </circle>
-  `).join("");
-
+  const step = Math.max(1, Math.ceil(points.length / 6));
   const labels = points.map((p, i) => {
-    // Only show every Nth label to avoid clutter
-    const step = Math.max(1, Math.floor(points.length / 6));
-    if (i % step !== 0) return "";
-    return `<text x="${p.x}" y="${height - 2}" text-anchor="middle" font-size="2.5" fill="${COLORS.textMuted}">${p.label}</text>`;
+    const last = i === points.length - 1;
+    if (i % step !== 0 && !last) return "";
+    if (!last && points.length - 1 - i < step * 0.6) return ""; // no pisar la última fecha
+    const shift = i === 0 ? "0" : last ? "-100%" : "-50%";
+    return `<span style="position:absolute;left:${r2(p.x)}%;transform:translateX(${shift});white-space:nowrap">${p.label}</span>`;
   }).join("");
 
-  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" style="width:100%;height:${height}px;display:block">
-    <path d="${areaD}" fill="${color}" opacity="0.1"/>
-    <path d="${pathD}" stroke="${color}" stroke-width="0.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    ${dots}
-    ${labels}
-  </svg>`;
+  return `<div class="line-chart">
+    <svg viewBox="0 0 ${width} ${chartHeight}" preserveAspectRatio="none" style="width:100%;height:${chartHeight}px;display:block;overflow:visible" role="img" aria-label="${opts.ariaLabel || "Gráfico de línea"}">
+      <path d="${areaD}" fill="${color}" opacity="0.12"/>
+      <path d="${pathD}" stroke="${color}" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+      ${dots}
+    </svg>
+    <div class="line-chart-labels" style="position:relative;height:${labelsH - 4}px;margin-top:4px;font-size:0.6875rem;line-height:1;color:${COLORS.textMuted}">${labels}</div>
+  </div>`;
 }
 
 /**
@@ -133,19 +148,25 @@ export function sparkline(values, opts = {}) {
     return `${x.toFixed(2)},${y.toFixed(2)}`;
   });
   const pathD = `M${points.join(" L")}`;
-  const areaD = `${pathD} L${points[points.length - 1]},${height} L${points[0]},${height} Z`;
+  // v5.9.0: antes usaba el par "x,y" completo → "L97.00,17.04,30" (path inválido,
+  // el relleno no se dibujaba y la consola mostraba errores). Solo va la x.
+  const firstX = points[0].split(",")[0];
+  const lastX = points[points.length - 1].split(",")[0];
+  const areaD = `${pathD} L${lastX},${height} L${firstX},${height} Z`;
 
   // Puntos interactivos: muestran label (fecha) y valor al hover/toque
   const fmt = opts.formatValue || ((v) => v);
   const dots = data.map((v, i) => {
     const [x, y] = points[i].split(",");
     const label = opts.labels?.[i] != null ? `${opts.labels[i]}: ` : "";
-    return `<circle cx="${x}" cy="${y}" r="1.7" fill="${color}" stroke="var(--bg)" stroke-width="0.4" opacity="0.9"><title>${label}${fmt(v)}</title></circle>`;
+    // Punto redondo aunque el SVG se estire (preserveAspectRatio="none"): trazo de
+    // longitud cero con extremo redondo y grosor fijo en píxeles (antes eran óvalos).
+    return `<path d="M${x},${y}h0" stroke="${color}" stroke-width="4" stroke-linecap="round" vector-effect="non-scaling-stroke" opacity="0.9"><title>${label}${fmt(v)}</title></path>`;
   }).join("");
 
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" style="width:100%;height:${height}px;display:block" aria-hidden="true">
     <path d="${areaD}" fill="${color}" opacity="0.12"/>
-    <path d="${pathD}" stroke="${color}" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="${pathD}" stroke="${color}" stroke-width="1.75" fill="none" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
     ${dots}
   </svg>`;
 }
@@ -183,11 +204,18 @@ export function donutChart(data, opts = {}) {
     return seg;
   }).join("");
 
-  return `<svg viewBox="0 0 ${size} ${size}" style="width:${size}px;height:${size}px;display:block">
+  // v5.11.0: el texto del centro se medía como si el gráfico fuera de 100 unidades
+  // (7–8 px, ilegible). Ahora escala con el tamaño y se achica si la cifra es larga.
+  const label = String(opts.centerLabel || "");
+  const inner = (radius - thickness / 2) * 2;
+  const fsMain = Math.max(9, Math.min(Math.round(size * 0.15), Math.floor((inner * 0.86) / Math.max(1, label.length * 0.6))));
+  const fsSub = Math.max(9, Math.round(size * 0.08));
+  const yMain = center + (opts.centerSubLabel ? fsMain * 0.18 : fsMain * 0.36);
+  return `<svg viewBox="0 0 ${size} ${size}" style="width:${size}px;height:${size}px;display:block" role="img" aria-label="${label} ${opts.centerSubLabel || ""}">
     <circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="${COLORS.bgSoft}" stroke-width="${thickness}"/>
     ${segments}
-    <text x="${center}" y="${center + 1}" text-anchor="middle" font-size="${size < 140 ? 7 : 8}" font-weight="bold" fill="var(--text)">${opts.centerLabel || ""}</text>
-    <text x="${center}" y="${center + 7}" text-anchor="middle" font-size="${size < 140 ? 3.2 : 3.6}" fill="${COLORS.textMuted}">${opts.centerSubLabel || ""}</text>
+    <text x="${center}" y="${yMain}" text-anchor="middle" font-size="${fsMain}" font-weight="bold" fill="var(--text)">${label}</text>
+    ${opts.centerSubLabel ? `<text x="${center}" y="${yMain + fsSub + 2}" text-anchor="middle" font-size="${fsSub}" fill="${COLORS.textMuted}">${opts.centerSubLabel}</text>` : ""}
   </svg>`;
 }
 

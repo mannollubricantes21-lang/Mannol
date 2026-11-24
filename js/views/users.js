@@ -32,7 +32,7 @@ export function mountUsersView(container, navigate) {
 
         <div class="card">
           <div class="overflow-x-auto">
-            <table class="table">
+            <table class="table table-cards">
               <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th>
                 <th>Almacenes</th><th class="text-center">Estado</th>
                 <th class="text-right">Acciones</th></tr></thead>

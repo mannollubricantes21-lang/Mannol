@@ -52,7 +52,7 @@ export function mountCatalogView(container, navigate) {
 
           <div class="card">
             <div class="overflow-x-auto">
-              <table class="table">
+              <table class="table table-cards">
                 <thead><tr><th>Producto</th><th>SKU</th><th>Categoría</th>
                   <th class="text-right">Precio USD</th><th class="text-center">Estado</th>
                   <th class="text-right">Acciones</th></tr></thead>
@@ -172,8 +172,12 @@ export function mountCatalogView(container, navigate) {
         const c = categories.find((x) => x.id === btn.dataset.deleteCategory);
         if (!c) return;
         confirmDialog(`¿Eliminar la categoría "${c.name}"? Los productos asociados no se borrarán pero quedarán sin categoría.`, async () => {
-          await deleteCategory(c.id);
-          toast("Categoría eliminada", "success");
+          try {
+            await deleteCategory(c.id);
+            toast("Categoría eliminada", "success");
+          } catch (err) {
+            toast(err.message || "No se pudo eliminar", "error");
+          }
         });
       });
     });
@@ -343,13 +347,18 @@ export function mountCatalogView(container, navigate) {
     document.querySelector("#c-save").addEventListener("click", async () => {
       const name = document.querySelector("#c-name").value.trim();
       if (!name) { toast("Nombre obligatorio", "error"); return; }
-      await saveCategory({
-        ...(c.id ? { id: c.id } : {}),
-        name,
-        slug: name.toLowerCase().replace(/\s+/g, "-"),
-        icon: document.querySelector("#c-icon").value || null,
-        order: parseInt(document.querySelector("#c-order").value) || 0,
-      });
+      try {
+        await saveCategory({
+          ...(c.id ? { id: c.id } : {}),
+          name,
+          slug: name.toLowerCase().replace(/\s+/g, "-"),
+          icon: document.querySelector("#c-icon").value || null,
+          order: parseInt(document.querySelector("#c-order").value) || 0,
+        });
+      } catch (err) {
+        toast(err.message || "No se pudo guardar", "error");
+        return;
+      }
       toast("Categoría guardada", "success");
       close();
     });

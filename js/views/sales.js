@@ -4,10 +4,14 @@
 // =====================================================
 
 import { getStore } from "../store.js";
-import { subscribeProducts, subscribeStock, listCards, listManagers, saveSale, adjustStock, getWholesaleTier, getSuggestedPricePerBox, getSuggestedVendorCommissionPerBox, getSuggestedGestorCommissionPerBox, isWholesaleProduct, listWarehouses, resolveEffectiveWarehouse, sumCartCommissions } from "../db.js";
-import { formatMoney, generateSaleId, CURRENCIES, CURRENCY_LABELS, CARD_BRANDS, getRate } from "../currency.js";
-import { enqueueSale, generateClientRef } from "../offline-sync.js";
+import { subscribeProducts, subscribeStock, subscribeCategories, subscribeBrands, listCards, listManagers, listSales, isUuid, getWholesaleTier, getSuggestedPricePerBox, getSuggestedVendorCommissionPerBox, getSuggestedGestorCommissionPerBox, isWholesaleProduct, listWarehouses, resolveEffectiveWarehouse, sumCartCommissions } from "../db.js";
+import { formatMoney, generateSaleId, generateSaleCode, CURRENCIES, CURRENCY_LABELS, CARD_BRANDS, getRate } from "../currency.js";
+import { enqueueSale, generateClientRef, requestSync, getPendingCount } from "../offline-sync.js";
+import { isSupabaseConfiguredAsync } from "../supabase.js";
 import { toast, icon, showModal, closeModal, esc, confirmDialog } from "../ui.js";
+import { computeTopSellers, findProductByCode } from "../sales-stats.js";
+import { openScanner, canUseCamera } from "../barcode-scanner.js";
+import { buildCatalogFacets, filterCatalog, NO_CATEGORY } from "../catalog-facets.js";
 
 const CURRENCY_META = {
   USD: { icon: "$", label: "Efectivo", sublabel: "Dólar", color: "var(--accent-usd)" },
@@ -34,6 +38,12 @@ export function mountSalesView(container, navigate) {
   let selectedCardId = "";
   let transferAmount = 0;
   let catalogOpen = false;
+  // v5.12.0: filtros del catálogo por tipo y marca (se recuerdan mientras dure la venta)
+  let catalogCategories = [];
+  let catalogBrands = [];
+  let catFilter = "";   // "" = todos · id de la categoría principal · NO_CATEGORY
+  let brandFilter = ""; // "" = todas · nombre de la marca normalizado
+  let catalogListRenderer = null; // vuelve a dibujar el catálogo abierto (datos en vivo)
   // v5.4.0: búsqueda rápida inline + calculadora de vuelto
   let quickSearch = "";
   let paidWith = 0;
@@ -44,6 +54,11 @@ export function mountSalesView(container, navigate) {
   let wholesalePricePerBox = 0; // precio por caja (editable)
   let wholesaleVendorCommissionPerBox = 0; // comisión vendedor por caja (editable)
   let wholesaleGestorCommissionPerBox = 0; // comisión gestor por caja (editable)
+  // v5.8 (móvil): observer de la barra de cobro (declarado arriba: las
+  // suscripciones pueden llamar a render() antes de llegar más abajo)
+  let checkoutObserver = null;
+  // v5.10.0: más vendidos del almacén (ids, de mayor a menor)
+  let topSellerIds = [];
 
   // Cargar datos
   // Flag para evitar re-fetch si la vista se monta varias veces
@@ -65,12 +80,42 @@ export function mountSalesView(container, navigate) {
   const unsubProducts = subscribeProducts((items) => {
     products = items.filter((p) => p.active !== false);
     render();
+    catalogListRenderer?.();
   });
   const warehouse = store.getState().currentWarehouse;
   const unsubStock = warehouse ? subscribeStock(warehouse.id, (items) => {
     stock = items;
     render();
+    catalogListRenderer?.();
   }) : () => {};
+  // v5.12.0: tipos y marcas en vivo — lo que el admin crea u ordena aparece aquí al instante
+  const unsubCategories = subscribeCategories((items) => { catalogCategories = items || []; catalogListRenderer?.(); });
+  const unsubBrands = subscribeBrands((items) => { catalogBrands = items || []; catalogListRenderer?.(); });
+
+  // v5.10.0: más vendidos de los últimos 30 días (una consulta; caché local 30 min)
+  const TOP_TTL_MS = 30 * 60 * 1000;
+  const topKey = warehouse ? `mannol_top_sellers_${warehouse.id}` : null;
+  if (topKey) {
+    let fresh = false;
+    try {
+      const cached = JSON.parse(localStorage.getItem(topKey) || "null");
+      if (cached && Array.isArray(cached.ids)) {
+        topSellerIds = cached.ids;
+        fresh = Date.now() - (cached.ts || 0) < TOP_TTL_MS;
+      }
+    } catch {}
+    if (!fresh) {
+      listSales({ warehouseId: warehouse.id, from: Date.now() - 30 * 86400000, status: "COMPLETADA" })
+        .then((list) => {
+          const top = computeTopSellers(list, { limit: 10 });
+          if (!top.length) return;
+          topSellerIds = top.map((t) => t.productId);
+          try { localStorage.setItem(topKey, JSON.stringify({ ts: Date.now(), ids: topSellerIds })); } catch {}
+          render();
+        })
+        .catch(() => {});
+    }
+  }
 
   const onOnline = () => { isOnline = true; render(); };
   const onOffline = () => { isOnline = false; render(); };
@@ -97,7 +142,8 @@ export function mountSalesView(container, navigate) {
   function render() {
     const user = store.getState().currentUser;
     const wh = store.getState().currentWarehouse;
-    const offlineQueue = store.getState().offlineQueue;
+    // v5.13.0: solo las ventas en cola de ESTE almacén
+    const pendingHere = wh ? getPendingCount(wh.id) : 0;
 
     if (!user || !wh) {
       container.innerHTML = `<div class="empty-state">Selecciona un almacén en el menú lateral</div>`;
@@ -113,7 +159,7 @@ export function mountSalesView(container, navigate) {
           </div>
           <div class="flex items-center gap-2">
             <span class="badge ${isOnline ? "badge-accent" : "badge-warning"}">${isOnline ? "En línea" : "Offline"}</span>
-            ${offlineQueue.length > 0 ? `<span class="badge badge-warning">${icon("clock", 12)} ${offlineQueue.length} pendientes</span>` : ""}
+            ${pendingHere > 0 ? `<span class="badge badge-warning">${icon("clock", 12)} ${pendingHere} por subir</span>` : ""}
           </div>
         </div>
 
@@ -122,7 +168,7 @@ export function mountSalesView(container, navigate) {
             <div class="sync-banner-icon">${icon("wifiOff", 18)}</div>
             <div class="sync-banner-content">
               <div class="sync-banner-title">Sin conexión</div>
-              <div class="sync-banner-sub">${offlineQueue.length > 0 ? `${offlineQueue.length} venta(s) en cola · Se sincronizarán al recuperar internet` : "Las ventas se guardarán localmente"}</div>
+              <div class="sync-banner-sub">${pendingHere > 0 ? `${pendingHere} venta(s) de ${esc(wh.code)} esperando conexión · se subirán solas` : "Puedes seguir vendiendo: las ventas se guardan en este equipo y se suben solas"}</div>
             </div>
           </div>
         ` : ''}
@@ -130,10 +176,10 @@ export function mountSalesView(container, navigate) {
         <!-- Toggle Retail / Mayorista -->
         <div class="tabs-list" style="grid-template-columns: 1fr 1fr;margin-bottom:0">
           <button class="tabs-trigger ${saleType === 'RETAIL' ? 'active' : ''}" data-sale-type="RETAIL">
-            ${icon("cart", 14)} Venta retail (por unidad)
+            ${icon("cart", 14)} Por unidad
           </button>
           <button class="tabs-trigger ${saleType === 'WHOLESALE' ? 'active' : ''}" data-sale-type="WHOLESALE">
-            ${icon("boxes", 14)} Venta mayorista (por caja)
+            ${icon("boxes", 14)} Mayorista · caja
           </button>
         </div>
 
@@ -149,9 +195,10 @@ export function mountSalesView(container, navigate) {
         <div>
           <label class="label flex items-center gap-1">${icon("boxes", 14)} Productos de la venta</label>
           <!-- v5.4.0: búsqueda rápida — filtra al escribir y añade con un toque (Enter = primer resultado) -->
-          <div style="position:relative;margin-top:0.375rem">
+          <div class="${canUseCamera() ? "input-scan" : ""}" style="position:relative;margin-top:0.375rem">
             <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)">${icon("search", 14)}</span>
             <input class="input" id="quick-search" placeholder="Buscar y añadir rápido (ej: 5W-30)…" value="${esc(quickSearch)}" style="padding-left:2.1rem" autocomplete="off" />
+            ${canUseCamera() ? `<button type="button" class="scan-btn" id="scan-sale-btn" aria-label="Escanear código de barras" title="Escanear código de barras">${icon("scan", 18)}</button>` : ""}
             ${quickSearch ? `
               <div id="quick-results" style="position:absolute;left:0;right:0;top:calc(100% + 0.25rem);z-index:30;display:flex;flex-direction:column;gap:0.25rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);padding:0.375rem;box-shadow:var(--shadow-md);max-height:16rem;overflow-y:auto">
                 ${quickMatches().length === 0
@@ -169,6 +216,7 @@ export function mountSalesView(container, navigate) {
               </div>
             ` : ''}
           </div>
+          ${renderTopSellers()}
           ${cart.length === 0 ? `
             <button class="btn btn-primary btn-block btn-lg" id="open-catalog-btn" style="justify-content:space-between">
               <span class="flex items-center gap-2">${icon("boxes", 18)} Abrir catálogo</span>
@@ -211,7 +259,7 @@ export function mountSalesView(container, navigate) {
 
         ${(saleType === "WHOLESALE" ? wholesaleProduct : cart.length > 0) ? `
           <!-- Selector de modo de pago -->
-          <div>
+          <div id="payment-section">
             <label class="label">Moneda / Método de pago</label>
             <div class="tabs-list" style="grid-template-columns: 1fr 1fr;margin-bottom:0.75rem">
               <button class="tabs-trigger ${paymentMode === 'SINGLE' ? 'active' : ''}" data-mode="SINGLE">Una moneda</button>
@@ -224,7 +272,7 @@ export function mountSalesView(container, navigate) {
                   <button class="payment-card ${selectedCurrency === curr ? 'selected' : ''}" data-currency="${curr}" style="display:flex;align-items:center;gap:0.75rem;padding:1rem;border:2px solid ${selectedCurrency === curr ? 'var(--primary)' : 'var(--border)'};border-radius:var(--radius-lg);background:${selectedCurrency === curr ? 'var(--primary-tint)' : 'var(--bg-elevated)'};cursor:pointer;text-align:left">
                     <span style="font-size:1.5rem;font-weight:700;color:${CURRENCY_META[curr].color}">${CURRENCY_META[curr].icon}</span>
                     <div>
-                      <div class="font-semibold text-sm">${curr}</div>
+                      <div class="font-semibold text-sm">${curr === "TRANSFERENCIA" ? "TRANSF." : curr}</div>
                       <div class="text-xs text-muted">${CURRENCY_META[curr].label}</div>
                     </div>
                   </button>
@@ -283,9 +331,77 @@ export function mountSalesView(container, navigate) {
           </div>
         ` : ''}
       </div>
+      ${hasCheckoutItems() ? `
+        <!-- v5.8 (móvil): total + "Cobrar" siempre a mano mientras se arma la venta -->
+        <div class="checkout-bar" id="checkout-bar" role="region" aria-label="Resumen de la venta">
+          <div class="checkout-bar-info">
+            <span class="checkout-bar-count">${checkoutCountLabel()}</span>
+            <span class="checkout-bar-total">${formatMoney(cartTotal(), "USD")}</span>
+          </div>
+          <button type="button" class="checkout-bar-btn" id="checkout-bar-btn">
+            Cobrar ${icon("arrowDown", 16)}
+          </button>
+        </div>
+      ` : ''}
     `;
 
     wireEvents();
+    setupCheckoutBar();
+  }
+
+  // ===== v5.8 (móvil): barra de cobro pegajosa =====
+  // Antes el total y "Registrar venta" quedaban al final de un formulario
+  // largo (gestor, carrito, nota, moneda, vuelto): había que hacer scroll a
+  // ciegas para cobrar. La barra muestra el total siempre y se oculta sola
+  // cuando el botón real de registrar ya está a la vista.
+  function hasCheckoutItems() {
+    return saleType === "WHOLESALE" ? !!wholesaleProduct : cart.length > 0;
+  }
+
+  function checkoutCountLabel() {
+    if (saleType === "WHOLESALE") {
+      return `${wholesaleBoxes} caja${wholesaleBoxes === 1 ? "" : "s"} · mayorista`;
+    }
+    const units = cart.reduce((sum, i) => sum + i.quantity, 0);
+    return `${units} producto${units === 1 ? "" : "s"} · ${cart.length} línea${cart.length === 1 ? "" : "s"}`;
+  }
+
+  function teardownCheckoutBar() {
+    if (checkoutObserver) { try { checkoutObserver.disconnect(); } catch {} checkoutObserver = null; }
+    document.body.classList.remove("has-checkout-bar");
+  }
+
+  function setupCheckoutBar() {
+    teardownCheckoutBar();
+    const bar = container.querySelector("#checkout-bar");
+    if (!bar) return;
+    const target = container.querySelector("#register-sale-btn");
+    const setVisible = (visible) => {
+      bar.classList.toggle("is-hidden", !visible);
+      document.body.classList.toggle("has-checkout-bar", visible);
+    };
+    // Estado inicial síncrono (evita parpadeo en cada re-render)
+    const targetInView = () => {
+      if (!target) return false;
+      const r = target.getBoundingClientRect();
+      return r.top < window.innerHeight - 72 && r.bottom > 0;
+    };
+    setVisible(!targetInView());
+    if (target && "IntersectionObserver" in window) {
+      checkoutObserver = new IntersectionObserver((entries) => {
+        const e = entries[entries.length - 1];
+        setVisible(!e.isIntersecting);
+      }, { rootMargin: "0px 0px -72px 0px" });
+      checkoutObserver.observe(target);
+    }
+    bar.querySelector("#checkout-bar-btn")?.addEventListener("click", () => {
+      const section = container.querySelector("#payment-section");
+      if (!section) return;
+      section.scrollIntoView({ behavior: "smooth", block: "start" });
+      section.classList.remove("flash");
+      void section.offsetWidth; // reinicia la animación
+      section.classList.add("flash");
+    });
   }
 
   // ===== Sección Mayorista =====
@@ -541,6 +657,11 @@ export function mountSalesView(container, navigate) {
         }
       });
     }
+    const scanSaleBtn = container.querySelector("#scan-sale-btn");
+    if (scanSaleBtn) scanSaleBtn.addEventListener("click", openSaleScanner);
+    container.querySelectorAll("[data-top-add]").forEach((btn) => {
+      btn.addEventListener("click", () => addProduct(btn.dataset.topAdd));
+    });
     container.querySelectorAll("[data-quick-add]").forEach((btn) => {
       btn.addEventListener("click", () => {
         addProduct(btn.dataset.quickAdd);
@@ -675,11 +796,13 @@ export function mountSalesView(container, navigate) {
       title: "Catálogo de Productos",
       size: "lg",
       body: `
-        <div style="display:flex;flex-direction:column;gap:0.5rem">
+        <div class="catalog-body" style="display:flex;flex-direction:column;gap:0.5rem">
           <div style="position:relative">
-            <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)">${icon("search", 16)}</span>
-            <input class="input" id="catalog-search" placeholder="Buscar producto..." value="${search}" style="padding-left:2.25rem" />
+            <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)" aria-hidden="true">${icon("search", 16)}</span>
+            <input class="input" id="catalog-search" type="search" placeholder="Buscar producto, marca o código…" value="${esc(search)}" style="padding-left:2.25rem" aria-label="Buscar producto" autocomplete="off" />
           </div>
+          <div class="facet-row" id="facet-cats" role="group" aria-label="Filtrar por tipo" hidden></div>
+          <div class="facet-row" id="facet-brands" role="group" aria-label="Filtrar por marca" hidden></div>
           <div id="catalog-list" style="display:flex;flex-direction:column;gap:0.5rem;max-height:55vh;overflow-y:auto;padding-right:0.25rem"></div>
         </div>
       `,
@@ -690,18 +813,61 @@ export function mountSalesView(container, navigate) {
         <button class="btn btn-outline" id="catalog-cancel">Cancelar</button>
         <button class="btn btn-primary" id="catalog-add">${icon("check", 14)} Agregar</button>
       `,
-      onClose: () => { catalogOpen = false; },
+      onClose: () => { catalogOpen = false; catalogListRenderer = null; },
     });
+
+    // v5.12.0: chips de "Tipo" y "Marca" con cuántos productos hay en cada uno
+    function renderFacets() {
+      const facets = buildCatalogFacets(products, catalogCategories, catalogBrands, { categoryId: catFilter, brandKey: brandFilter });
+      // Si el filtro elegido ya no existe (el admin lo quitó), se vuelve a "Todos"
+      if (catFilter && (catFilter === NO_CATEGORY ? !facets.uncategorized.count : !facets.categories.some((c) => c.id === catFilter))) catFilter = "";
+      if (brandFilter && !facets.brands.some((b) => b.key === brandFilter)) brandFilter = "";
+      const chip = (attr, val, label, count, on, emoji = "") => `
+        <button type="button" class="facet-chip${on ? " is-on" : ""}${!on && count === 0 ? " is-empty" : ""}" ${attr}="${esc(val)}" aria-pressed="${on ? "true" : "false"}">
+          ${emoji ? `<span class="facet-ico" aria-hidden="true">${esc(emoji)}</span>` : ""}<span class="facet-name">${esc(label)}</span><span class="facet-count">${count}</span>
+        </button>`;
+      const paint = (el, label, chipsHtml, show) => {
+        if (!el) return;
+        const keep = el.querySelector(".facet-scroll")?.scrollLeft || 0;
+        el.hidden = !show;
+        el.innerHTML = `<span class="facet-label">${label}</span><div class="facet-scroll">${chipsHtml}</div>`;
+        const sc = el.querySelector(".facet-scroll");
+        if (sc) {
+          sc.scrollLeft = keep;
+          sc.querySelector(".is-on")?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+        }
+      };
+      const catChips = facets.categories.length + (facets.uncategorized.count ? 1 : 0);
+      paint(document.querySelector("#facet-cats"), "Tipo",
+        chip("data-facet-cat", "", "Todos", filterCatalog(products, catalogCategories, { brandKey: brandFilter }).length, !catFilter) +
+        facets.categories.map((c) => chip("data-facet-cat", c.id, c.name, c.countHere, catFilter === c.id, c.icon)).join("") +
+        (facets.uncategorized.count ? chip("data-facet-cat", NO_CATEGORY, "Sin tipo", facets.uncategorized.countHere, catFilter === NO_CATEGORY) : ""),
+        catChips >= 2 || !!catFilter);
+      paint(document.querySelector("#facet-brands"), "Marca",
+        chip("data-facet-brand", "", "Todas", filterCatalog(products, catalogCategories, { categoryId: catFilter }).length, !brandFilter) +
+        facets.brands.map((b) => chip("data-facet-brand", b.key, b.name, b.countHere, brandFilter === b.key)).join(""),
+        facets.brands.length >= 2 || !!brandFilter);
+    }
 
     function renderCatalogList() {
       const list = document.querySelector("#catalog-list");
       if (!list) return;
-      const filtered = products.filter((p) => {
-        if (!search) return true;
-        const q = search.toLowerCase();
-        return p.name.toLowerCase().includes(q) || (p.brand || "").toLowerCase().includes(q) || (p.sku || "").toLowerCase().includes(q);
-      });
-      list.innerHTML = filtered.map((p) => {
+      renderFacets();
+      const filtered = filterCatalog(products, catalogCategories, { categoryId: catFilter, brandKey: brandFilter, search });
+      if (!filtered.length) {
+        const elsewhere = (catFilter || brandFilter) && search.trim()
+          ? filterCatalog(products, catalogCategories, { search }).length : 0;
+        list.innerHTML = `
+          <div class="empty-state catalog-empty">
+            <div class="empty-state-icon">${icon("search", 22)}</div>
+            <p class="empty-state-title">${products.length ? "No hay productos con estos filtros" : "Todavía no hay productos"}</p>
+            ${elsewhere ? `<p class="empty-state-desc">Pero «${esc(search.trim())}» aparece en otros tipos o marcas.</p>` : ""}
+            <div class="flex gap-2" style="justify-content:center;flex-wrap:wrap;margin-top:0.5rem">
+              ${elsewhere ? `<button type="button" class="btn btn-primary btn-sm" data-catalog-everywhere>Ver ${elsewhere} en todo el catálogo</button>` : ""}
+              ${catFilter || brandFilter || search ? `<button type="button" class="btn btn-outline btn-sm" data-catalog-clear>Quitar filtros</button>` : ""}
+            </div>
+          </div>`;
+      } else list.innerHTML = filtered.map((p) => {
         const qty = getStockQty(p.id);
         const inCart = cart.find((i) => i.productId === p.id)?.quantity || 0;
         const isOut = qty <= 0;
@@ -785,6 +951,30 @@ export function mountSalesView(container, navigate) {
         renderCatalogList();
       });
     }
+    // v5.12.0: un toque en un chip filtra; tocar el que ya está elegido lo quita
+    document.querySelector(".catalog-body")?.addEventListener("click", (e) => {
+      const catBtn = e.target.closest("[data-facet-cat]");
+      const brandBtn = e.target.closest("[data-facet-brand]");
+      if (catBtn) {
+        const v = catBtn.dataset.facetCat;
+        catFilter = catFilter === v ? "" : v;
+      } else if (brandBtn) {
+        const v = brandBtn.dataset.facetBrand;
+        brandFilter = brandFilter === v ? "" : v;
+      } else if (e.target.closest("[data-catalog-everywhere]")) {
+        catFilter = "";
+        brandFilter = "";
+      } else if (e.target.closest("[data-catalog-clear]")) {
+        catFilter = "";
+        brandFilter = "";
+        search = "";
+        if (searchInput) searchInput.value = "";
+      } else return;
+      renderCatalogList();
+      list?.scrollTo?.({ top: 0 });
+    });
+    const list = document.querySelector("#catalog-list");
+    catalogListRenderer = () => { if (document.querySelector("#catalog-list")) renderCatalogList(); };
 
     document.querySelector("#catalog-cancel").addEventListener("click", close);
     document.querySelector("#catalog-add").addEventListener("click", () => {
@@ -794,6 +984,54 @@ export function mountSalesView(container, navigate) {
     });
 
     renderCatalogList();
+  }
+
+  // v5.10.0: chips "Más vendidos" (solo con stock; un toque = +1 unidad)
+  function shortProductName(p) {
+    const name = p.name || "";
+    const brand = (p.brand || "").trim();
+    return brand && name.toLowerCase().startsWith(brand.toLowerCase() + " ") ? name.slice(brand.length + 1) : name;
+  }
+  function renderTopSellers() {
+    const tops = topSellerIds
+      .map((id) => products.find((p) => p.id === id))
+      .filter((p) => p && getStockQty(p.id) > 0)
+      .slice(0, 6);
+    if (!tops.length) return "";
+    return `
+      <div class="top-sellers">
+        <span class="top-sellers-label">${icon("flame", 13)} Más vendidos</span>
+        <div class="top-sellers-row" role="group" aria-label="Más vendidos: toca para añadir">
+          ${tops.map((p) => {
+            const inCart = cart.find((i) => i.productId === p.id)?.quantity || 0;
+            return `
+              <button type="button" class="top-chip ${inCart ? "in-cart" : ""}" data-top-add="${esc(p.id)}" aria-label="Añadir ${esc(p.name)}${inCart ? `, ${inCart} en la venta` : ""}">
+                <span class="top-chip-name">${esc(shortProductName(p))}</span>
+                <span class="top-chip-meta">${formatMoney(p.salePrice, "USD")}</span>
+                ${inCart ? `<span class="top-chip-qty" aria-hidden="true">${inCart}</span>` : ""}
+              </button>`;
+          }).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  // v5.10.0: escanear códigos de barras y añadir a la venta (sigue abierto para varios)
+  function openSaleScanner() {
+    openScanner({
+      title: "Escanear productos",
+      hint: "Apunta al código de barras del producto",
+      continuous: true,
+      onCode: (code) => {
+        const p = findProductByCode(products, code);
+        if (!p) return { ok: false, message: `El código ${code} no está asignado a ningún producto` };
+        const ok = addProduct(p.id, { silent: true });
+        const qty = cart.find((i) => i.productId === p.id)?.quantity || 0;
+        return ok
+          ? { ok: true, message: `+1 ${shortProductName(p)} · ${qty} en la venta` }
+          : { ok: false, message: `Sin stock suficiente: ${shortProductName(p)}` };
+      },
+    });
   }
 
   // v5.4.0: productos que coinciden con la búsqueda rápida (máx 6)
@@ -808,14 +1046,16 @@ export function mountSalesView(container, navigate) {
       .slice(0, 6);
   }
 
-  function addProduct(productId) {
+  // v5.10.0: devuelve true si añadió; también frena productos agotados que aún
+  // no estaban en la venta (antes se añadían con stock 0). `silent`: sin toast.
+  function addProduct(productId, { silent = false } = {}) {
     const p = products.find((x) => x.id === productId);
-    if (!p) return;
+    if (!p) return false;
     const stockQty = getStockQty(productId);
     const existing = cart.find((i) => i.productId === productId);
-    if (existing && existing.quantity >= stockQty) {
-      toast("Sin stock suficiente", "warning");
-      return;
+    if ((existing ? existing.quantity : 0) >= stockQty) {
+      if (!silent) toast("Sin stock suficiente", "warning");
+      return false;
     }
     if (existing) {
       existing.quantity++;
@@ -834,8 +1074,9 @@ export function mountSalesView(container, navigate) {
         vendorCommissionCurrency: p.vendorCommissionCurrency ?? "MN",
       });
     }
-    toast(`${p.name} agregado`, "success");
+    if (!silent) toast(`${p.name} agregado`, "success");
     render();
+    return true;
   }
 
   // ===== v5.4.0: ticket compartible =====
@@ -867,6 +1108,7 @@ export function mountSalesView(container, navigate) {
       title: `${icon("check", 16)} Venta ${sale.code} registrada`,
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
+          ${navigator.onLine === false ? `<div class="pending-sync-note ticket-pending">${icon("clock", 14)} <span><strong>Pendiente de subir:</strong> guardada en este equipo. Se sube sola a <strong>${esc(sale.warehouseName || sale.warehouseCode || "")}</strong> cuando vuelva internet.</span></div>` : ""}
           <pre style="margin:0;padding:0.875rem;background:var(--bg-soft);border:1px dashed var(--border);border-radius:var(--radius);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.75rem;white-space:pre-wrap;overflow-x:auto">${esc(text)}</pre>
           <p class="text-xs text-muted" style="margin:0">Compártelo con el cliente (WhatsApp/SMS) o cópialo al portapapeles.</p>
         </div>
@@ -904,7 +1146,19 @@ export function mountSalesView(container, navigate) {
     });
   }
 
+  // v5.13.0: evita registrar dos veces la misma venta con un doble toque
+  let registering = false;
   async function handleRegister() {
+    if (registering) return;
+    registering = true;
+    try {
+      await doRegister();
+    } finally {
+      registering = false;
+    }
+  }
+
+  async function doRegister() {
     const user = store.getState().currentUser;
     const wh = store.getState().currentWarehouse;
     const total = cartTotal();
@@ -939,7 +1193,9 @@ export function mountSalesView(container, navigate) {
     let gestorCommissionUSD = 0, gestorCommissionMN = 0;
     let vendorCommissionUSD = 0, vendorCommissionMN = 0;
     let saleItems = [];
-    let stockAdjustments = []; // [{ productId, quantity }]
+    // v5.13.0: el stock lo descuenta la nube al subir la venta, a partir de
+    // `items` (mismo producto y cantidad) y SIEMPRE del almacén de la venta.
+    let stockAdjustments = []; // [{ productId, quantity }] (referencia)
 
     if (saleType === "WHOLESALE") {
       // Comisión vendedor (siempre USD en mayorista)
@@ -978,7 +1234,6 @@ export function mountSalesView(container, navigate) {
       stockAdjustments = cart.map((i) => ({ productId: i.productId, quantity: i.quantity }));
     }
 
-    const saleCode = `V-${String(Date.now()).slice(-5)}${Math.floor(Math.random() * 9)}`;
     const selectedCard = cards.find((c) => c.id === selectedCardId);
 
     // === Regla de fin de semana ===
@@ -1000,6 +1255,18 @@ export function mountSalesView(container, navigate) {
     }
     // Usamos effectiveWh para el stock y la venta. Si no se reasignó, effectiveWh === wh.
     const finalWh = effectiveWh;
+
+    // v5.13.0: con la nube configurada, una venta SOLO se registra en un
+    // almacén real. Antes, sin conexión, la app podía abrir con almacenes de
+    // prueba y esas ventas subían después sin almacén (mezcladas).
+    if (!isUuid(String(finalWh?.id || "")) && (await isSupabaseConfiguredAsync())) {
+      toast("Este almacén no es válido en la nube. Sal y vuelve a entrar con el PIN (con internet al menos una vez).", "error", 7000);
+      return;
+    }
+
+    // v5.13.0: código con el prefijo del almacén ("VIB-2QK8ZT7M"): no se
+    // repite ni se confunde con las ventas de otros almacenes.
+    const saleCode = generateSaleCode(finalWh.code);
 
     const sale = {
       id: generateSaleId(),
@@ -1045,67 +1312,56 @@ export function mountSalesView(container, navigate) {
       weekendWarehouseId,
       createdAt,
       completedAt: createdAt,
-      syncedAt: navigator.onLine ? Date.now() : null,
+      syncedAt: null, // v5.13.0: se completa al subir (cola)
     };
 
+    // v5.13.0 — La venta se guarda PRIMERO en este equipo (cola) y después
+    // se sube: con internet sube en el momento; sin internet espera y sube
+    // sola al volver la conexión. Un único camino → nunca se duplica.
+    sale.clientRef = generateClientRef();
     try {
-      if (!navigator.onLine) {
-        enqueueSale(sale);
-        toast(`Venta ${sale.code} guardada sin conexión · Se subirá automáticamente`, "info");
-        showTicketModal(sale);
-      } else {
-        sale.clientRef = generateClientRef();
-        await saveSale(sale);
-        for (const adj of stockAdjustments) {
-          // Descuenta el stock del almacén efectivo (Vedado si fue reasignado, o el del vendedor si no)
-          await adjustStock(finalWh.id, adj.productId, -adj.quantity, "VENTA", `Venta ${sale.code}`, user.id, user.displayName);
-        }
-        sale.syncedAt = Date.now();
-        toast(`Venta ${sale.code} registrada${saleType === "WHOLESALE" ? " (mayorista)" : ""}${weekendRedirect ? " · " + finalWh.name : ""}`, "success");
-        showTicketModal(sale);
-      }
-      // Limpiar
-      cart = [];
-      note = "";
-      selectedManagerCode = "";
-      selectedManager = null;
-      multiPayments = { USD: 0, MN: 0, EUR: 0, TRANSFERENCIA: 0 };
-      transferAmount = 0;
-      selectedCardId = "";
-      paidWith = 0;
-      quickSearch = "";
-      wholesaleProduct = null;
-      wholesaleBoxes = 1;
-      wholesalePricePerBox = 0;
-      wholesaleVendorCommissionPerBox = 0;
-      wholesaleGestorCommissionPerBox = 0;
-      render();
-    } catch (err) {
-      console.error("Sale save failed, enqueuing for retry:", err);
       enqueueSale(sale);
-      toast(`Venta ${sale.code} guardada en cola · Se sincronizará automáticamente`, "warning");
-      showTicketModal(sale);
-      cart = [];
-      note = "";
-      selectedManagerCode = "";
-      selectedManager = null;
-      multiPayments = { USD: 0, MN: 0, EUR: 0, TRANSFERENCIA: 0 };
-      transferAmount = 0;
-      selectedCardId = "";
-      wholesaleProduct = null;
-      wholesaleBoxes = 1;
-      wholesalePricePerBox = 0;
-      wholesaleVendorCommissionPerBox = 0;
-      wholesaleGestorCommissionPerBox = 0;
-      render();
+    } catch (err) {
+      console.error("No se pudo guardar la venta en el equipo:", err);
+      toast("No se pudo guardar la venta en este equipo (sin espacio). Sube las ventas pendientes y vuelve a intentarlo.", "error", 8000);
+      return;
     }
+    const online = navigator.onLine !== false;
+    toast(
+      online
+        ? `Venta ${sale.code} registrada${saleType === "WHOLESALE" ? " (mayorista)" : ""}${weekendRedirect ? " · " + finalWh.name : ""}`
+        : `Venta ${sale.code} guardada sin conexión · se subirá sola al volver internet`,
+      online ? "success" : "info",
+    );
+    showTicketModal(sale);
+    // Limpiar
+    cart = [];
+    note = "";
+    selectedManagerCode = "";
+    selectedManager = null;
+    multiPayments = { USD: 0, MN: 0, EUR: 0, TRANSFERENCIA: 0 };
+    transferAmount = 0;
+    selectedCardId = "";
+    paidWith = 0;
+    quickSearch = "";
+    wholesaleProduct = null;
+    wholesaleBoxes = 1;
+    wholesalePricePerBox = 0;
+    wholesaleVendorCommissionPerBox = 0;
+    wholesaleGestorCommissionPerBox = 0;
+    render();
+    // Subir ya (sin espera escalonada). Si falla, queda en cola y se reintenta.
+    if (online) requestSync().catch((err) => console.warn("[Ventas] subida inmediata falló:", err));
   }
 
   render();
 
   return () => {
+    teardownCheckoutBar();
     unsubProducts();
     unsubStock();
+    unsubCategories();
+    unsubBrands();
     window.removeEventListener("online", onOnline);
     window.removeEventListener("offline", onOffline);
     unsubSync();

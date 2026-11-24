@@ -79,7 +79,7 @@ export function mountCommissionsView(container, navigate) {
           <div class="overflow-x-auto">
             ${loading ? `<table class="table"><thead><tr><th>Gestor</th><th class="text-center">Ventas</th><th class="text-right">Comisión USD</th><th class="text-center">Estado</th></tr></thead><tbody>${skeletonRow(4, 4)}</tbody></table>` :
               records.length === 0 ? `<div class="empty-state"><div class="empty-state-icon">${icon("wallet", 24)}</div><p class="empty-state-title">Sin comisiones</p><p class="empty-state-desc">No hay comisiones para este período.</p></div>` :
-              `<table class="table">
+              `<table class="table table-cards">
                 <thead><tr>
                   <th>Gestor</th>
                   <th>Tipo</th>

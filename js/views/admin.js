@@ -9,6 +9,7 @@ import {
   listWarehouses, saveWarehouse, saveWarehouseWithStock,
   listProducts, saveProduct, deleteProduct,
   listCategories, saveCategory, deleteCategory,
+  fetchBrands, saveBrand, deleteBrand, renameBrandInProducts, updateProductsCatalogFields,
   listManagers, saveManager, deleteManager,
   listCards, saveCard, deleteCard,
   listWarehouseCommissions,
@@ -25,12 +26,19 @@ import {
 } from "../db.js";
 import { logout } from "../auth.js";
 import { formatMoney, formatDate, formatDateShort } from "../currency.js";
-import { toast, icon, showModal, closeModal, confirmDialog, esc } from "../ui.js";
+import { toast, icon, showModal, closeModal, confirmDialog, esc, copyText } from "../ui.js";
+import { getSupabaseProjectUrl } from "../supabase.js";
+import {
+  DEFAULT_CATEGORY_TYPES, missingDefaultTypes, missingDefaultBrands, knownBrandNames, canonicalBrand,
+  indexCategories, topCategoryId, normalizeKey, looseKey, slugify, sortCategories, sortBrands,
+  suggestCategoryId, suggestBrand,
+} from "../catalog-facets.js";
 import { CURRENCIES, CATEGORY_COLORS, STOCK_REASONS, STOCK_REASON_LABELS } from "../types.js";
 import { uploadImageAsWebP, pickImageFile } from "../image-upload.js";
 import { lineChart, barChart, sparkline, COLORS } from "../charts.js";
 import { exportToCSV, exportMultipleCSVs } from "../csv-export.js";
-import { closureDateKey, aggregateClosuresReport, reportPeriodRange } from "../sales-stats.js";
+import { closureDateKey, aggregateClosuresReport, reportPeriodRange, findProductByCode } from "../sales-stats.js";
+import { openScanner, canUseCamera } from "../barcode-scanner.js";
 import { getGitHubConfig, saveGitHubConfig, testGitHubConnection, isGitHubConfigured } from "../github-storage.js";
 import { detectViscosityFromName } from "../viscosity.js";
 
@@ -43,6 +51,7 @@ const NAV_SECTIONS = [
       { id: "users", label: "Usuarios", icon: "userCog" },
       { id: "products", label: "Productos", icon: "tags" },
       { id: "categories", label: "Categorías", icon: "tags" },
+      { id: "brands", label: "Marcas", icon: "award" },
       { id: "warehouses", label: "Almacenes", icon: "store" },
       { id: "stock", label: "Stock general", icon: "boxes" },
       { id: "managers", label: "Gestores", icon: "users" },
@@ -744,6 +753,7 @@ export function mountAdminView(container, navigateOrUser) {
       case "users": mountUsersPanel(content, myGen); break;
       case "products": mountProductsPanel(content, myGen); break;
       case "categories": mountCategoriesPanel(content, myGen); break;
+      case "brands": mountBrandsPanel(content, myGen); break;
       case "warehouses": mountWarehousesPanel(content, myGen); break;
       case "stock": mountStockPanel(content, myGen); break;
       case "managers": mountManagersPanel(content, myGen); break;
@@ -835,7 +845,7 @@ export function mountAdminView(container, navigateOrUser) {
               const color = (c.balance || 0) >= 0 ? 'var(--primary)' : 'var(--danger)';
               const bankColor = c.bank === 'BPA' ? 'var(--primary)' : c.bank === 'BANDEC' ? 'var(--accent-mn)' : 'var(--accent-eur)';
               return `
-                <div data-card-click="${esc(c.id)}" style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.625rem;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;transition:border-color 0.15s,background 0.15s" onmouseover="this.style.borderColor='color-mix(in oklab, var(--primary) 40%, transparent)';this.style.background='var(--bg-soft)'" onmouseout="this.style.borderColor='var(--border)';this.style.background='transparent'">
+                <div data-card-click="${esc(c.id)}" class="tile" style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.625rem;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;transition:border-color 0.15s,background 0.15s" onmouseover="this.style.borderColor='color-mix(in oklab, var(--primary) 40%, transparent)';this.style.background='var(--bg-soft)'" onmouseout="this.style.borderColor='var(--border)';this.style.background='transparent'">
                   <div style="width:1.875rem;height:1.875rem;background:color-mix(in oklab, ${bankColor} 12%, var(--bg-soft));color:${bankColor};border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;flex-shrink:0">
                     ${icon("creditCard", 14)}
                   </div>
@@ -876,6 +886,13 @@ export function mountAdminView(container, navigateOrUser) {
       }
       // Usar lineChart de charts.js (ya importado arriba)
       const card = (dataCache?.cards || []).find((c) => c.id === cardId);
+      // v5.11.0: saldo sin cambios en 30 días → una línea de texto (antes: gráfico plano de 90 px)
+      const firstVal = Number(history[0]?.value) || 0;
+      if (history.every((h) => (Number(h.value) || 0) === firstVal)) {
+        chartEl.style.minHeight = "0";
+        chartEl.innerHTML = `<div class="text-xs text-muted" style="padding:0.25rem 0.25rem 0.375rem">Sin cambios de saldo en 30 días · ${formatMoney(firstVal, card?.currency || "USD")}</div>`;
+        return;
+      }
       const cardColor = card?.currency === "MN" ? COLORS.mn : card?.currency === "EUR" ? COLORS.eur : COLORS.usd;
       chartEl.innerHTML = `
         <div style="background:transparent">
@@ -997,7 +1014,7 @@ export function mountAdminView(container, navigateOrUser) {
         <div class="card-content" style="padding:0.625rem;display:flex;flex-direction:column;gap:0.375rem">
           <div class="text-xs text-muted" style="padding:0.25rem 0.5rem">${pendingTransfers.length} transferencia(s) esperando confirmación</div>
           ${pendingTransfers.slice(0, 5).map((t) => `
-            <div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.625rem;border:1px solid var(--border);border-radius:var(--radius);background: color-mix(in oklab, var(--warning) 3%, var(--bg-soft))">
+            <div class="tile tile-warning" style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.625rem;border:1px solid var(--border);border-radius:var(--radius);background: color-mix(in oklab, var(--warning) 3%, var(--bg-soft))">
               <div style="width:2rem;height:2rem;background: color-mix(in oklab, var(--warning) 12%, var(--bg-soft));color: var(--warning);border-radius: var(--radius-sm);display:flex;align-items:center;justify-content:center;flex-shrink:0">
                 ${icon("arrowLeftRight", 14)}
               </div>
@@ -1084,10 +1101,11 @@ export function mountAdminView(container, navigateOrUser) {
         <!-- ACCESO RÁPIDO (v5.4.0: chips compactos — las KPIs quedan arriba) -->
         <div>
           <p class="text-xs font-semibold text-muted" style="text-transform:uppercase;letter-spacing:0.05em;margin:0 0 0.5rem">Acceso rápido</p>
-          <div style="display:flex;flex-wrap:wrap;gap:0.5rem">
+          <div class="chip-scroll quick-chips" style="display:flex;flex-wrap:wrap;gap:0.5rem">
             ${adminChip("users", "userCog", "Usuarios")}
             ${adminChip("products", "tags", "Productos")}
             ${adminChip("categories", "tags", "Categorías")}
+            ${adminChip("brands", "award", "Marcas")}
             ${adminChip("warehouses", "store", "Almacenes")}
             ${adminChip("managers", "users", "Gestores")}
             ${adminChip("cards", "creditCard", "Tarjetas")}
@@ -1253,7 +1271,7 @@ export function mountAdminView(container, navigateOrUser) {
 
           <!-- Banner recordatorio: comisiones no pagadas del mes anterior -->
           ${dataCache.unpaidReminder?.hasUnpaid ? `
-            <div style="background: linear-gradient(135deg, color-mix(in oklab, var(--warning) 12%, var(--bg-elevated)) 0%, var(--bg-elevated) 100%); border: 1px solid color-mix(in oklab, var(--warning) 40%, transparent); border-radius: var(--radius-xl); padding: 0.875rem 1rem; display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+            <div class="admin-reminder" style="background: linear-gradient(135deg, color-mix(in oklab, var(--warning) 12%, var(--bg-elevated)) 0%, var(--bg-elevated) 100%); border: 1px solid color-mix(in oklab, var(--warning) 40%, transparent); border-radius: var(--radius-xl); padding: 0.875rem 1rem; display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
               <div style="width:2.5rem;height:2.5rem;background:var(--warning);color:var(--warning-foreground);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;flex-shrink:0">
                 ${icon("alertTriangle", 18)}
               </div>
@@ -1272,7 +1290,7 @@ export function mountAdminView(container, navigateOrUser) {
           ` : ''}
 
           <!-- KPIs principales -->
-          <div class="grid grid-cols-2 gap-2">
+          <div class="grid grid-cols-2 gap-2 kpi-grid">
             <div class="stat-card">
               <div class="stat-label">${icon("dollar", 14)} Ingresos (${range}d)</div>
               <div class="stat-value" style="color:var(--accent-usd)">${formatMoney(totalRevenue, "USD")}</div>
@@ -1312,8 +1330,8 @@ export function mountAdminView(container, navigateOrUser) {
           <div class="card">
             <div class="card-header"><h3 class="card-title">${icon("trendingUp", 14)} Ventas por día (últimos ${range} días)</h3></div>
             <div class="card-content">
-              <div style="background: var(--bg-soft); padding: 1rem; border-radius: var(--radius)">
-                ${lineChart(days, { height: 200, color: COLORS.primary, formatValue: (v) => formatMoney(v, "USD") })}
+              <div class="dash-chart" style="background: var(--bg-soft); padding: 1rem; border-radius: var(--radius)">
+                ${lineChart(days, { height: window.matchMedia && window.matchMedia("(max-width: 767.98px)").matches ? 150 : 200, color: COLORS.primary, formatValue: (v) => formatMoney(v, "USD"), ariaLabel: `Ventas por día, últimos ${range} días` })}
               </div>
             </div>
           </div>
@@ -1325,9 +1343,9 @@ export function mountAdminView(container, navigateOrUser) {
               <div class="card-content" style="display:flex;flex-direction:column;gap:0.5rem">
                 ${topProducts.length === 0 ? '<p class="text-xs text-muted">Sin ventas en este período</p>' :
                   topProducts.map((p, i) => `
-                    <div class="flex items-center justify-between" style="padding:0.5rem;border:1px solid var(--border);border-radius:var(--radius)">
+                    <div class="flex items-center justify-between tile" style="padding:0.5rem;border:1px solid var(--border);border-radius:var(--radius);gap:0.5rem">
                       <div class="flex items-center gap-2" style="flex:1;min-width:0">
-                        <span class="badge ${i === 0 ? 'badge-accent' : 'badge-outline'}" style="font-size:0.6875rem;width:1.5rem;justify-content:center">${i + 1}</span>
+                        <span class="rank-badge ${i === 0 ? 'is-first' : ''}">${i + 1}</span>
                         <div style="min-width:0">
                           <div class="text-sm font-medium truncate">${esc(p.name)}</div>
                           <div class="text-xs text-muted">${p.units} unidades</div>
@@ -1345,7 +1363,7 @@ export function mountAdminView(container, navigateOrUser) {
               <div class="card-header"><h3 class="card-title">${icon("wallet", 14)} Por moneda</h3></div>
               <div class="card-content" style="display:flex;flex-direction:column;gap:0.5rem">
                 ${Object.entries(byCurrency).filter(([_, v]) => v > 0).map(([curr, amount]) => `
-                  <div class="flex items-center justify-between" style="padding:0.5rem;border:1px solid var(--border);border-radius:var(--radius)">
+                  <div class="flex items-center justify-between tile" style="padding:0.5rem;border:1px solid var(--border);border-radius:var(--radius)">
                     <span class="badge ${curr === 'USD' ? 'badge-accent' : ''}" style="font-size:0.6875rem">${esc(curr)}</span>
                     <span class="font-bold">${formatMoney(amount, curr)}</span>
                   </div>
@@ -1402,7 +1420,7 @@ export function mountAdminView(container, navigateOrUser) {
             <p class="empty-state-desc">No hay usuarios que coincidan con el filtro.</p>
           </div>
         ` : `
-          <table class="table">
+          <table class="table table-cards">
             <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Almacén</th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
             <tbody>
               ${items.map((u) => `
@@ -1453,7 +1471,7 @@ export function mountAdminView(container, navigateOrUser) {
               <button class="btn btn-primary btn-sm" id="new-user">${icon("plus", 14)} Nuevo</button>
             </div>
           </div>
-          <div class="card-content" style="padding:0.875rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:0.625rem">
+          <div class="card-content filter-grid" style="padding:0.875rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:0.625rem">
             <div>
               <label class="label label-xs">Buscar</label>
               <input class="input" type="search" id="u-filter-text" value="${esc(uFilterText)}" placeholder="Nombre, usuario o email…" />
@@ -1565,9 +1583,16 @@ export function mountAdminView(container, navigateOrUser) {
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
     let pFilterText = "";
     let pFilterCat = "";
+    let pFilterBrand = "";
     let pFilterStatus = "";
-    Promise.all([listProducts(), listCategories()]).then(([products, categories]) => {
+    Promise.all([listProducts(), listCategories(), fetchBrands()]).then(([products, categories, brandRes]) => {
       if (gen !== tabGeneration) return;
+      // v5.12.0: marcas conocidas (lista + las que usan los productos) y nombre
+      // de categoría al día (antes se mostraba el nombre guardado en el producto)
+      const brandCtx = { brands: brandRes.brands, known: knownBrandNames(brandRes.brands, products), missingTable: brandRes.missingTable };
+      const catIdx = indexCategories(categories);
+      const catLabel = (p) => catIdx.byId.get(p.categoryId)?.name || p.categoryName || "";
+      const reloadProducts = () => mountProductsPanel(content, tabGeneration);
 
       function filteredProducts() {
         let items = products;
@@ -1579,7 +1604,8 @@ export function mountAdminView(container, navigateOrUser) {
             (p.sku || "").toLowerCase().includes(q)
           );
         }
-        if (pFilterCat) items = items.filter((p) => (p.categoryId || "") === pFilterCat);
+        if (pFilterCat) items = items.filter((p) => (p.categoryId || "") === pFilterCat || topCategoryId(p, catIdx) === pFilterCat);
+        if (pFilterBrand) items = items.filter((p) => normalizeKey(p.brand) === pFilterBrand);
         if (pFilterStatus === "active") items = items.filter((p) => p.active !== false);
         if (pFilterStatus === "inactive") items = items.filter((p) => p.active === false);
         return items;
@@ -1596,7 +1622,7 @@ export function mountAdminView(container, navigateOrUser) {
             <p class="empty-state-desc">No hay productos que coincidan con el filtro aplicado.</p>
           </div>
         ` : `
-          <table class="table">
+          <table class="table table-cards">
             <thead><tr><th></th><th>Producto</th><th style="white-space:nowrap">Categoría</th><th class="text-right">Precio</th><th class="text-right" style="white-space:nowrap">Comisiones <span class="text-xs text-muted">G/V</span></th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
             <tbody>
               ${items.map((p) => `
@@ -1607,7 +1633,7 @@ export function mountAdminView(container, navigateOrUser) {
                       : `<div style="width:2.5rem;height:2.5rem;border-radius:var(--radius-sm);border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-muted)">${icon("image", 14)}</div>`}
                   </td>
                   <td class="font-medium">${esc(p.name)}${p.brand ? ` <span class="text-xs text-muted" style="font-weight:400">· ${esc(p.brand)}</span>` : ''}</td>
-                  <td class="text-xs text-muted">${esc(p.categoryName || '—')}</td>
+                  <td class="text-xs text-muted">${esc(catLabel(p) || '—')}</td>
                   <td class="text-right">${formatMoney(p.salePrice, "USD")}</td>
                   <td class="text-right text-xs"><span class="badge badge-outline" style="font-size:0.625rem;white-space:nowrap">G ${p.gestorCommission ?? p.commission ?? 0} ${p.gestorCommissionCurrency ?? p.commissionCurrency ?? "USD"} · V ${p.vendorCommission ?? 0} ${p.vendorCommissionCurrency ?? "MN"}</span></td>
                   <td class="text-center">${p.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
@@ -1631,7 +1657,7 @@ export function mountAdminView(container, navigateOrUser) {
         wrap.querySelectorAll("[data-edit-product]").forEach((btn) => {
           btn.addEventListener("click", () => {
             const p = products.find((x) => x.id === btn.dataset.editProduct);
-            if (p) showProductDialog(p, categories, () => mountProductsPanel(content, tabGeneration));
+            if (p) showProductDialog(p, categories, reloadProducts, brandCtx);
           });
         });
         wrap.querySelectorAll("[data-stock-product]").forEach((btn) => {
@@ -1666,10 +1692,11 @@ export function mountAdminView(container, navigateOrUser) {
             <div class="flex gap-2">
               <button class="btn btn-outline btn-sm" id="p-export-csv" title="Exportar productos filtrados a CSV">${icon("download", 12)} CSV</button>
               <button class="btn btn-outline btn-sm" id="bulk-prices" title="Cambiar el precio de varios productos a la vez">${icon("dollar", 12)} Precios en lote</button>
+              <button class="btn btn-outline btn-sm" id="p-organize" title="Asignar tipo y marca a varios productos a la vez">${icon("listTree", 12)} Tipos y marcas</button>
               <button class="btn btn-primary btn-sm" id="new-product">${icon("plus", 14)} Nuevo</button>
             </div>
           </div>
-          <div class="card-content" style="padding:0.875rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:0.625rem">
+          <div class="card-content filter-grid" style="padding:0.875rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:0.625rem">
             <div>
               <label class="label label-xs">Buscar</label>
               <input class="input" type="search" id="p-filter-text" value="${esc(pFilterText)}" placeholder="Nombre, marca o SKU…" />
@@ -1678,7 +1705,17 @@ export function mountAdminView(container, navigateOrUser) {
               <label class="label label-xs">Categoría</label>
               <select class="select" id="p-filter-cat">
                 <option value="">Todas</option>
-                ${categories.map((c) => `<option value="${esc(c.id)}" ${pFilterCat === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join('')}
+                ${sortCategories(categories.filter((c) => !c.parentId)).map((c) => `
+                  <option value="${esc(c.id)}" ${pFilterCat === c.id ? "selected" : ""}>${esc(c.icon ? `${c.icon} ` : "")}${esc(c.name)}</option>
+                  ${sortCategories(categories.filter((x) => x.parentId === c.id)).map((x) => `<option value="${esc(x.id)}" ${pFilterCat === x.id ? "selected" : ""}>   └ ${esc(x.name)}</option>`).join("")}
+                `).join('')}
+              </select>
+            </div>
+            <div>
+              <label class="label label-xs">Marca</label>
+              <select class="select" id="p-filter-brand">
+                <option value="">Todas</option>
+                ${brandCtx.known.map((n) => `<option value="${esc(normalizeKey(n))}" ${pFilterBrand === normalizeKey(n) ? "selected" : ""}>${esc(n)}</option>`).join('')}
               </select>
             </div>
             <div>
@@ -1696,7 +1733,10 @@ export function mountAdminView(container, navigateOrUser) {
 
       renderTable();
 
-      content.querySelector("#new-product").addEventListener("click", () => showProductDialog(null, categories, () => mountProductsPanel(content, tabGeneration)));
+      content.querySelector("#new-product").addEventListener("click", () => showProductDialog(null, categories, reloadProducts, brandCtx));
+      content.querySelector("#p-organize").addEventListener("click", () => showOrganizeCatalogDialog({
+        products, categories, brands: brandRes.brands, onDone: reloadProducts,
+      }));
       content.querySelector("#bulk-prices").addEventListener("click", () => showBulkPriceDialog(filteredProducts, () => mountProductsPanel(content, tabGeneration)));
 
       // v5.4.0: export CSV de productos filtrados
@@ -1706,7 +1746,7 @@ export function mountAdminView(container, navigateOrUser) {
           nombre: p.name,
           marca: p.brand || "",
           sku: p.sku || "",
-          categoria: p.categoryName || "",
+          categoria: catLabel(p),
           precio_usd: p.salePrice,
           comision_gestor: `${p.gestorCommission ?? p.commission ?? 0} ${p.gestorCommissionCurrency ?? p.commissionCurrency ?? "USD"}`,
           comision_vendedor: `${p.vendorCommission ?? 0} ${p.vendorCommissionCurrency ?? "MN"}`,
@@ -1727,6 +1767,7 @@ export function mountAdminView(container, navigateOrUser) {
         pText.addEventListener("keydown", (e) => { if (e.key === "Enter") pText.blur(); });
       }
       content.querySelector("#p-filter-cat").addEventListener("change", (e) => { pFilterCat = e.target.value; renderTable(); });
+      content.querySelector("#p-filter-brand").addEventListener("change", (e) => { pFilterBrand = e.target.value; renderTable(); });
       content.querySelector("#p-filter-status").addEventListener("change", (e) => { pFilterStatus = e.target.value; renderTable(); });
     });
   }
@@ -1818,9 +1859,12 @@ export function mountAdminView(container, navigateOrUser) {
     });
   }
 
-  function showProductDialog(product, categories, onSaved) {
+  function showProductDialog(product, categories, onSaved, brandCtx = {}) {
     const isNew = !product;
     const p = product || {};
+    // v5.12.0: marcas sugeridas (lista de Admin → Marcas + las que ya usan los productos)
+    const brandOptions = brandCtx.known || [];
+    const registeredBrands = (brandCtx.brands || []).map((b) => b.name);
     const close = showModal({
       title: isNew ? "Nuevo producto" : "Editar producto",
       size: "lg",
@@ -1828,17 +1872,24 @@ export function mountAdminView(container, navigateOrUser) {
         <div style="display:flex;flex-direction:column;gap:0.75rem">
           <div class="grid grid-cols-2 gap-2">
             <div><label class="label label-xs">Nombre *</label><input class="input" id="p-name" value="${esc(p.name || '')}" /></div>
-            <div><label class="label label-xs">Marca *</label><input class="input" id="p-brand" value="${esc(p.brand || '')}" /></div>
+            <div><label class="label label-xs" for="p-brand">Marca *</label><input class="input" id="p-brand" value="${esc(p.brand || (isNew ? (brandOptions[0] || "") : ""))}" list="p-brand-list" autocomplete="off" placeholder="MANNOL, Royal…" />
+              <datalist id="p-brand-list">${brandOptions.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">SKU</label><input class="input" id="p-sku" value="${esc(p.sku || '')}" /></div>
+            <div><label class="label label-xs" for="p-sku">SKU / código de barras</label>
+              <div class="${canUseCamera() ? "input-scan" : ""}" style="position:relative">
+                <input class="input" id="p-sku" value="${esc(p.sku || '')}" autocomplete="off" />
+                ${canUseCamera() ? `<button type="button" class="scan-btn" id="p-sku-scan" aria-label="Escanear el código de barras del producto" title="Escanear código de barras">${icon("scan", 18)}</button>` : ""}
+              </div>
+            </div>
             <div><label class="label label-xs">Viscosidad</label><input class="input" id="p-viscosity" value="${esc(p.viscosity || '')}" placeholder="5W-30" /><p class="text-xs text-muted" style="margin:0.2rem 0 0">Se rellena sola desde el nombre (editable)</p></div>
           </div>
-          <div><label class="label label-xs">Categoría</label>
+          <div><label class="label label-xs" for="p-category">Tipo (categoría)</label>
             <select class="select" id="p-category">
               <option value="">(sin categoría)</option>
-              ${categories.filter(c => !c.parentId).map((c) => `
-                <option value="${esc(c.id)}" ${p.categoryId === c.id ? 'selected' : ''}>${esc(c.name)}</option>
+              ${sortCategories(categories.filter(c => !c.parentId)).map((c) => `
+                <option value="${esc(c.id)}" ${p.categoryId === c.id ? 'selected' : ''}>${esc(c.icon ? `${c.icon} ` : "")}${esc(c.name)}</option>
+                ${sortCategories(categories.filter((x) => x.parentId === c.id)).map((x) => `<option value="${esc(x.id)}" ${p.categoryId === x.id ? 'selected' : ''}>   └ ${esc(x.name)}</option>`).join("")}
               `).join('')}
             </select>
           </div>
@@ -1972,6 +2023,25 @@ export function mountAdminView(container, navigateOrUser) {
       });
     }
 
+    // v5.10.0: escanear el código de barras del envase → queda guardado en el SKU
+    // (así en la venta se añade el producto escaneándolo)
+    document.querySelector("#p-sku-scan")?.addEventListener("click", () => {
+      openScanner({
+        title: "Código de barras del producto",
+        hint: "Apunta al código de barras del envase",
+        onCode: async (code) => {
+          const input = document.querySelector("#p-sku");
+          if (input) input.value = code;
+          try {
+            const all = await listProducts();
+            const other = findProductByCode((all || []).filter((x) => x.id !== p.id), code);
+            if (other) setTimeout(() => toast(`Atención: el código ${code} ya está en “${other.name}”`, "warning", 6000), 400);
+          } catch {}
+          return { ok: true, message: `Código ${code} · recuerda Guardar` };
+        },
+      });
+    });
+
     document.querySelector("#p-save").addEventListener("click", async () => {
       // Parsear wholesaleTiers
       const tiersText = document.querySelector("#p-wholesaleTiers").value.trim();
@@ -2003,10 +2073,11 @@ export function mountAdminView(container, navigateOrUser) {
       const data = {
         ...(p.id ? { id: p.id } : {}),
         name: document.querySelector("#p-name").value.trim(),
-        brand: document.querySelector("#p-brand").value.trim(),
+        brand: canonicalBrand(document.querySelector("#p-brand").value, brandOptions),
         sku: document.querySelector("#p-sku").value.trim() || null,
         viscosity: document.querySelector("#p-viscosity").value.trim() || null,
         categoryId: document.querySelector("#p-category").value || null,
+        categoryName: categories.find((c) => c.id === document.querySelector("#p-category").value)?.name || null,
         salePrice: parseFloat(document.querySelector("#p-price").value) || 0,
         minStock: parseInt(document.querySelector("#p-minStock").value) || 0,
         costPrice: costPriceVal ? parseFloat(costPriceVal) : 0,
@@ -2036,6 +2107,10 @@ export function mountAdminView(container, navigateOrUser) {
       saveBtn.innerHTML = `<div class="spinner spinner-sm"></div> Guardando...`;
       try {
         await saveProduct(data);
+        // v5.12.0: una marca nueva escrita aquí se añade sola a la lista de marcas
+        if (!brandCtx.missingTable && brandCtx.brands && !registeredBrands.some((n) => normalizeKey(n) === normalizeKey(data.brand))) {
+          try { await saveBrand({ name: data.brand, sortOrder: 100 }); } catch (err) { console.warn("[marca] no se añadió a la lista:", err); }
+        }
         toast("Producto guardado", "success");
         close();
         onSaved();
@@ -2050,116 +2125,643 @@ export function mountAdminView(container, navigateOrUser) {
   }
 
   // ===== CATEGORIES =====
+  // =====================================================
+  // v5.12.0 — Tipos (categorías) y marcas del catálogo de venta
+  // =====================================================
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+  /** Productos por categoría principal (las subcategorías suman a su principal). */
+  function countByTopCategory(products, categories) {
+    const idx = indexCategories(categories);
+    const counts = new Map();
+    let none = 0;
+    for (const p of products) {
+      const id = topCategoryId(p, idx);
+      if (id) counts.set(id, (counts.get(id) || 0) + 1);
+      else none++;
+    }
+    return { counts, none, idx };
+  }
+
+  function countByBrandKey(products) {
+    const m = new Map();
+    for (const p of products) {
+      const k = normalizeKey(p.brand);
+      if (k) m.set(k, (m.get(k) || 0) + 1);
+    }
+    return m;
+  }
+
+  function panelError(content, err, retry) {
+    content.innerHTML = `
+      <div class="card"><div class="card-content">
+        <div class="empty-state">
+          <div class="empty-state-icon">${icon("alertTriangle", 24)}</div>
+          <p class="empty-state-title">No se pudo cargar</p>
+          <p class="empty-state-desc">${esc(err?.message || String(err || "Error desconocido"))}</p>
+          <button class="btn btn-outline btn-sm" id="panel-retry">${icon("refresh", 14)} Reintentar</button>
+        </div>
+      </div></div>`;
+    content.querySelector("#panel-retry")?.addEventListener("click", retry);
+  }
+
+  // ===== CATEGORÍAS (tipos de producto) =====
   function mountCategoriesPanel(content, gen) {
     gen = gen ?? tabGeneration;
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
-    listCategories().then((categories) => {
+    const reload = () => mountCategoriesPanel(content, tabGeneration);
+    Promise.all([listCategories(), listProducts(), fetchBrands()]).then(([categories, products, brandRes]) => {
       if (gen !== tabGeneration) return;
-      const parents = categories.filter((c) => !c.parentId);
+      const roots = sortCategories(categories.filter((c) => !c.parentId));
       const children = categories.filter((c) => c.parentId);
+      const { counts, none } = countByTopCategory(products, categories);
+      const direct = new Map();
+      for (const p of products) if (p.categoryId) direct.set(p.categoryId, (direct.get(p.categoryId) || 0) + 1);
+      const missing = missingDefaultTypes(categories);
+
       content.innerHTML = `
         <div class="card">
-          <div class="card-header flex justify-between">
-            <h2 class="card-title">Categorías (${parents.length})</h2>
-            <button class="btn btn-primary btn-sm" id="new-cat">${icon("plus", 14)} Nueva</button>
+          <div class="card-header">
+            <h2 class="card-title flex items-center gap-2">${icon("cart", 16)} Tipos para el catálogo de venta</h2>
+            <p class="text-xs text-muted" style="margin:0.25rem 0 0">En la venta, el vendedor filtra los productos tocando su tipo y su marca. Cada tipo aparece en cuanto tiene al menos un producto.</p>
           </div>
-          <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
-            ${parents.map((c) => {
-              const subs = children.filter((s) => s.parentId === c.id);
-              return `
-                <div class="border rounded p-3" style="border-color:var(--border)">
-                  <div class="flex items-center justify-between mb-2">
-                    <div class="flex items-center gap-2">
-                      <span style="font-size:1.25rem">${esc(c.icon || '📁')}</span>
-                      <span class="font-semibold">${esc(c.name)}</span>
-                      <span class="badge badge-outline" style="font-size:0.5625rem">${esc(c.color || 'slate')}</span>
-                    </div>
-                    <div class="flex gap-1">
-                      <button class="btn btn-ghost btn-sm" data-edit-cat="${esc(c.id)}">Editar</button>
-                      <button class="btn btn-ghost btn-sm text-danger" data-delete-cat="${esc(c.id)}">${icon("trash", 12)}</button>
-                    </div>
-                  </div>
-                  ${subs.length > 0 ? `
-                    <div style="display:flex;flex-direction:column;gap:0.25rem;padding-left:1.5rem">
-                      ${subs.map((s) => `
-                        <div class="flex items-center justify-between text-xs">
-                          <span>${esc(s.name)}</span>
-                          <button class="btn btn-ghost btn-icon btn-sm text-danger" data-delete-sub="${esc(s.id)}">${icon("trash", 12)}</button>
-                        </div>
-                      `).join('')}
-                    </div>
-                  ` : '<div class="text-xs text-muted">Sin subcategorías</div>'}
-                </div>
-              `;
-            }).join('')}
+          <div class="card-content">
+            <div class="type-pills">
+              ${DEFAULT_CATEGORY_TYPES.map((t) => {
+                const ok = !missing.some((m) => m.slug === t.slug);
+                return `<span class="type-pill ${ok ? "is-ok" : "is-missing"}"><span aria-hidden="true">${t.icon}</span> ${esc(t.name)} <strong>${ok ? "✓" : "falta"}</strong></span>`;
+              }).join("")}
+            </div>
+            ${missing.length
+              ? `<button class="btn btn-primary btn-sm" id="create-default-types" style="margin-top:0.75rem">${icon("plus", 14)} Crear ${missing.length === 1 ? "la que falta" : `las ${missing.length} que faltan`}</button>`
+              : `<p class="text-xs text-muted" style="margin:0.625rem 0 0">Están todos. Puedes añadir otros tipos con <strong>Nueva</strong>.</p>`}
           </div>
         </div>
-      `;
-      content.querySelector("#new-cat").addEventListener("click", () => showCategoryDialog(null, () => mountCategoriesPanel(content, tabGeneration)));
+
+        <div class="card" style="margin-top:1rem">
+          <div class="card-header flex justify-between items-center" style="gap:0.5rem;flex-wrap:wrap">
+            <h2 class="card-title">Categorías (${roots.length})</h2>
+            <div class="flex gap-2" style="flex-wrap:wrap">
+              <button class="btn btn-outline btn-sm" data-organize>${icon("listTree", 14)} Organizar productos</button>
+              <button class="btn btn-primary btn-sm" id="new-cat">${icon("plus", 14)} Nueva</button>
+            </div>
+          </div>
+          <div class="card-content" style="display:flex;flex-direction:column;gap:0.625rem">
+            ${roots.length === 0 ? `
+              <div class="empty-state">
+                <p class="empty-state-title">Sin categorías</p>
+                <p class="empty-state-desc">Crea los tipos básicos con el botón de arriba.</p>
+              </div>` : ""}
+            ${roots.map((c) => {
+              const subs = sortCategories(children.filter((s) => s.parentId === c.id));
+              const n = counts.get(c.id) || 0;
+              return `
+                <div class="cat-row tile">
+                  <span class="cat-row-icon" aria-hidden="true">${esc(c.icon || "📁")}</span>
+                  <div class="cat-row-text">
+                    <div class="cat-row-name">${esc(c.name)}</div>
+                    <div class="cat-row-meta">${n ? plural(n, "producto", "productos") : "Sin productos todavía"}</div>
+                    ${subs.length ? `<div class="sub-chips">${subs.map((s) => `
+                      <span class="sub-chip">${esc(s.name)} <span class="sub-chip-n">${direct.get(s.id) || 0}</span>
+                        <button type="button" class="sub-chip-x" data-delete-sub="${esc(s.id)}" aria-label="Eliminar la subcategoría ${esc(s.name)}" title="Eliminar subcategoría (sus productos pasan a ${esc(c.name)})">×</button>
+                      </span>`).join("")}</div>` : ""}
+                  </div>
+                  <div class="cat-row-actions">
+                    <button class="btn btn-ghost btn-sm" data-edit-cat="${esc(c.id)}">Editar</button>
+                    <button class="btn btn-ghost btn-sm text-danger" data-delete-cat="${esc(c.id)}" aria-label="Eliminar ${esc(c.name)}" title="Eliminar">${icon("trash", 14)}</button>
+                  </div>
+                </div>`;
+            }).join("")}
+            ${none ? `<p class="text-xs text-muted" style="margin:0.25rem 0 0">${plural(none, "producto no tiene", "productos no tienen")} categoría · <button type="button" class="link-btn" data-organize data-only-missing>Asignarles un tipo</button></p>` : ""}
+          </div>
+        </div>`;
+
+      content.querySelector("#create-default-types")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.innerHTML = `<div class="spinner spinner-sm"></div> Creando…`;
+        try {
+          for (const t of missing) {
+            await saveCategory({ name: t.name, slug: t.slug, icon: t.icon, color: t.color, sortOrder: t.sortOrder, parentId: null, active: true });
+          }
+          toast(missing.length === 1 ? `Categoría «${missing[0].name}» creada` : `${missing.length} categorías creadas`, "success");
+          reload();
+        } catch (err) {
+          toast(err.message || "No se pudieron crear", "error");
+          reload();
+        }
+      });
+      content.querySelector("#new-cat").addEventListener("click", () => showCategoryDialog(null, categories, reload));
       content.querySelectorAll("[data-edit-cat]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const c = categories.find((x) => x.id === btn.dataset.editCat);
-          if (c) showCategoryDialog(c, () => mountCategoriesPanel(content, tabGeneration));
+          if (c) showCategoryDialog(c, categories, reload);
         });
       });
       content.querySelectorAll("[data-delete-cat]").forEach((btn) => {
         btn.addEventListener("click", () => {
-          confirmDialog("¿Eliminar categoría?", async () => {
-            await deleteCategory(btn.dataset.deleteCat);
-            toast("Categoría eliminada", "success");
-            mountCategoriesPanel(content, tabGeneration);
-          });
+          const c = categories.find((x) => x.id === btn.dataset.deleteCat);
+          if (c) showDeleteCategoryDialog(c, categories, products, reload);
         });
       });
       content.querySelectorAll("[data-delete-sub]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          await deleteCategory(btn.dataset.deleteSub);
-          toast("Subcategoría eliminada", "success");
-          mountCategoriesPanel(content, tabGeneration);
+        btn.addEventListener("click", () => {
+          const sub = categories.find((x) => x.id === btn.dataset.deleteSub);
+          const parent = sub && categories.find((x) => x.id === sub.parentId);
+          if (!sub) return;
+          const inSub = products.filter((p) => p.categoryId === sub.id);
+          confirmDialog(`¿Eliminar la subcategoría «${esc(sub.name)}»?${inSub.length && parent ? ` Sus ${plural(inSub.length, "producto pasa", "productos pasan")} a «${esc(parent.name)}».` : ""}`, async () => {
+            try {
+              if (inSub.length && parent) {
+                await updateProductsCatalogFields(inSub.map((p) => ({ id: p.id, categoryId: parent.id, categoryName: parent.name })));
+              }
+              await deleteCategory(sub.id);
+              toast("Subcategoría eliminada", "success");
+            } catch (err) {
+              toast(err.message || "No se pudo eliminar", "error");
+            }
+            reload();
+          });
         });
       });
-    });
+      content.querySelectorAll("[data-organize]").forEach((btn) => {
+        btn.addEventListener("click", () => showOrganizeCatalogDialog({
+          products, categories, brands: brandRes.brands, onlyMissing: btn.hasAttribute("data-only-missing"), onDone: reload,
+        }));
+      });
+    }).catch((err) => panelError(content, err, reload));
   }
 
-  function showCategoryDialog(category, onSaved) {
+  function showCategoryDialog(category, categories, onSaved) {
     const isNew = !category;
     const c = category || {};
+    const roots = (categories || []).filter((x) => !x.parentId);
+    const nextOrder = roots.reduce((m, x) => Math.max(m, x.sortOrder || 0), 0) + 1;
     const close = showModal({
       title: isNew ? "Nueva categoría" : "Editar categoría",
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
-          <div><label class="label label-xs">Nombre *</label><input class="input" id="c-name" value="${esc(c.name || '')}" /></div>
+          <div><label class="label label-xs" for="c-name">Nombre *</label><input class="input" id="c-name" value="${esc(c.name || '')}" placeholder="Ej: Grasas" autocomplete="off" /></div>
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Ícono (emoji)</label><input class="input" id="c-icon" value="${esc(c.icon || '')}" placeholder="🛢️" /></div>
-            <div><label class="label label-xs">Color</label>
+            <div><label class="label label-xs" for="c-icon">Ícono (emoji)</label><input class="input" id="c-icon" value="${esc(c.icon || '')}" placeholder="🛢️" maxlength="8" /></div>
+            <div><label class="label label-xs" for="c-color">Color</label>
               <select class="select" id="c-color">
-                ${CATEGORY_COLORS.map((col) => `<option value="${esc(col)}" ${c.color === col ? 'selected' : ''}>${esc(col)}</option>`).join('')}
+                ${CATEGORY_COLORS.map((col) => `<option value="${esc(col)}" ${(c.color || "slate") === col ? 'selected' : ''}>${esc(col)}</option>`).join('')}
               </select>
             </div>
           </div>
-          <div><label class="label label-xs">Orden</label><input class="input" type="number" id="c-sort" value="${c.sortOrder ?? 0}" /></div>
+          <div><label class="label label-xs" for="c-sort">Orden en la venta</label><input class="input" type="number" id="c-sort" value="${c.sortOrder ?? nextOrder}" /></div>
+          <p class="text-xs text-muted" style="margin:0">Ideas de ícono: ❄️ 🛑 🔧 🛢️ 🧪 🧽 🔋 ⚙️</p>
         </div>
       `,
       footer: `<button class="btn btn-outline" id="c-cancel">Cancelar</button><button class="btn btn-primary" id="c-save">Guardar</button>`,
     });
     document.querySelector("#c-cancel").addEventListener("click", close);
-    document.querySelector("#c-save").addEventListener("click", async () => {
+    document.querySelector("#c-save").addEventListener("click", async (e) => {
+      const name = document.querySelector("#c-name").value.replace(/\s+/g, " ").trim();
+      if (!name) { toast("Escribe el nombre", "error"); return; }
+      const dup = roots.find((x) => x.id !== c.id && looseKey(x.name) === looseKey(name));
+      if (dup) { toast(`Ya existe «${dup.name}»`, "error"); return; }
       const data = {
         ...(c.id ? { id: c.id } : {}),
-        name: document.querySelector("#c-name").value.trim(),
-        slug: document.querySelector("#c-name").value.trim().toLowerCase().replace(/\s+/g, "-"),
-        icon: document.querySelector("#c-icon").value || null,
+        name,
+        slug: slugify(name),
+        icon: document.querySelector("#c-icon").value.trim() || null,
         color: document.querySelector("#c-color").value,
         sortOrder: parseInt(document.querySelector("#c-sort").value) || 0,
-        parentId: null,
-        active: true,
+        parentId: c.parentId || null,
+        active: c.active !== false,
       };
-      if (!data.name) { toast("Nombre obligatorio", "error"); return; }
-      await saveCategory(data);
-      toast("Categoría guardada", "success");
-      close();
-      onSaved();
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        await saveCategory(data);
+        toast("Categoría guardada", "success");
+        close();
+        onSaved();
+      } catch (err) {
+        toast(err.message || "No se pudo guardar", "error");
+        btn.disabled = false;
+      }
     });
+  }
+
+  function showDeleteCategoryDialog(cat, categories, products, onDone) {
+    const idx = indexCategories(categories);
+    const affected = products.filter((p) => topCategoryId(p, idx) === cat.id);
+    const subs = categories.filter((c) => c.parentId === cat.id);
+    const others = sortCategories(categories.filter((c) => !c.parentId && c.id !== cat.id));
+    const close = showModal({
+      title: `Eliminar «${esc(cat.name)}»`,
+      body: `
+        <div style="display:flex;flex-direction:column;gap:0.75rem">
+          <p class="text-sm" style="margin:0">${affected.length ? `Esta categoría tiene <strong>${plural(affected.length, "producto", "productos")}</strong>.` : "Esta categoría no tiene productos."}${subs.length ? ` También se eliminan sus ${plural(subs.length, "subcategoría", "subcategorías")}.` : ""}</p>
+          ${affected.length ? `
+            <div>
+              <label class="label label-xs" for="del-cat-target">¿A qué tipo pasan sus productos?</label>
+              <select class="select" id="del-cat-target">
+                <option value="">Dejarlos sin categoría</option>
+                ${others.map((o) => `<option value="${esc(o.id)}">${esc(o.icon || "")} ${esc(o.name)}</option>`).join("")}
+              </select>
+            </div>` : ""}
+        </div>`,
+      footer: `<button class="btn btn-outline" id="del-cat-cancel">Cancelar</button><button class="btn btn-danger" id="del-cat-ok">${icon("trash", 14)} Eliminar</button>`,
+    });
+    document.querySelector("#del-cat-cancel").addEventListener("click", close);
+    document.querySelector("#del-cat-ok").addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.innerHTML = `<div class="spinner spinner-sm"></div> Eliminando…`;
+      try {
+        const targetId = document.querySelector("#del-cat-target")?.value || "";
+        const target = others.find((o) => o.id === targetId);
+        if (affected.length) {
+          const res = await updateProductsCatalogFields(affected.map((p) => ({
+            id: p.id, categoryId: target ? target.id : null, categoryName: target ? target.name : null,
+          })));
+          if (res.failed.length) throw new Error(`${res.failed.length} productos no se pudieron mover: ${res.failed[0].error}`);
+        }
+        await deleteCategory(cat.id);
+        toast(target ? `Eliminada · ${plural(affected.length, "producto pasó", "productos pasaron")} a «${target.name}»` : "Categoría eliminada", "success");
+        close();
+        onDone();
+      } catch (err) {
+        toast(err.message || "No se pudo eliminar", "error");
+        btn.disabled = false;
+        btn.innerHTML = `${icon("trash", 14)} Eliminar`;
+      }
+    });
+  }
+
+  // ===== MARCAS =====
+  async function brandsSqlEditorUrl() {
+    try {
+      const url = await getSupabaseProjectUrl();
+      const host = url ? new URL(url).hostname : "";
+      const ref = host.endsWith(".supabase.co") ? host.split(".")[0] : "";
+      return ref ? `https://supabase.com/dashboard/project/${ref}/sql/new` : "https://supabase.com/dashboard";
+    } catch {
+      return "https://supabase.com/dashboard";
+    }
+  }
+
+  function mountBrandsPanel(content, gen) {
+    gen = gen ?? tabGeneration;
+    content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+    const reload = () => mountBrandsPanel(content, tabGeneration);
+    Promise.all([fetchBrands(), listProducts(), listCategories()]).then(async ([brandRes, products, categories]) => {
+      if (gen !== tabGeneration) return;
+      const { brands, missingTable } = brandRes;
+      const sorted = sortBrands(brands);
+      const countByKey = countByBrandKey(products);
+      const registeredKeys = new Set(brands.map((b) => normalizeKey(b.name)));
+      const productBrands = knownBrandNames([], products);
+      const fromProducts = productBrands.filter((n) => !registeredKeys.has(normalizeKey(n)));
+      const missingDefaults = missingDefaultBrands(brands);
+      const organize = (onlyMissing = false) => showOrganizeCatalogDialog({ products, categories, brands, onlyMissing, onDone: reload });
+
+      if (missingTable) {
+        const sqlUrl = await brandsSqlEditorUrl();
+        if (gen !== tabGeneration) return;
+        content.innerHTML = `
+          <div class="card setup-card">
+            <div class="card-header">
+              <h2 class="card-title flex items-center gap-2">${icon("alertTriangle", 16)} Falta un paso en Supabase (una sola vez)</h2>
+            </div>
+            <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
+              <p class="text-sm" style="margin:0">Para guardar la lista de marcas y que la vean todos los teléfonos hay que crear la tabla <code>brands</code>. Son 4 pasos:</p>
+              <ol class="setup-steps">
+                <li>Toca <strong>Copiar SQL</strong>.</li>
+                <li>Toca <strong>Abrir Supabase</strong> (editor SQL) → <em>New query</em>.</li>
+                <li>Pega y toca <strong>Run</strong>. Debe decir «MIGRACIÓN v5.12 COMPLETADA».</li>
+                <li>Vuelve aquí y toca <strong>Ya lo hice</strong>.</li>
+              </ol>
+              <div class="flex gap-2" style="flex-wrap:wrap">
+                <button class="btn btn-primary btn-sm" id="copy-brands-sql">${icon("copy", 14)} Copiar SQL</button>
+                <a class="btn btn-outline btn-sm" href="${esc(sqlUrl)}" target="_blank" rel="noopener">${icon("arrowRight", 14)} Abrir Supabase</a>
+                <button class="btn btn-outline btn-sm" id="brands-recheck">${icon("refresh", 14)} Ya lo hice</button>
+              </div>
+              <p class="text-xs text-muted" style="margin:0">Ese mismo SQL también crea los tipos que falten (Refrigerante, Líquido de freno, Filtros, Lubricantes, Aditivos) y añade MANNOL, Royal y las marcas de tus productos.</p>
+              ${productBrands.length ? `<p class="text-xs text-muted" style="margin:0">Mientras tanto, la venta ya filtra por las marcas que tienen tus productos: ${productBrands.map((n) => `<strong>${esc(n)}</strong> (${countByKey.get(normalizeKey(n)) || 0})`).join(", ")}.</p>` : ""}
+            </div>
+          </div>`;
+        content.querySelector("#brands-recheck").addEventListener("click", reload);
+        content.querySelector("#copy-brands-sql").addEventListener("click", async () => {
+          try {
+            const res = await fetch("supabase/migration-v5.12-brands.sql", { cache: "no-store" });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const sql = await res.text();
+            const ok = await copyText(sql);
+            toast(ok ? "SQL copiado: pégalo en Supabase → SQL Editor" : "No se pudo copiar automáticamente", ok ? "success" : "warning");
+          } catch {
+            toast("No se encontró el archivo supabase/migration-v5.12-brands.sql (súbelo junto con la app)", "error");
+          }
+        });
+        return;
+      }
+
+      content.innerHTML = `
+        <div class="card">
+          <div class="card-header flex justify-between items-center" style="gap:0.5rem;flex-wrap:wrap">
+            <div style="min-width:0">
+              <h2 class="card-title">Marcas (${sorted.length})</h2>
+              <p class="text-xs text-muted" style="margin:0.25rem 0 0">En la venta se filtra por marca con un toque. La marca de cada producto se elige al crearlo o en <strong>Organizar productos</strong>.</p>
+            </div>
+            <div class="flex gap-2" style="flex-wrap:wrap">
+              <button class="btn btn-outline btn-sm" id="brand-organize">${icon("listTree", 14)} Organizar productos</button>
+              <button class="btn btn-primary btn-sm" id="new-brand">${icon("plus", 14)} Nueva</button>
+            </div>
+          </div>
+          ${missingDefaults.length || fromProducts.length ? `
+            <div class="card-content brand-suggest">
+              ${missingDefaults.length ? `<button class="btn btn-outline btn-sm" id="add-default-brands">${icon("plus", 14)} Añadir ${missingDefaults.map((b) => esc(b.name)).join(" y ")}</button>` : ""}
+              ${fromProducts.length ? `
+                <p class="text-xs text-muted" style="margin:0">Tus productos usan ${plural(fromProducts.length, "una marca que no está", "marcas que no están")} en la lista: <strong>${fromProducts.map(esc).join(", ")}</strong>.</p>
+                <button class="btn btn-outline btn-sm" id="add-product-brands">${icon("plus", 14)} ${fromProducts.length === 1 ? "Añadirla" : "Añadirlas"} a la lista</button>` : ""}
+            </div>` : ""}
+          <div class="card-content" style="display:flex;flex-direction:column;gap:0.625rem">
+            ${sorted.length === 0 ? `
+              <div class="empty-state">
+                <p class="empty-state-title">Todavía no hay marcas en la lista</p>
+                <p class="empty-state-desc">Añade MANNOL y Royal con el botón de arriba o crea otra con <strong>Nueva</strong>.</p>
+              </div>` : sorted.map((b) => {
+                const n = countByKey.get(normalizeKey(b.name)) || 0;
+                return `
+                  <div class="brand-row tile">
+                    <span class="brand-badge brand-${esc(b.color || "slate")}" aria-hidden="true">${esc((b.name || "?").trim().slice(0, 1).toUpperCase())}</span>
+                    <div class="brand-row-text">
+                      <div class="brand-row-name">${esc(b.name)}</div>
+                      <div class="brand-row-meta">${n ? plural(n, "producto", "productos") : "Sin productos todavía"}</div>
+                    </div>
+                    <div class="brand-row-actions">
+                      <button class="btn btn-ghost btn-sm" data-edit-brand="${esc(b.id)}">Editar</button>
+                      <button class="btn btn-ghost btn-sm text-danger" data-delete-brand="${esc(b.id)}" aria-label="Quitar ${esc(b.name)}" title="Quitar de la lista">${icon("trash", 14)}</button>
+                    </div>
+                  </div>`;
+              }).join("")}
+          </div>
+        </div>`;
+
+      const addMany = async (btn, list, startOrder) => {
+        btn.disabled = true;
+        btn.innerHTML = `<div class="spinner spinner-sm"></div> Añadiendo…`;
+        let added = 0;
+        try {
+          for (const [i, item] of list.entries()) {
+            await saveBrand({ name: item.name, sortOrder: item.sortOrder ?? startOrder + i, color: item.color || "slate" });
+            added++;
+          }
+          toast(added === 1 ? `Marca «${list[0].name}» añadida` : `${added} marcas añadidas`, "success");
+        } catch (err) {
+          toast(err.message || "No se pudieron añadir", "error");
+        }
+        reload();
+      };
+      const maxOrder = sorted.reduce((m, b) => Math.max(m, b.sortOrder || 0), 0);
+      content.querySelector("#add-default-brands")?.addEventListener("click", (e) =>
+        addMany(e.currentTarget, missingDefaults.map((b) => ({ ...b, color: b.slug === "mannol" ? "amber" : "indigo" })), maxOrder + 1));
+      content.querySelector("#add-product-brands")?.addEventListener("click", (e) =>
+        addMany(e.currentTarget, fromProducts.map((name) => ({ name })), maxOrder + 1));
+      content.querySelector("#brand-organize").addEventListener("click", () => organize(false));
+      content.querySelector("#new-brand").addEventListener("click", () => showBrandDialog(null, { brands, countByKey }, reload));
+      content.querySelectorAll("[data-edit-brand]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const b = brands.find((x) => x.id === btn.dataset.editBrand);
+          if (b) showBrandDialog(b, { brands, countByKey }, reload);
+        });
+      });
+      content.querySelectorAll("[data-delete-brand]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const b = brands.find((x) => x.id === btn.dataset.deleteBrand);
+          if (!b) return;
+          const n = countByKey.get(normalizeKey(b.name)) || 0;
+          confirmDialog(`¿Quitar «${esc(b.name)}» de la lista de marcas?${n ? ` Sus ${plural(n, "producto conserva", "productos conservan")} el nombre «${esc(b.name)}» y seguirá apareciendo en la venta mientras los tengan (puedes cambiarles la marca en Organizar productos).` : ""}`, async () => {
+            try {
+              await deleteBrand(b.id);
+              toast("Marca quitada de la lista", "success");
+            } catch (err) {
+              toast(err.message || "No se pudo quitar", "error");
+            }
+            reload();
+          });
+        });
+      });
+    }).catch((err) => panelError(content, err, reload));
+  }
+
+  function showBrandDialog(brand, ctx, onSaved) {
+    const isNew = !brand;
+    const b = brand || {};
+    const usedBy = isNew ? 0 : (ctx.countByKey.get(normalizeKey(b.name)) || 0);
+    const nextOrder = (ctx.brands || []).reduce((m, x) => Math.max(m, x.sortOrder || 0), 0) + 1;
+    const close = showModal({
+      title: isNew ? "Nueva marca" : "Editar marca",
+      body: `
+        <div style="display:flex;flex-direction:column;gap:0.75rem">
+          <div><label class="label label-xs" for="b-name">Nombre *</label><input class="input" id="b-name" value="${esc(b.name || "")}" placeholder="Ej: Castrol" autocomplete="off" /></div>
+          <div class="grid grid-cols-2 gap-2">
+            <div><label class="label label-xs" for="b-color">Color</label>
+              <select class="select" id="b-color">
+                ${CATEGORY_COLORS.map((col) => `<option value="${esc(col)}" ${(b.color || "slate") === col ? "selected" : ""}>${esc(col)}</option>`).join("")}
+              </select>
+            </div>
+            <div><label class="label label-xs" for="b-sort">Orden en la venta</label><input class="input" type="number" id="b-sort" value="${b.sortOrder ?? nextOrder}" /></div>
+          </div>
+          ${usedBy ? `
+            <label class="chk-chip" id="b-rename-wrap" hidden>
+              <input type="checkbox" id="b-rename-products" checked />
+              Cambiar también la marca en sus ${plural(usedBy, "producto", "productos")}
+            </label>` : ""}
+        </div>`,
+      footer: `<button class="btn btn-outline" id="b-cancel">Cancelar</button><button class="btn btn-primary" id="b-save">Guardar</button>`,
+    });
+    const nameInput = document.querySelector("#b-name");
+    const renameWrap = document.querySelector("#b-rename-wrap");
+    nameInput.addEventListener("input", () => {
+      if (renameWrap) renameWrap.hidden = nameInput.value.replace(/\s+/g, " ").trim() === (b.name || "");
+    });
+    setTimeout(() => nameInput.focus(), 50);
+    document.querySelector("#b-cancel").addEventListener("click", close);
+    document.querySelector("#b-save").addEventListener("click", async (e) => {
+      const name = nameInput.value.replace(/\s+/g, " ").trim();
+      if (!name) { toast("Escribe el nombre de la marca", "error"); return; }
+      const dup = (ctx.brands || []).find((x) => x.id !== b.id && normalizeKey(x.name) === normalizeKey(name));
+      if (dup) { toast(`Ya existe «${dup.name}»`, "error"); return; }
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        await saveBrand({
+          ...(b.id ? { id: b.id } : {}),
+          name,
+          color: document.querySelector("#b-color").value,
+          sortOrder: parseInt(document.querySelector("#b-sort").value) || 0,
+          active: true,
+        });
+        let moved = 0;
+        if (!isNew && name !== b.name && document.querySelector("#b-rename-products")?.checked) {
+          moved = await renameBrandInProducts(b.name, name);
+        }
+        toast(moved ? `Marca guardada · ${plural(moved, "producto actualizado", "productos actualizados")}` : "Marca guardada", "success");
+        close();
+        onSaved();
+      } catch (err) {
+        toast(err.message || "No se pudo guardar", "error");
+        btn.disabled = false;
+      }
+    });
+  }
+
+  // ===== ORGANIZAR PRODUCTOS (tipo y marca de cada uno) =====
+  function showOrganizeCatalogDialog({ products, categories, brands, onDone, onlyMissing = false }) {
+    const roots = sortCategories(categories.filter((c) => !c.parentId));
+    const idx = indexCategories(categories);
+    const brandNames = knownBrandNames(brands, products);
+    const registered = sortBrands(brands).map((b) => b.name);
+    const rows = [...products]
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "es"))
+      .map((p) => {
+        const top = topCategoryId(p, idx) || "";
+        const origBrand = String(p.brand || "").trim();
+        return { p, origTop: top, cat: top, origBrand, brand: canonicalBrand(origBrand, brandNames), suggested: false };
+      });
+    const unified = rows.filter((r) => r.brand && r.brand !== r.origBrand);
+    let q = "";
+    let missingOnly = !!onlyMissing;
+    const isChanged = (r) => r.cat !== r.origTop || (r.brand && r.brand !== r.origBrand);
+    const isMissing = (r) => !r.cat || !r.brand;
+
+    const close = showModal({
+      title: "Organizar productos por tipo y marca",
+      size: "lg",
+      body: `
+        <div class="org">
+          <p class="text-xs text-muted" style="margin:0">Elige el tipo y la marca de cada producto. Al guardar, todos los vendedores los ven así en el catálogo de venta.</p>
+          <div class="org-toolbar">
+            <div class="org-search">
+              <span aria-hidden="true">${icon("search", 14)}</span>
+              <input class="input" type="search" id="org-q" placeholder="Buscar producto…" aria-label="Buscar producto" />
+            </div>
+            <label class="chk-chip"><input type="checkbox" id="org-missing" ${missingOnly ? "checked" : ""} /> Solo sin tipo o sin marca</label>
+            <button type="button" class="btn btn-outline btn-sm" id="org-suggest">${icon("sparkles", 14)} Sugerir automáticamente</button>
+          </div>
+          ${unified.length ? `<p class="org-note">${plural(unified.length, "producto tiene", "productos tienen")} la marca escrita distinto (p. ej. «${esc(unified[0].origBrand)}»). Al guardar quedan como «${esc(unified[0].brand)}».</p>` : ""}
+          ${roots.length === 0 ? `<p class="org-note">Todavía no hay categorías: créalas en <strong>Categorías</strong> (botón «Crear las que faltan»).</p>` : ""}
+          <div class="org-list" id="org-list"></div>
+        </div>`,
+      footer: `
+        <span class="text-xs text-muted org-count" id="org-count">Sin cambios</span>
+        <button class="btn btn-outline" id="org-cancel">Cancelar</button>
+        <button class="btn btn-primary" id="org-save">${icon("save", 14)} Guardar</button>`,
+    });
+    const overlay = document.querySelector(".modal-overlay:last-child");
+    const $ = (sel) => overlay.querySelector(sel);
+
+    function rowHtml(r, i) {
+      const changed = isChanged(r);
+      return `
+        <div class="org-row ${changed ? "is-changed" : ""}" data-row="${i}">
+          <div class="org-name">
+            <span class="org-title">${esc(r.p.name)}</span>
+            <span class="org-sub">${esc(r.p.sku || "")}${r.suggested ? `${r.p.sku ? " · " : ""}<span class="org-sugg">sugerido</span>` : ""}</span>
+          </div>
+          <div class="org-fields">
+            <select class="select" data-org-cat="${i}" aria-label="Tipo de ${esc(r.p.name)}">
+              <option value="">— Sin tipo —</option>
+              ${roots.map((c) => `<option value="${esc(c.id)}" ${r.cat === c.id ? "selected" : ""}>${esc(c.icon ? `${c.icon} ` : "")}${esc(c.name)}</option>`).join("")}
+            </select>
+            <select class="select" data-org-brand="${i}" aria-label="Marca de ${esc(r.p.name)}">
+              ${r.brand ? "" : `<option value="" selected>— Sin marca —</option>`}
+              ${brandNames.map((n) => `<option value="${esc(n)}" ${r.brand === n ? "selected" : ""}>${esc(n)}</option>`).join("")}
+            </select>
+          </div>
+        </div>`;
+    }
+
+    function renderList() {
+      const words = normalizeKey(q).split(" ").filter(Boolean);
+      const visible = rows
+        .map((r, i) => [r, i])
+        .filter(([r]) => (!missingOnly || isMissing(r) || isChanged(r)) &&
+          (!words.length || words.every((w) => normalizeKey(`${r.p.name} ${r.p.sku || ""} ${r.p.brand || ""}`).includes(w))));
+      $("#org-list").innerHTML = visible.length
+        ? visible.map(([r, i]) => rowHtml(r, i)).join("")
+        : `<div class="empty-state"><p class="empty-state-title">${missingOnly ? "Todos tienen tipo y marca 🎉" : "Sin resultados"}</p></div>`;
+      updateCount();
+    }
+
+    function updateCount() {
+      const n = rows.filter(isChanged).length;
+      $("#org-count").textContent = n ? plural(n, "cambio sin guardar", "cambios sin guardar") : "Sin cambios";
+    }
+
+    $("#org-list").addEventListener("change", (e) => {
+      const el = e.target;
+      const i = Number(el.dataset.orgCat ?? el.dataset.orgBrand);
+      const r = rows[i];
+      if (!r) return;
+      if (el.dataset.orgCat !== undefined) r.cat = el.value;
+      else r.brand = el.value;
+      r.suggested = false;
+      el.closest(".org-row")?.classList.toggle("is-changed", isChanged(r));
+      const sub = el.closest(".org-row")?.querySelector(".org-sugg");
+      if (sub) sub.remove();
+      updateCount();
+    });
+    $("#org-q").addEventListener("input", (e) => { q = e.target.value; renderList(); });
+    $("#org-missing").addEventListener("change", (e) => { missingOnly = e.target.checked; renderList(); });
+    $("#org-suggest").addEventListener("click", () => {
+      let n = 0;
+      for (const r of rows) {
+        let touched = false;
+        if (!r.cat) {
+          const id = suggestCategoryId(r.p, categories);
+          if (id) { r.cat = id; touched = true; }
+        }
+        if (!r.brand || !registered.includes(r.brand)) {
+          const sb = suggestBrand(r.p, registered);
+          if (sb && registered.includes(sb) && sb !== r.brand) { r.brand = sb; touched = true; }
+        }
+        if (touched) { r.suggested = true; n++; }
+      }
+      renderList();
+      toast(n ? `${plural(n, "sugerencia", "sugerencias")}: revísalas y toca Guardar` : (roots.length ? "No hay nada que sugerir: los que faltan no se reconocen por el nombre" : "Primero crea los tipos en Categorías"), n ? "success" : "info");
+    });
+    $("#org-cancel").addEventListener("click", close);
+    $("#org-save").addEventListener("click", async (e) => {
+      const changed = rows.filter(isChanged);
+      if (!changed.length) { close(); return; }
+      const updates = changed.map((r) => {
+        const u = { id: r.p.id };
+        if (r.cat !== r.origTop) {
+          const c = roots.find((x) => x.id === r.cat);
+          u.categoryId = c ? c.id : null;
+          u.categoryName = c ? c.name : null;
+        }
+        if (r.brand && r.brand !== r.origBrand) u.brand = r.brand;
+        return u;
+      });
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const res = await updateProductsCatalogFields(updates, (done, total) => {
+          btn.innerHTML = `<div class="spinner spinner-sm"></div> ${done}/${total}`;
+        });
+        if (res.failed.length) {
+          toast(`${res.ok} guardados · ${res.failed.length} con error: ${res.failed[0].error}`, "error");
+          btn.disabled = false;
+          btn.innerHTML = `${icon("save", 14)} Reintentar`;
+          return;
+        }
+        toast(`${plural(res.ok, "producto actualizado", "productos actualizados")}`, "success");
+        close();
+        onDone?.();
+      } catch (err) {
+        toast(err.message || "No se pudo guardar", "error");
+        btn.disabled = false;
+        btn.innerHTML = `${icon("save", 14)} Guardar`;
+      }
+    });
+    renderList();
   }
 
   // ===== WAREHOUSES =====
@@ -2177,7 +2779,7 @@ export function mountAdminView(container, navigateOrUser) {
             <button class="btn btn-primary btn-sm" id="new-wh">${icon("plus", 14)} Nuevo</button>
           </div>
           <div class="overflow-x-auto">
-            <table class="table">
+            <table class="table table-cards">
               <thead><tr><th>Nombre</th><th>Código</th><th>Dirección</th><th class="text-right">Comisión vendedor</th><th class="text-center">PIN de acceso</th><th class="text-right">Acciones</th></tr></thead>
               <tbody>
                 ${warehouses.map((w) => {
@@ -2476,7 +3078,7 @@ export function mountAdminView(container, navigateOrUser) {
             <button class="btn btn-primary btn-sm" id="new-mg">${icon("plus", 14)} Nuevo</button>
           </div>
           <div class="overflow-x-auto">
-            <table class="table">
+            <table class="table table-cards">
               <thead><tr><th>Nombre</th><th>Código</th><th>Tipo</th><th>Almacén</th><th class="text-right">Comisión</th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
               <tbody>
                 ${managers.map((m) => {
@@ -2695,7 +3297,7 @@ export function mountAdminView(container, navigateOrUser) {
               <h3 class="card-title flex items-center gap-1">${icon("listTree", 16)} Solicitudes del personal</h3>
               ${pendingRequests.length > 0 ? `<span class="badge badge-warning" style="font-size:0.6875rem">${pendingRequests.length} pendiente(s)</span>` : ''}
             </div>
-            <div class="card-content" style="padding:0.5rem">
+            <div class="card-content" style="padding:0.625rem">
               ${requests.length === 0 ? `
                 <div class="empty-state" style="padding:1.25rem">
                   <div class="empty-state-icon">${icon("listTree", 20)}</div>
@@ -2703,27 +3305,30 @@ export function mountAdminView(container, navigateOrUser) {
                   <p class="empty-state-desc">El personal de cada almacén pide stock desde "Otros almacenes → Solicitar traspaso".</p>
                 </div>
               ` : `
-                <div style="display:flex;flex-direction:column;gap:0.5rem">
+                <div class="req-list">
                   ${requests.slice(0, 15).map((r) => {
                     const fromWh = whMap.get(r.fromWarehouseId);
                     const toWh = whMap.get(r.toWarehouseId);
                     const stBadge = { PENDIENTE: 'badge-warning', APROBADA: 'badge-accent', RECHAZADA: 'badge-danger', CANCELADA: 'badge-outline' }[r.status] || '';
                     const stLabel = { PENDIENTE: 'Pendiente', APROBADA: 'Aprobada', RECHAZADA: 'Rechazada', CANCELADA: 'Cancelada' }[r.status] || r.status;
                     return `
-                      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.5rem 0.625rem;border:1px solid var(--border);border-radius:var(--radius)" data-request-row>
-                        <div style="min-width:0;flex:1">
-                          <div class="text-sm font-medium">${esc(r.productName || '—')} · <strong>${r.quantity}</strong> u ${r.code ? `<span class="text-xs text-muted font-mono">${esc(r.code)}</span>` : ''}</div>
-                          <div class="text-xs text-muted">
-                            ${fromWh ? esc(fromWh.name) : '—'} → ${toWh ? esc(toWh.name) : '—'} · pide ${esc(r.requestedByName || '—')}${r.note ? ` · "${esc(r.note)}"` : ''}
-                          </div>
+                      <div class="req-card req-${esc(String(r.status || '').toLowerCase())}" data-request-row>
+                        <div class="req-head">
+                          <div class="req-title">${esc(r.productName || '—')} <span class="req-qty">· ${r.quantity} u</span></div>
+                          <span class="badge ${stBadge} req-status">${stLabel}</span>
                         </div>
-                        <div style="display:flex;align-items:center;gap:0.5rem;flex-shrink:0">
-                          <span class="badge ${stBadge}" style="font-size:0.625rem">${stLabel}</span>
-                          ${r.status === "PENDIENTE" ? `
-                            <button class="btn btn-primary btn-sm" data-approve-request="${esc(r.id)}" title="Mueve el stock del origen al destino">${icon("check", 12)} Aprobar</button>
+                        <div class="req-meta">
+                          <span class="req-route">${fromWh ? esc(fromWh.name) : '—'} → ${toWh ? esc(toWh.name) : '—'}</span>
+                          ${r.code ? `<span class="req-code">${esc(r.code)}</span>` : ''}
+                        </div>
+                        <div class="req-by">Pedido por ${esc(r.requestedByName || '—')}</div>
+                        ${r.note ? `<div class="req-note">“${esc(r.note)}”</div>` : ''}
+                        ${r.status === "PENDIENTE" ? `
+                          <div class="req-actions">
+                            <button class="btn btn-primary btn-sm" data-approve-request="${esc(r.id)}" title="Mueve el stock del origen al destino">${icon("check", 14)} Aprobar</button>
                             <button class="btn btn-outline btn-sm text-danger" data-reject-request="${esc(r.id)}">Rechazar</button>
-                          ` : ''}
-                        </div>
+                          </div>
+                        ` : ''}
                       </div>
                     `;
                   }).join("")}
@@ -2752,7 +3357,7 @@ export function mountAdminView(container, navigateOrUser) {
           </div>
 
           <!-- Filtros rápidos -->
-          <div class="flex gap-2 flex-wrap">
+          <div class="flex gap-2 flex-wrap chip-scroll">
             <button class="btn btn-primary btn-sm" data-transfer-filter="all">Todas (${transfers.length})</button>
             <button class="btn btn-outline btn-sm" data-transfer-filter="PENDING">Pendientes (${pending.length})</button>
             <button class="btn btn-outline btn-sm" data-transfer-filter="COMPLETED">Completadas (${completed.length})</button>
@@ -2769,7 +3374,7 @@ export function mountAdminView(container, navigateOrUser) {
                   <p class="empty-state-desc">Las transferencias se crean desde la vista de cada almacén (tab "Transferir").</p>
                 </div>
               ` : `
-                <table class="table" id="transfers-table">
+                <table class="table table-cards" id="transfers-table">
                   <thead><tr>
                     <th>Código</th>
                     <th>Producto</th>
@@ -3378,10 +3983,10 @@ export function mountAdminView(container, navigateOrUser) {
           <!-- Stock separado por almacén -->
           <div>
             <h2 class="text-base font-semibold flex items-center gap-2" style="margin:0 0 0.5rem">${icon("store", 16)} Stock por almacén (local)</h2>
-            <p class="text-xs text-muted" style="margin:0 0 0.625rem">Usa el botón <strong>+</strong> de cada local para añadir stock directamente a ese almacén, o toca un producto para ajustarlo en ese local.</p>
-            <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
+            <p class="text-xs text-muted" style="margin:0 0 0.625rem">Usa el botón <strong>+</strong> de cada local para añadir stock directamente a ese almacén, o toca un producto para ajustarlo en ese local.<span class="wh-stock-hint"> Desliza para ver los ${activeWhs.length} locales →</span></p>
+            <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-3 wh-stock-grid">
               ${activeWhs.map((w) => `
-                <div class="card" style="min-width:0">
+                <div class="card wh-stock-card" style="min-width:0">
                   <div class="card-header flex justify-between items-center" style="gap:0.5rem">
                     <h3 class="card-title text-sm flex items-center gap-2" style="min-width:0">
                       <span class="truncate">${esc(w.name)}</span>
@@ -3415,7 +4020,7 @@ export function mountAdminView(container, navigateOrUser) {
           <!-- Filtros -->
           <div class="card">
             <div class="card-content" style="padding:0.875rem;display:flex;flex-direction:column;gap:0.625rem">
-              <div class="grid grid-cols-1 md:grid-cols-4 gap-2">
+              <div class="grid grid-cols-1 md:grid-cols-4 gap-2 stk-filters">
                 <div style="position:relative">
                   <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)">${icon("search", 14)}</span>
                   <input class="input" id="stk-search" placeholder="Buscar producto, SKU, marca..." value="${esc(search)}" style="padding-left:2.25rem" />
@@ -3426,11 +4031,11 @@ export function mountAdminView(container, navigateOrUser) {
                     ${activeWhs.map((w) => `<option value="${esc(w.id)}" ${whFilter === w.id ? 'selected' : ''}>${esc(w.name)} (${esc(w.code)})</option>`).join('')}
                   </select>
                 </div>
-                <label class="flex items-center gap-2 text-sm" style="cursor:pointer">
+                <label class="flex items-center gap-2 text-sm chk-chip" style="cursor:pointer">
                   <input type="checkbox" id="stk-only-low" ${onlyLow ? 'checked' : ''} />
                   Solo bajo mínimo / agotados
                 </label>
-                <label class="flex items-center gap-2 text-sm" style="cursor:pointer">
+                <label class="flex items-center gap-2 text-sm chk-chip" style="cursor:pointer">
                   <input type="checkbox" id="stk-only-out" ${onlyOutOfStock ? 'checked' : ''} />
                   Solo agotados
                 </label>
@@ -3593,6 +4198,7 @@ export function mountAdminView(container, navigateOrUser) {
     let filterTo = "";
     let filterText = "";
     let mvPage = 1;
+    let mvFiltersOpen = null; // v5.11.0: panel de filtros plegable (null = según pantalla)
     const MV_PAGE_SIZE = 50; // paginación client-side (500 filas cargadas)
     let allMovements = [];
     let allWarehouses = [];
@@ -3674,6 +4280,9 @@ export function mountAdminView(container, navigateOrUser) {
         TRANSFERENCIA_ENTRADA: "badge-accent",
       };
 
+      const mvActiveFilters = [filterText, filterWarehouse, filterProduct, filterReason, filterFrom, filterTo].filter(Boolean).length;
+      const mvIsMobile = !!(window.matchMedia && window.matchMedia("(max-width: 767.98px)").matches);
+      if (mvFiltersOpen === null) mvFiltersOpen = !mvIsMobile;
       content.innerHTML = `
         <div style="display:flex;flex-direction:column;gap:1rem">
           <div>
@@ -3701,19 +4310,22 @@ export function mountAdminView(container, navigateOrUser) {
           </div>
 
           <!-- Aclaración + acción de nueva transferencia -->
-          <div style="background: color-mix(in oklab, var(--info) 8%, var(--bg-elevated)); border: 1px solid color-mix(in oklab, var(--info) 25%, transparent); border-radius: var(--radius); padding: 0.75rem 1rem; display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
-            <div style="width:2rem;height:2rem;background: color-mix(in oklab, var(--info) 15%, transparent); color: var(--info); border-radius: var(--radius); display:flex;align-items:center;justify-content:center;flex-shrink:0">
-              ${icon("info", 16)}
+          <div class="info-cta">
+            <div class="info-cta-icon">${icon("arrowLeftRight", 18)}</div>
+            <div class="info-cta-text">
+              <div class="info-cta-title">¿Querés mover mercancía entre almacenes?</div>
+              <div class="info-cta-desc">Una transferencia descuenta del almacén origen y suma al destino automáticamente. Queda registrada acá en el historial.</div>
             </div>
-            <div style="flex:1;min-width:0">
-              <div class="text-sm font-semibold">¿Querés mover mercancía entre almacenes?</div>
-              <div class="text-xs text-muted">Una transferencia descuenta del almacén origen y suma al destino automáticamente. Queda registrada acá en el historial.</div>
-            </div>
-            <button class="btn btn-primary btn-sm" id="mv-new-transfer">${icon("arrowLeftRight", 12)} Nueva transferencia</button>
+            <button class="btn btn-primary btn-sm info-cta-action" id="mv-new-transfer">${icon("arrowLeftRight", 14)} Nueva transferencia</button>
           </div>
 
-          <!-- Filtros -->
-          <div class="card">
+          <!-- Filtros (v5.11.0: plegables en el móvil; en computadora se abren solos) -->
+          <details class="card filter-panel" id="mv-filter-panel" ${mvFiltersOpen ? "open" : ""}>
+            <summary class="filter-panel-summary">
+              <span class="filter-panel-title">${icon("search", 14)} Filtros</span>
+              ${mvActiveFilters > 0 ? `<span class="badge badge-accent">${mvActiveFilters} activo${mvActiveFilters === 1 ? '' : 's'}</span>` : `<span class="text-xs text-muted">Todos los movimientos</span>`}
+              <span class="filter-panel-chevron">${icon("chevronDown", 16)}</span>
+            </summary>
             <div class="card-content" style="padding:0.875rem;display:flex;flex-direction:column;gap:0.625rem">
               <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
                 <div>
@@ -3750,13 +4362,13 @@ export function mountAdminView(container, navigateOrUser) {
                   <input class="input" type="date" id="mv-filter-to" value="${filterTo}" />
                 </div>
               </div>
-              <div class="flex gap-2 flex-wrap">
+              <div class="flex gap-2 flex-wrap filter-actions">
                 <button class="btn btn-primary btn-sm" id="mv-apply-filters">${icon("search", 12)} Aplicar filtros</button>
                 <button class="btn btn-outline btn-sm" id="mv-clear-filters">Limpiar</button>
                 <button class="btn btn-outline btn-sm" id="mv-export-csv" title="Exportar movimientos filtrados a CSV">${icon("download", 12)} Exportar CSV</button>
               </div>
             </div>
-          </div>
+          </details>
 
           <!-- Tabla -->
           <div class="card">
@@ -3819,15 +4431,18 @@ export function mountAdminView(container, navigateOrUser) {
       `;
 
       // Cablear filtros
+      content.querySelector("#mv-filter-panel")?.addEventListener("toggle", (e) => { mvFiltersOpen = e.currentTarget.open; });
       content.querySelector("#mv-apply-filters").addEventListener("click", () => {
         filterWarehouse = content.querySelector("#mv-filter-warehouse").value;
         filterProduct = content.querySelector("#mv-filter-product").value;
         filterReason = content.querySelector("#mv-filter-reason").value;
         filterFrom = content.querySelector("#mv-filter-from").value;
         filterTo = content.querySelector("#mv-filter-to").value;
+        if (mvIsMobile) mvFiltersOpen = false; // en el móvil: cerrar y mostrar resultados
         render();
       });
       content.querySelector("#mv-clear-filters").addEventListener("click", () => {
+        if (mvIsMobile) mvFiltersOpen = false;
         filterWarehouse = "";
         filterProduct = "";
         filterReason = "";

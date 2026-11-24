@@ -1,0 +1,1410 @@
+/* ============================================================
+   MANNOL POS — Capa de mejoras para MÓVIL (v5.8 · propuesta)
+   ------------------------------------------------------------
+   Se carga DESPUÉS de styles.css. Solo usa los tokens de tema
+   existentes (funciona en claro y oscuro). Agrupado por idea:
+
+   1. Navegación inferior fija + botón "Vender" acoplado
+   2. Cobro siempre visible en Ventas + catálogo tipo hoja
+   3. Inicio compacto (sin banda fija, lista de almacenes)
+   4. PIN con teclado numérico grande
+   5. Objetivos táctiles ≥ 44 px y textos ≥ 11 px
+   ============================================================ */
+
+/* ---------- Utilidades que faltaban ---------- */
+.mx-auto { margin-left: auto; margin-right: auto; } /* el candado del PIN no se centraba */
+.sr-only {
+  position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* Quita el destello gris de tap en Android/iOS en controles propios */
+.nav-btn, .fab, .wh-row, .pin-key, .checkout-bar-btn, .drawer-item {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation; /* sin retardo de doble-tap */
+}
+
+/* El header "sticky" nunca se quedaba arriba: .mobile-shell tenía
+   overflow-x:hidden, que convierte al contenedor en zona de scroll propia
+   y anula el sticky. `clip` recorta igual pero sin romperlo. */
+.mobile-shell { overflow-x: clip; }
+
+/* ============================================================
+   0. Safe areas (iPhone con notch en modo PWA "black-translucent")
+   ============================================================ */
+.app-header,
+.premium-header { padding-top: env(safe-area-inset-top); }
+/* Vistas sin header (PIN): que el contenido no quede bajo la barra de estado */
+.mobile-shell > .bg-diagonal + .mobile-main { padding-top: calc(0.75rem + env(safe-area-inset-top)); }
+
+/* ============================================================
+   1. NAVEGACIÓN INFERIOR FIJA + BOTÓN "VENDER" ACOPLADO
+   (la causa raíz —[aria-label]{position:relative}— se quitó de styles.css)
+   ============================================================ */
+@media (max-width: 1023px) {
+  .bottom-nav {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 30;
+    background: var(--bg-dark);              /* cubre también la zona del indicador de inicio */
+    padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: 0 -8px 24px -12px rgba(0, 0, 0, 0.35);
+  }
+  [data-theme="dark"] .bottom-nav { background: black; }
+  .bottom-nav-bar { height: 4rem; border-top: none; }
+
+  .nav-btn { position: relative; gap: 0.1875rem; }
+  .nav-btn svg {
+    box-sizing: content-box;
+    padding: 0.25rem 0.875rem;
+    border-radius: 999px;
+    transition: background 0.15s ease;
+  }
+  .nav-btn.active svg { background: color-mix(in oklab, var(--primary) 22%, transparent); }
+  .nav-btn-label { font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.01em; }
+
+  /* FAB "Registrar venta" acoplado al centro de la barra */
+  .fab {
+    position: fixed;
+    bottom: calc(1.75rem + env(safe-area-inset-bottom));
+    width: 3.75rem;
+    height: 3.75rem;
+    border: 4px solid var(--bg);
+    transition: transform 0.2s ease, opacity 0.2s ease, background 0.15s;
+  }
+  /* En la vista Ventas el FAB sobra (ya estás vendiendo) y taparía la barra de cobro */
+  .mobile-shell[data-active-view="sales"] .fab { transform: translateX(-50%) scale(0.4); }
+
+  /* Espacio para que el último contenido no quede tapado por la barra */
+  .mobile-main { padding-bottom: calc(6.5rem + env(safe-area-inset-bottom)); }
+
+  /* El botón flotante de "modo kiosko" tapaba la pestaña Inicio y en iPhone
+     no funciona (Safari no tiene Fullscreen API): pasa al menú lateral. */
+  .kiosk-btn { display: none !important; }
+}
+
+/* Oculto en Ventas en cualquier ancho (en escritorio coincidía con la barra de cobro) */
+.mobile-shell[data-active-view="sales"] .fab { opacity: 0; pointer-events: none; }
+
+/* Toasts abajo, por encima de la barra (arriba tapaban el header y los datos) */
+@media (max-width: 640px) {
+  .toast-container {
+    top: auto;
+    left: 0.75rem;
+    right: 0.75rem;
+    bottom: calc(5.25rem + env(safe-area-inset-bottom));
+    max-width: none;
+    align-items: stretch;
+  }
+  body.has-checkout-bar .toast-container { bottom: calc(9.5rem + env(safe-area-inset-bottom)); }
+  .toast { min-width: 0; max-width: none; animation: mobToastUp 0.22s ease; }
+}
+@keyframes mobToastUp { from { transform: translateY(14px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* Atajos de teclado en el menú lateral: inútiles en pantallas táctiles */
+@media (pointer: coarse) { .drawer-shortcuts { display: none !important; } }
+.drawer-item { min-height: 2.75rem; }
+
+/* ============================================================
+   2. VENTAS: COBRO SIEMPRE VISIBLE + CATÁLOGO TIPO HOJA
+   ============================================================ */
+.checkout-bar {
+  position: fixed;
+  z-index: 35;
+  left: max(0.75rem, calc(50% - 13.25rem));
+  right: max(0.75rem, calc(50% - 13.25rem));
+  bottom: calc(4.75rem + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.5rem 0.5rem 1rem;
+  border-radius: 1.125rem;
+  background: var(--text);
+  color: var(--bg);
+  box-shadow: 0 14px 30px -10px rgba(0, 0, 0, 0.5);
+  transition: transform 0.22s ease, opacity 0.22s ease;
+}
+.checkout-bar.is-hidden { transform: translateY(calc(100% + 6rem)); opacity: 0; pointer-events: none; }
+.checkout-bar-info { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.15; }
+.checkout-bar-count { font-size: 0.75rem; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.checkout-bar-total { font-size: 1.3125rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.checkout-bar-btn {
+  min-height: 2.875rem;
+  padding: 0 1.125rem;
+  border-radius: 0.875rem;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 800;
+  font-size: 0.9375rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+}
+.checkout-bar-btn:active { transform: scale(0.97); }
+/* Escritorio: se mantiene el diseño actual (la barra es para pantallas de mano) */
+@media (min-width: 1024px) { .checkout-bar { display: none; } }
+#payment-section { scroll-margin-top: 4.75rem; }
+#payment-section.flash { animation: mobFlash 1.1s ease; border-radius: var(--radius-lg); }
+@keyframes mobFlash {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 0%, transparent); }
+  30% { box-shadow: 0 0 0 6px color-mix(in oklab, var(--primary) 30%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 0%, transparent); }
+}
+
+/* Nombres completos (2 líneas): "MANNOL Ene…" no distinguía 5W-30 de 10W-40 */
+.catalog-item .truncate,
+.cart-item .truncate,
+.stock-row .font-semibold.truncate {
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.25;
+}
+
+/* Tarjetas de moneda: el texto ya no se sale de la tarjeta */
+.payment-card { min-width: 0; padding: 0.75rem !important; gap: 0.5rem !important; }
+.payment-card > div { min-width: 0; }
+.payment-card .font-semibold { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 640px) {
+  /* Modales → hoja inferior (bottom sheet): más alcanzable con el pulgar */
+  .modal-overlay { align-items: flex-end; padding: 0 !important; }
+  .modal {
+    max-width: none !important;
+    width: 100%;
+    max-height: 94dvh !important;
+    border-radius: 1.25rem 1.25rem 0 0 !important;
+    border-bottom: none !important;
+    animation: mobSheetUp 0.26s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .modal::before {
+    content: "";
+    display: block;
+    flex-shrink: 0;
+    width: 2.5rem;
+    height: 0.3125rem;
+    margin: 0.5rem auto 0;
+    border-radius: 999px;
+    background: var(--border-strong);
+  }
+  .modal-header { padding: 0.625rem 1rem 0.75rem; }
+  .modal-body { padding: 0.875rem 1rem; }
+  .modal-footer { padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom)); flex-wrap: wrap; }
+  .modal-footer .btn { flex: 1 1 auto; min-height: 2.875rem; }
+  #catalog-summary { font-size: 0.8125rem; font-weight: 600; color: var(--text-soft); }
+  #catalog-list { max-height: calc(94dvh - 15rem) !important; }
+}
+@keyframes mobSheetUp { from { transform: translateY(100%); } to { transform: none; } }
+
+/* ============================================================
+   3. INICIO COMPACTO
+   ============================================================ */
+/* La banda oscura diagonal es position:fixed: al hacer scroll cortaba las
+   tarjetas en diagonal (mitad blanca / mitad gris) y bajaba el contraste
+   de los títulos. En móvil se reemplaza por el fondo liso del tema. */
+@media (max-width: 1023px) {
+  .bg-diagonal::after { display: none; }
+  body { background-attachment: scroll; }
+}
+
+.premium-home-main { padding-top: 1rem; } /* sin el hero, el título quedaba pegado al header */
+.home-hint { font-size: 0.75rem; color: var(--text-muted); margin: -0.25rem 0.25rem 0.625rem; }
+
+/* Tasas más compactas */
+.premium-rate-tile { padding: 0.875rem 0.875rem 0.75rem; }
+.premium-rate-tile-currency { margin-bottom: 0.375rem; }
+.premium-rate-tile-value { font-size: 1.75rem; }
+.rates-footnote {
+  display: flex; align-items: center; justify-content: center; gap: 0.375rem;
+  margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-muted);
+}
+.rates-footnote strong { color: var(--warning); }
+
+/* Lista de almacenes: filas táctiles (antes: tarjetas de ~190 px con botón repetido) */
+.wh-list {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.wh-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 4.5rem;
+  padding: 0.625rem 0.625rem 0.625rem 0.875rem;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.12s ease;
+}
+.wh-row + .wh-row { border-top: 1px solid var(--border); }
+.wh-row:active { background: var(--bg-soft); }
+.wh-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.wh-row-own { box-shadow: inset 3px 0 0 var(--primary); }
+.wh-row-icon {
+  width: 2.625rem; height: 2.625rem; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 0.875rem;
+  background: var(--primary-tint);
+  color: var(--primary);
+}
+.wh-row-body { flex: 1; min-width: 0; }
+.wh-row-title { display: flex; align-items: center; gap: 0.375rem; min-width: 0; }
+.wh-row-name { font-weight: 700; font-size: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wh-row-code {
+  flex-shrink: 0;
+  font: 700 0.6875rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.04em;
+  padding: 0.1875rem 0.375rem;
+  border-radius: 0.375rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  color: var(--text-soft);
+}
+.wh-row-tag {
+  flex-shrink: 0; font-size: 0.6875rem; font-weight: 700; color: var(--primary);
+  background: var(--primary-tint); padding: 0.125rem 0.4375rem; border-radius: 999px;
+}
+.wh-row-sub {
+  display: flex; align-items: center; gap: 0.25rem;
+  margin-top: 0.1875rem;
+  font-size: 0.8125rem; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wh-row-sub svg { flex-shrink: 0; }
+.wh-row-sub span { overflow: hidden; text-overflow: ellipsis; }
+.wh-row-call {
+  width: 2.75rem; height: 2.75rem; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 999px;
+  color: var(--primary);
+  background: var(--primary-tint);
+  border: 1px solid color-mix(in oklab, var(--primary) 25%, transparent);
+}
+.wh-row-call:active { transform: scale(0.94); }
+.wh-row-chev { flex-shrink: 0; display: flex; color: var(--text-muted); }
+
+/* Menú del inicio (antes el botón ☰ no hacía nada) */
+.home-menu { display: flex; flex-direction: column; gap: 0.25rem; }
+.home-menu-version { margin-top: 0.75rem; text-align: center; font-size: 0.75rem; color: var(--text-muted); }
+
+/* ============================================================
+   4. PIN CON TECLADO NUMÉRICO GRANDE
+   ============================================================ */
+.pin-card { gap: 0.875rem !important; }
+.pin-dots { display: flex; justify-content: center; gap: 0.875rem; min-height: 1.25rem; align-items: center; }
+.pin-dot {
+  width: 0.9375rem; height: 0.9375rem; border-radius: 999px;
+  border: 2px solid var(--border-strong);
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+}
+.pin-dot.filled { background: var(--primary); border-color: var(--primary); transform: scale(1.08); }
+.pin-dots.error .pin-dot { border-color: var(--danger); }
+.pin-dots.error .pin-dot.filled { background: var(--danger); }
+.pin-dots.shake { animation: pinShake 0.42s ease; }
+@keyframes pinShake {
+  10%, 90% { transform: translateX(-2px); }
+  20%, 80% { transform: translateX(4px); }
+  30%, 50%, 70% { transform: translateX(-8px); }
+  40%, 60% { transform: translateX(8px); }
+}
+.pin-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.625rem;
+  width: 100%;
+  max-width: 18.5rem;
+  margin: 0 auto;
+}
+.pin-key {
+  height: 3.75rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text);
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  display: flex; align-items: center; justify-content: center;
+  user-select: none;
+  transition: transform 0.08s ease, background 0.12s ease;
+}
+.pin-key:active { transform: scale(0.95); background: var(--primary-tint); }
+.pin-key:disabled { opacity: 0.45; }
+.pin-key-ghost { background: transparent; border-color: transparent; color: var(--text-soft); }
+.pin-key-ok { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+.pin-key-ok:active { background: var(--primary-hover); }
+/* En táctil: teclado propio; el input y los botones clásicos quedan para teclado físico */
+@media (pointer: coarse) {
+  .pin-card .pin-input-wrap { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .pin-card .pin-classic-actions { display: none !important; }
+}
+@media (pointer: fine) {
+  .pin-dots { display: none; } /* con teclado físico el propio campo ya muestra los puntos */
+  .pin-pad { max-width: 15rem; }
+  .pin-key { height: 3rem; font-size: 1.25rem; }
+}
+
+/* ============================================================
+   5. OBJETIVOS TÁCTILES ≥ 44 px Y TEXTOS ≥ 11 px
+   ============================================================ */
+@media (pointer: coarse) {
+  /* iPhone hace zoom automático al enfocar campos con letra < 16 px
+     (la base era 14 px): pasaba en buscar, vuelto, nota, montos… */
+  .input, .select, .textarea { font-size: 16px; min-height: 2.75rem; }
+  .app-header .btn-icon,
+  .premium-header-btn { min-width: 2.75rem; min-height: 2.75rem; }
+  .btn-sm { min-height: 2.75rem; }
+  .cart-item .btn-icon,
+  .catalog-item .btn-icon { min-width: 2.75rem !important; min-height: 2.75rem !important; }
+  .stock-row [data-view-others] { min-width: 2.75rem; min-height: 2.75rem; }
+  /* Controles compactos: área táctil ampliada con un pseudo-elemento invisible */
+  .seg { min-height: 2.25rem; padding: 0.375rem 0.875rem; font-size: 0.75rem; position: relative; }
+  .seg::after { content: ""; position: absolute; inset: -0.25rem 0; }
+  [data-stock-filter] { position: relative; }
+  [data-stock-filter]::after { content: ""; position: absolute; inset: -0.5rem -0.25rem; }
+  .tabs-trigger { min-height: 2.75rem; }
+  .pin-back { min-height: 2.75rem; padding: 0 0.75rem 0 0.25rem; margin-left: -0.25rem; font-size: 0.9375rem; }
+  [data-stock-filter] { min-height: 1.75rem; padding: 0.25rem 0.625rem !important; }
+}
+/* Mínimo legible: había textos de 8–10 px (badges con font-size inline) */
+.catalog-item .badge,
+.stock-row .badge,
+.drawer .badge,
+[data-stock-filter] { font-size: 0.6875rem !important; }
+.kpi-label { font-size: 0.6875rem; }
+.wh-meta { font-size: 0.75rem; }
+.curr-chip { font-size: 0.75rem; }
+.premium-rate-tile-sub { font-size: 0.75rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .checkout-bar, .fab, .pin-key, .modal, .toast { transition: none !important; animation: none !important; }
+}
+
+/* El inicio tiene un <nav class="bottom-nav"> vacío: que no pinte una franja/sombra */
+.bottom-nav:empty { display: none !important; }
+
+/* Badges con font-size inline de 8–10 px (estado de cierre, traspasos, stock…) → mínimo 11 px */
+.badge[style*="font-size"] { font-size: 0.6875rem !important; }
+
+/* ============================================================
+   6. LÍNEAS MÁS DEFINIDAS Y TARJETAS FLOTANTES (v5.8.1)
+   - Fondo un punto más oscuro → las tarjetas blancas "despegan".
+   - Bordes/divisores con más contraste (antes casi invisibles).
+   - Sombra en capas (contacto + ambiente + caída larga y suave)
+     para que cada tarjeta parezca suspendida sobre la página.
+   ============================================================ */
+:root, [data-theme="light"] {
+  --bg: oklch(0.958 0.008 220);
+  --border: oklch(0.85 0.012 220);          /* antes 0.90 */
+  --border-strong: oklch(0.72 0.014 220);   /* antes 0.80 */
+  --float:
+    0 0 0 1px oklch(0.3 0.03 220 / 0.025),
+    0 1px 2px oklch(0.3 0.03 220 / 0.08),
+    0 4px 10px -3px oklch(0.3 0.03 220 / 0.10),
+    0 18px 34px -14px oklch(0.3 0.04 220 / 0.30);
+  --float-hover:
+    0 0 0 1px oklch(0.3 0.03 220 / 0.03),
+    0 2px 4px oklch(0.3 0.03 220 / 0.08),
+    0 10px 18px -6px oklch(0.3 0.03 220 / 0.12),
+    0 28px 46px -16px oklch(0.3 0.04 220 / 0.34);
+  --float-press: 0 0 0 1px oklch(0.3 0.03 220 / 0.04), 0 1px 3px oklch(0.3 0.03 220 / 0.14);
+  --float-edge: inset 0 1px 0 oklch(1 0 0 / 0.75);   /* brillo del canto superior */
+  --inner-shadow: 0 1px 2px oklch(0.3 0.03 220 / 0.07);
+  --input-border: oklch(0.79 0.013 220);
+}
+[data-theme="dark"] {
+  --bg: oklch(0.135 0.014 220);
+  --bg-elevated: oklch(0.205 0.018 220);
+  --bg-soft: oklch(0.25 0.018 220);          /* antes = tarjeta: KPIs y teclas no se distinguían */
+  --border: oklch(1 0 0 / 15%);              /* antes 12% */
+  --border-strong: oklch(1 0 0 / 27%);       /* antes 20% */
+  --float:
+    0 1px 2px oklch(0 0 0 / 0.5),
+    0 8px 18px -6px oklch(0 0 0 / 0.55),
+    0 24px 42px -16px oklch(0 0 0 / 0.8);
+  --float-hover:
+    0 2px 4px oklch(0 0 0 / 0.5),
+    0 12px 24px -8px oklch(0 0 0 / 0.6),
+    0 32px 52px -18px oklch(0 0 0 / 0.85);
+  --float-press: 0 1px 3px oklch(0 0 0 / 0.6);
+  --float-edge: inset 0 1px 0 oklch(1 0 0 / 0.07);
+  --inner-shadow: 0 1px 2px oklch(0 0 0 / 0.35);
+  --input-border: oklch(1 0 0 / 22%);
+}
+
+/* --- Tarjetas principales: flotan --- */
+.card,
+.premium-card,
+.premium-rate-tile,
+.stat-card,
+.sale-form-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  box-shadow: var(--float), var(--float-edge);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.wh-hero { box-shadow: var(--float), var(--float-edge); }
+
+/* Tarjetas dentro de otra tarjeta: planas con borde (evita sombras apiladas) */
+.card .card,
+.sale-form-panel .card,
+.modal .card { box-shadow: var(--inner-shadow); }
+
+/* Divisores internos bien marcados */
+.card-header { border-bottom: 1px solid var(--border); }
+.card-footer { border-top: 1px solid var(--border); }
+.stat-cell + .stat-cell { border-left-color: var(--border); }
+
+/* --- Elementos internos: borde definido + relieve mínimo --- */
+.kpi-cell, .curr-chip { border-color: var(--border); }
+.stock-row, .cart-item, .catalog-item, .payment-card { box-shadow: var(--inner-shadow); }
+.tabs-list { border: 1px solid var(--border); }
+.tabs-trigger.active { box-shadow: 0 1px 3px oklch(0.3 0.03 220 / 0.14), 0 0 0 1px var(--border); }
+.input, .select, .textarea { border-color: var(--input-border); box-shadow: var(--inner-shadow); }
+
+/* Header como barra flotante: blanca translúcida, línea inferior nítida */
+.premium-header,
+.app-header {
+  background: color-mix(in oklab, var(--bg-elevated) 84%, transparent);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 8px 18px -14px oklch(0.3 0.04 220 / 0.35);
+}
+
+/* --- Almacenes del inicio: cada uno es su propia tarjeta flotante --- */
+.wh-list {
+  gap: 0.75rem;
+  background: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+.wh-row,
+.wh-row + .wh-row {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--float), var(--float-edge);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.12s ease;
+}
+.wh-row-own { box-shadow: inset 3px 0 0 var(--primary), var(--float), var(--float-edge); }
+
+/* Sensación física: al tocar, la tarjeta "baja" hacia la página */
+.wh-row:active,
+.stat-card:active { transform: translateY(1px) scale(0.995); box-shadow: var(--float-press), var(--float-edge); }
+@media (hover: hover) {
+  .wh-row:hover,
+  .stat-card:hover,
+  .premium-rate-tile:hover { transform: translateY(-2px); box-shadow: var(--float-hover), var(--float-edge); }
+}
+
+/* Teclas del PIN con canto, como botones físicos */
+.pin-key { box-shadow: 0 1.5px 0 var(--border-strong), var(--inner-shadow); }
+.pin-key:active { box-shadow: 0 0 0 var(--border-strong); transform: translateY(1.5px) scale(0.97); }
+.pin-key-ghost { box-shadow: none; }
+.pin-key-ok { box-shadow: 0 2px 0 color-mix(in oklab, var(--primary) 70%, black), var(--shadow-primary); }
+
+/* Contador de almacenes: pastilla con borde (sobre el fondo nuevo se perdía) */
+.premium-section-count { background: var(--bg-elevated); border: 1px solid var(--border); box-shadow: var(--inner-shadow); }
+
+/* Avisos y hojas también flotan */
+.toast { box-shadow: var(--float); }
+
+@media (prefers-reduced-motion: reduce) {
+  .wh-row, .stat-card, .premium-rate-tile { transition: none !important; transform: none !important; }
+}
+
+/* ============================================================
+   7. PANEL ADMIN CON EL MISMO ESTILO + TABLAS LEGIBLES (v5.9.0)
+   admin.html enlaza esta hoja DESPUÉS de su <style> propio, así
+   estas reglas mandan sobre el diseño anterior del panel.
+   ============================================================ */
+:root, [data-theme="light"] { --edge-shadow: oklch(0.3 0.03 220 / 0.22); }
+[data-theme="dark"] { --edge-shadow: oklch(0 0 0 / 0.65); }
+
+.admin-shell { background: var(--bg); }
+.admin-main {
+  background:
+    radial-gradient(at 100% 0%, color-mix(in oklab, var(--primary) 5%, transparent) 0px, transparent 42%),
+    var(--bg);
+}
+/* Barra superior: igual que el header de la app (blanca translúcida, línea nítida) */
+.admin-topbar {
+  background: color-mix(in oklab, var(--bg-elevated) 84%, transparent);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 8px 18px -14px oklch(0.3 0.04 220 / 0.35);
+}
+.admin-topbar .btn-ghost.btn-icon:hover { box-shadow: var(--inner-shadow); }
+
+/* Barra lateral: en escritorio flota separada de los bordes, como una tarjeta */
+@media (min-width: 769px) {
+  .admin-sidebar {
+    top: 0.75rem;
+    height: calc(100vh - 1.5rem);
+    height: calc(100dvh - 1.5rem);
+    margin: 0.75rem 0 0.75rem 0.75rem;
+    border: 1px solid oklch(1 0 0 / 8%);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--float), inset 0 1px 0 oklch(1 0 0 / 0.06);
+  }
+}
+/* Móvil: respetar la muesca y la barra del sistema (admin.html usa viewport-fit=cover) */
+@media (max-width: 768px) {
+  .admin-topbar {
+    padding-top: max(0.625rem, env(safe-area-inset-top));
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+  .admin-sidebar { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  .admin-content { padding-bottom: calc(2rem + env(safe-area-inset-bottom)); }
+}
+
+/* Accesos rápidos del dashboard: pastillas con relieve */
+.quick-access-card {
+  box-shadow: var(--inner-shadow);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+@media (hover: hover) {
+  .quick-access-card:hover { transform: translateY(-1px); box-shadow: var(--float); }
+}
+.quick-access-card:active { transform: translateY(1px); box-shadow: var(--float-press); }
+
+/* Aviso de comisiones pendientes: flota y, en móvil, el botón baja a su propia línea */
+.admin-reminder { box-shadow: var(--float), var(--float-edge); }
+.admin-reminder > div:nth-child(2) { flex: 1 1 15rem; }
+@media (max-width: 640px) {
+  .admin-reminder > .btn { flex: 1 1 100%; justify-content: center; }
+}
+
+/* KPIs del admin en móvil: 2×2 en vez de 4 tarjetas a lo alto de la pantalla */
+@media (max-width: 767.98px) {
+  .admin-content .grid.md\:grid-cols-4:has(> .stat-card) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* --- Tablas (admin, historial, stock…) ---
+   styles.css §17 ponía overflow-wrap:anywhere en th/td: el ancho mínimo de
+   cada celda quedaba en UNA letra y en móvil "Producto", "Dirección"… se
+   apilaban letra por letra. Las tablas ya van dentro de .overflow-x-auto. */
+.table th, .table td { overflow-wrap: break-word; word-break: normal; }
+.table th { border-bottom: 1px solid var(--border-strong); }
+.table td { border-bottom-color: var(--border); }
+.table tbody tr:last-child > td { border-bottom-color: transparent; }
+@media (hover: hover) {
+  .table tbody tr:hover { background: color-mix(in oklab, var(--primary) 5%, var(--bg-elevated)); }
+}
+@media (max-width: 768px) {
+  /* una fila = una línea; la tabla se desliza de lado dentro de su tarjeta */
+  .table th, .table td { white-space: nowrap; }
+  /* pista de que hay más columnas: sombra en el borde con contenido oculto */
+  .card .overflow-x-auto,
+  .modal .overflow-x-auto {
+    background:
+      linear-gradient(to right, var(--bg-elevated) 40%, transparent) left / 1.5rem 100% no-repeat local,
+      linear-gradient(to left, var(--bg-elevated) 40%, transparent) right / 1.5rem 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, var(--edge-shadow), transparent) left / 0.625rem 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, var(--edge-shadow), transparent) right / 0.625rem 100% no-repeat scroll;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* --- Táctil en el admin: botones de 44 px como en la app --- */
+@media (pointer: coarse) {
+  .admin-content .btn { min-height: 2.75rem; }
+  .admin-content .btn-icon,
+  .admin-content .table .btn-ghost { min-width: 2.75rem; }
+  .admin-topbar .btn-icon,
+  .admin-sidebar-toggle { min-width: 2.75rem; min-height: 2.75rem; }
+  .admin-nav-item { min-height: 2.75rem; }
+  .quick-access-card { min-height: 2.75rem; }
+  .admin-content .btn-xs { min-width: 2.75rem; }   /* "+" de ajustar stock: tenía 24 px de ancho */
+}
+/* Números de tarjeta, claves, códigos: estaban a 10,5 px */
+.admin-content code { font-size: 0.75rem; }
+
+/* ============================================================
+   8. NUEVAS FUNCIONES (v5.10.0)
+   Conversor · Más vendidos · Cierre por WhatsApp · Inventario
+   compacto · Escáner de códigos · Tablas como tarjetas en móvil
+   ============================================================ */
+
+/* --- Botón de escanear dentro de un buscador --- */
+.input-scan { position: relative; }
+.input-scan > .input { padding-right: 3.25rem; }
+.scan-btn {
+  position: absolute; right: 0.25rem; top: 50%; transform: translateY(-50%);
+  width: 2.5rem; height: 2.5rem; display: grid; place-items: center;
+  border: 0; border-radius: calc(var(--radius) - 2px);
+  background: var(--primary-tint); color: var(--primary); cursor: pointer;
+}
+.scan-btn::after { content: ""; position: absolute; inset: -0.125rem; }
+.scan-btn:active { transform: translateY(-50%) scale(0.94); }
+.scan-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* --- Escáner a pantalla completa --- */
+html.scanner-open, html.scanner-open body { overflow: hidden; }
+.scanner-overlay { position: fixed; inset: 0; z-index: 3000; background: #000; color: #fff; display: flex; flex-direction: column; }
+.scanner-stage { position: relative; flex: 1; overflow: hidden; }
+.scanner-video { width: 100%; height: 100%; object-fit: cover; display: block; background: #000; }
+.scanner-top {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  padding: max(0.75rem, env(safe-area-inset-top)) 1rem 1.5rem;
+  background: linear-gradient(rgba(0,0,0,0.7), transparent);
+}
+.scanner-title { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; font-size: 1rem; min-width: 0; }
+.scanner-count { padding: 0.125rem 0.5rem; border-radius: 999px; background: var(--primary); font-size: 0.75rem; }
+.scanner-frame {
+  position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%);
+  width: min(84vw, 26rem); height: min(46vw, 14rem); border-radius: 1rem;
+  outline: 2px solid rgba(255,255,255,0.9); box-shadow: 0 0 0 100vmax rgba(0,0,0,0.45);
+}
+.scanner-line {
+  position: absolute; left: 7%; right: 7%; top: 50%; height: 2px; border-radius: 2px;
+  background: oklch(0.75 0.17 160); box-shadow: 0 0 14px 2px oklch(0.75 0.17 160);
+  animation: scanner-line 1.7s ease-in-out infinite alternate;
+}
+@keyframes scanner-line { from { top: 14%; } to { top: 86%; } }
+.scanner-frame.is-ok { animation: scanner-ok 0.5s ease; }
+.scanner-frame.is-error { animation: scanner-error 0.5s ease; }
+@keyframes scanner-ok { 0%, 60% { outline-color: oklch(0.75 0.17 160); outline-width: 4px; } }
+@keyframes scanner-error { 0%, 60% { outline-color: oklch(0.65 0.2 25); outline-width: 4px; } }
+.scanner-bottom {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  display: flex; flex-direction: column; gap: 0.75rem;
+  padding: 2rem 1rem max(1rem, env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, rgba(0,0,0,0.82) 35%);
+}
+.scanner-status {
+  align-self: center; max-width: 100%; text-align: center;
+  padding: 0.625rem 1rem; border-radius: 1rem;
+  background: rgba(255,255,255,0.14); font-size: 0.9375rem; font-weight: 600;
+}
+.scanner-status.is-ok { background: oklch(0.5 0.13 160); }
+.scanner-status.is-error { background: oklch(0.5 0.18 25); }
+.scanner-actions { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
+.scanner-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+  min-height: 2.75rem; min-width: 2.75rem; padding: 0 1rem; border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.28); background: rgba(255,255,255,0.12);
+  color: #fff; font: inherit; font-weight: 600; font-size: 0.875rem; cursor: pointer;
+}
+.scanner-btn[hidden] { display: none; }
+.scanner-btn[aria-pressed="true"] { background: #fff; color: #000; }
+.scanner-close { padding: 0; }
+.scanner-done { background: var(--primary); border-color: transparent; color: var(--primary-foreground); }
+.scanner-manual { display: flex; gap: 0.5rem; }
+.scanner-manual[hidden] { display: none; }
+.scanner-manual .input { flex: 1; min-width: 0; background: #fff; color: #111; border-color: transparent; }
+@media (prefers-reduced-motion: reduce) { .scanner-line, .scanner-frame { animation: none !important; } }
+
+/* --- Más vendidos (venta) --- */
+.top-sellers { display: flex; flex-direction: column; gap: 0.375rem; margin-top: 0.625rem; }
+.top-sellers-label { display: flex; align-items: center; gap: 0.375rem; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.top-sellers-label svg { color: oklch(0.66 0.19 45); }
+.top-sellers-row {
+  display: flex; gap: 0.5rem; overflow-x: auto; scroll-snap-type: x proximity;
+  padding: 0.125rem 0.125rem 0.5rem; margin: 0 -0.125rem; scrollbar-width: none;
+}
+.top-sellers-row::-webkit-scrollbar { display: none; }
+.top-chip {
+  position: relative; flex: 0 0 auto; width: 9.25rem; min-height: 3.5rem; scroll-snap-align: start;
+  display: flex; flex-direction: column; justify-content: center; gap: 0.125rem;
+  padding: 0.5rem 0.75rem; text-align: left; cursor: pointer;
+  background: var(--bg-elevated); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--inner-shadow);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+}
+.top-chip:active { transform: scale(0.97); box-shadow: var(--float-press); }
+@media (hover: hover) { .top-chip:hover { border-color: color-mix(in oklab, var(--primary) 45%, var(--border)); box-shadow: var(--float); } }
+.top-chip-name { font-size: 0.8125rem; font-weight: 600; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.top-chip-meta { font-size: 0.75rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.top-chip-qty {
+  position: absolute; top: -0.375rem; right: -0.25rem; min-width: 1.375rem; height: 1.375rem; padding: 0 0.375rem;
+  display: grid; place-items: center; border-radius: 999px; font-size: 0.6875rem; font-weight: 800;
+  background: var(--primary); color: var(--primary-foreground); box-shadow: 0 1px 3px oklch(0 0 0 / 0.25);
+}
+.top-chip.in-cart { border-color: color-mix(in oklab, var(--primary) 55%, var(--border)); background: color-mix(in oklab, var(--primary) 6%, var(--bg-elevated)); }
+
+/* --- Conversor de monedas (inicio) --- */
+.rates-convert-btn {
+  display: inline-flex; align-items: center; gap: 0.375rem; min-height: 2rem; padding: 0 0.75rem;
+  border-radius: 999px; border: 1px solid color-mix(in oklab, var(--primary) 35%, var(--border));
+  background: var(--primary-tint); color: var(--primary); font: inherit; font-size: 0.75rem; font-weight: 700; cursor: pointer;
+}
+.rates-convert-btn::after { content: ""; position: absolute; inset: -0.375rem -0.25rem; }
+.rates-convert-btn { position: relative; }
+.premium-section-header .rates-header-right { display: flex; align-items: center; gap: 0.5rem; }
+.premium-rate-tile[data-convert] { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.premium-rate-tile[data-convert]:active { transform: translateY(1px) scale(0.99); box-shadow: var(--float-press), var(--float-edge); }
+.premium-rate-tile[data-convert]:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.converter { display: flex; flex-direction: column; gap: 0.875rem; }
+.converter-amount { position: relative; }
+.converter-amount .input { font-size: 1.75rem !important; font-weight: 800; height: 3.75rem; padding-right: 4.5rem; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.converter-amount-cur { position: absolute; right: 1rem; top: 50%; transform: translateY(-50%); font-weight: 800; color: var(--text-muted); }
+.converter-results { display: flex; flex-direction: column; gap: 0.5rem; }
+.converter-result {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem;
+  padding: 0.75rem 1rem; border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-soft);
+}
+.converter-result-label { font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.converter-result-value { font-size: 1.375rem; font-weight: 800; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; text-align: right; }
+.converter-quick { display: flex; gap: 0.375rem; flex-wrap: wrap; }
+.converter-quick .btn { flex: 1 1 0; min-width: 3.25rem; }
+.converter-note { margin: 0; font-size: 0.75rem; color: var(--text-muted); text-align: center; }
+
+/* --- Cierre por WhatsApp --- */
+.closure-share { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; margin-top: 0.5rem; }
+.btn-whatsapp { background: #14804a; border-color: #14804a; color: #fff; }
+.btn-whatsapp:hover:not(:disabled) { background: #0f6b3d; border-color: #0f6b3d; color: #fff; }
+
+/* --- Inventario compacto (app de vendedores) en móvil --- */
+@media (max-width: 767.98px) {
+  .inv-kpis,
+  .admin-content .grid.md\:grid-cols-3:has(> .stat-card) { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; }
+  .inv-kpis .stat-card,
+  .admin-content .grid.md\:grid-cols-3 > .stat-card { padding: 0.75rem 0.625rem 0.625rem; }
+  .inv-kpis .stat-label,
+  .admin-content .grid.md\:grid-cols-3 > .stat-card .stat-label { font-size: 0.6875rem; gap: 0.25rem; line-height: 1.2; }
+  .inv-kpis .stat-label svg,
+  .admin-content .grid.md\:grid-cols-3 > .stat-card .stat-label svg { width: 12px; height: 12px; flex-shrink: 0; }
+  .inv-kpis .stat-value,
+  .admin-content .grid.md\:grid-cols-3 > .stat-card .stat-value { font-size: 1.5rem; margin-top: 0.125rem; }
+  .inv-kpis .stat-sub,
+  .admin-content .grid.md\:grid-cols-3 > .stat-card .stat-sub { font-size: 0.6875rem; line-height: 1.25; }
+  .inv-filters {
+    display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; gap: 0.5rem !important;
+  }
+  .inv-filters > :first-child { grid-column: 1 / -1; min-width: 0 !important; }
+  .inv-filters > .select { min-width: 0 !important; }
+  .inv-filters > #status-filter { grid-column: 1 / 3; }
+  .inv-filters > #clear-filters { grid-row: 2; grid-column: 3; }
+  .inv-filters > #export-csv-btn { grid-column: 3; }
+}
+
+/* --- Tablas como tarjetas en móvil (clase .table-cards; etiquetas: ui.js) ---
+   v5.11.0: los datos van en una cuadrícula de 4 columnas en vez de una fila por
+   dato: cortos (≤ 9 letras, p. ej. "Cantidad 17") ocupan 1 columna, medianos 2 y
+   largos (direcciones) todo el ancho → cada tarjeta mide la mitad. */
+@media (max-width: 640px) {
+  .card .overflow-x-auto.tc-wrap,
+  .overflow-x-auto.tc-wrap {
+    overflow: visible; background: var(--tc-wrap-bg); padding: 0.75rem;
+  }
+  .table-cards thead {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  .table-cards, .table-cards tbody { display: block; width: 100%; }
+  .table-cards tbody { display: flex; flex-direction: column; gap: 0.75rem; }
+  .table-cards tbody tr {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-flow: row dense;
+    column-gap: 0.75rem; row-gap: 0.625rem; padding: 0.75rem 0.875rem 0.8125rem;
+    background: var(--tc-row-bg); border: 1px solid var(--tile-border); border-radius: var(--radius-lg);
+    box-shadow: var(--tile-shadow);
+  }
+  .table-cards tbody tr:hover { background: var(--tc-row-bg); }
+  .table-cards tbody td {
+    grid-column: span 2; display: block; min-width: 0; min-height: 0; padding: 0;
+    text-align: left; white-space: normal; border: 0; font-size: 0.875rem; line-height: 1.3; overflow-wrap: anywhere;
+  }
+  .table-cards tbody td.tc-short { grid-column: span 1; }
+  .table-cards tbody td.tc-wide { grid-column: 1 / -1; }
+  .table-cards tbody td::before {
+    content: attr(data-label); display: block; margin-bottom: 0.1875rem;
+    font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.04em; line-height: 1.2;
+    text-transform: uppercase; color: var(--text-muted); overflow-wrap: break-word;
+  }
+  .table-cards tbody td[data-label=""]::before,
+  .table-cards tbody td.tc-title::before,
+  .table-cards tbody td.tc-actions::before,
+  .table-cards tbody td.tc-media::before,
+  .table-cards tbody td.tc-full::before { content: none; }
+  .table-cards tbody td.tc-title {
+    grid-column: 1 / -1; padding: 0 0 0.125rem; font-size: 0.9375rem; font-weight: 650; line-height: 1.3; overflow-wrap: break-word;
+  }
+  .table-cards tbody td.tc-title > * { text-align: left; }
+  .table-cards tbody td.tc-title .text-xs { font-weight: 500; margin-top: 0.125rem; }
+  .table-cards tbody td.tc-actions {
+    grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 0.5rem;
+    padding-top: 0.5rem; margin-top: 0.125rem; border-top: 1px solid var(--border);
+  }
+  .table-cards tbody td.tc-full { grid-column: 1 / -1; text-align: center; }
+  /* Fila con imagen: miniatura a la izquierda del título, en la misma fila */
+  .table-cards tbody tr.tc-has-media > td.tc-media { grid-column: 1 / -1; grid-row: 1; justify-self: start; align-self: start; }
+  .table-cards tbody tr.tc-has-media > td.tc-title { grid-column: 1 / -1; grid-row: 1; padding-left: 3.25rem; min-height: 2.75rem; }
+  .table-cards tbody td > .flex { justify-content: flex-start; }
+  .table-cards tbody td.tc-actions > .flex { justify-content: flex-end; }
+}
+@media (max-width: 339.98px) {
+  .table-cards tbody tr { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .table-cards tbody td.tc-short, .table-cards tbody td.tc-half { grid-column: span 1; }
+}
+
+/* ============================================================
+   9. PULIDO MÓVIL: MÁS RELIEVE, MENOS PESO (v5.11.0)
+   - Relieve: página, tarjeta y lo que va DENTRO de una tarjeta
+     (filas, solicitudes, ranking, KPIs internos) tienen tres
+     tonos distintos + borde + canto de luz → todo se separa.
+   - Filas que apretaban el texto en una columna estrecha
+     (solicitudes del personal, aviso con botón) → texto arriba
+     y botones debajo.
+   - Secciones pesadas en el teléfono: KPIs compactos, almacenes
+     en carrusel, filtros plegables, pestañas deslizables.
+   ============================================================ */
+
+/* --- 9.1 Tres niveles de superficie --- */
+:root, [data-theme="light"] {
+  --bg: oklch(0.948 0.009 220);              /* página (v5.8.1: 0.958) → las tarjetas despegan más */
+  --tile-bg: oklch(0.972 0.006 220);         /* filas dentro de una tarjeta */
+  --tile-border: oklch(0.86 0.011 220);
+  --tile-shadow: 0 1px 2px oklch(0.3 0.03 220 / 0.07), inset 0 1px 0 oklch(1 0 0 / 0.9);
+  --tc-wrap-bg: var(--bg-soft);
+  --tc-row-bg: var(--bg-elevated);
+}
+[data-theme="dark"] {
+  --bg: oklch(0.125 0.014 220);              /* (v5.8.1: 0.135) */
+  --bg-elevated: oklch(0.212 0.018 220);     /* tarjetas (v5.8.1: 0.205) */
+  --border: oklch(1 0 0 / 16%);
+  --tile-bg: oklch(0.255 0.018 220);         /* en oscuro, más claro = más arriba */
+  --tile-border: oklch(1 0 0 / 11%);
+  --tile-shadow: 0 1px 2px oklch(0 0 0 / 0.45), inset 0 1px 0 oklch(1 0 0 / 0.05);
+  --tc-wrap-bg: transparent;
+  --tc-row-bg: var(--tile-bg);
+}
+
+/* Filas y bloques dentro de una tarjeta */
+.tile {
+  background: var(--tile-bg) !important;
+  border-top-color: var(--tile-border) !important;
+  border-right-color: var(--tile-border) !important;
+  border-bottom-color: var(--tile-border) !important;
+  box-shadow: var(--tile-shadow);
+}
+.tile:not([style*="border-left:3px"]) { border-left-color: var(--tile-border) !important; }
+.tile-warning { background: color-mix(in oklab, var(--warning) 8%, var(--tile-bg)) !important; }
+[data-card-click].tile { transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease; }
+[data-card-click].tile:active { transform: scale(0.99); }
+@media (hover: hover) {
+  [data-card-click].tile:hover {
+    background: color-mix(in oklab, var(--primary) 7%, var(--tile-bg)) !important;
+    border-color: color-mix(in oklab, var(--primary) 40%, var(--tile-border)) !important;
+  }
+}
+/* Tarjetas y KPIs dentro de otra tarjeta: otro tono (antes, mismo color que la de afuera) */
+.card .card,
+.card .stat-card {
+  background: var(--tile-bg);
+  border-color: var(--tile-border);
+  box-shadow: var(--tile-shadow);
+}
+
+/* Número del ranking (antes salía "1…" porque no cabía) */
+.rank-badge {
+  flex: none; width: 1.625rem; height: 1.625rem; border-radius: 999px;
+  display: inline-grid; place-items: center;
+  font-size: 0.75rem; font-weight: 800; font-variant-numeric: tabular-nums;
+  background: var(--bg-elevated); color: var(--text-soft); border: 1px solid var(--border-strong);
+}
+.rank-badge.is-first { background: var(--primary); border-color: transparent; color: var(--primary-foreground); }
+
+/* --- 9.2 Solicitudes del personal: texto arriba, botones abajo --- */
+.req-list { display: flex; flex-direction: column; gap: 0.625rem; }
+.req-card {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.375rem;
+  padding: 0.75rem 0.875rem; border-radius: var(--radius-lg);
+  background: var(--tile-bg); border: 1px solid var(--tile-border); border-left: 3px solid var(--border-strong);
+  box-shadow: var(--tile-shadow);
+}
+.req-card.req-pendiente { border-left-color: var(--warning); }
+.req-card.req-aprobada { border-left-color: var(--accent); }
+.req-card.req-rechazada,
+.req-card.req-cancelada { border-left-color: var(--danger); }
+.req-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.625rem; }
+.req-title { min-width: 0; font-size: 0.9375rem; font-weight: 650; line-height: 1.3; }
+.req-qty { font-weight: 800; white-space: nowrap; }
+.req-status { flex-shrink: 0; font-size: 0.6875rem; }
+.req-meta { display: flex; flex-wrap: wrap; column-gap: 0.3125rem; row-gap: 0.125rem; font-size: 0.8125rem; line-height: 1.35; color: var(--text-muted); }
+.req-route { font-weight: 600; color: var(--text-soft); }
+.req-note {
+  padding: 0.4375rem 0.625rem; border-radius: var(--radius); border-left: 2px solid var(--border-strong);
+  background: color-mix(in oklab, var(--text) 4%, transparent);
+  font-size: 0.8125rem; font-style: italic; line-height: 1.4; color: var(--text-soft);
+}
+.req-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.25rem; }
+.req-actions > .btn { justify-content: center; }
+@media (min-width: 768px) {
+  .req-card { grid-template-columns: minmax(0, 1fr) auto; column-gap: 1rem; align-items: center; }
+  .req-card > :not(.req-actions) { grid-column: 1; }
+  .req-actions { grid-column: 2; grid-row: 1 / span 2; display: flex; margin: 0; }
+  .req-card:has(.req-note) .req-actions { grid-row: 1 / span 3; }
+}
+
+/* --- 9.3 Aviso con acción (Movimientos): icono + texto; el botón debajo en el móvil --- */
+.info-cta {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 0.75rem;
+  padding: 0.875rem 1rem; border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--info) 8%, var(--bg-elevated));
+  border: 1px solid color-mix(in oklab, var(--info) 28%, var(--border));
+  box-shadow: var(--float), var(--float-edge);
+}
+.info-cta-icon {
+  width: 2.25rem; height: 2.25rem; border-radius: var(--radius); display: grid; place-items: center;
+  background: color-mix(in oklab, var(--info) 16%, transparent); color: var(--info);
+}
+.info-cta-title { font-size: 0.9375rem; font-weight: 700; line-height: 1.3; }
+.info-cta-desc { margin-top: 0.125rem; font-size: 0.8125rem; line-height: 1.45; color: var(--text-muted); }
+.info-cta-action { grid-column: 1 / -1; justify-content: center; }
+@media (min-width: 640px) {
+  .info-cta { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; }
+  .info-cta-action { grid-column: auto; }
+}
+
+/* --- 9.4 Filtros plegables (Movimientos) --- */
+.filter-panel > summary {
+  display: flex; align-items: center; gap: 0.625rem; min-height: 3rem; padding: 0.75rem 1rem;
+  list-style: none; cursor: pointer; font-weight: 700; -webkit-tap-highlight-color: transparent;
+}
+.filter-panel > summary::-webkit-details-marker { display: none; }
+.filter-panel-title { display: inline-flex; align-items: center; gap: 0.5rem; }
+.filter-panel-title svg { color: var(--primary); }
+.filter-panel-chevron { margin-left: auto; display: inline-flex; color: var(--text-muted); transition: transform 0.2s ease; }
+.filter-panel[open] .filter-panel-chevron { transform: rotate(180deg); }
+.filter-panel[open] > summary { border-bottom: 1px solid var(--border); }
+.filter-panel > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; border-radius: var(--radius-lg); }
+
+/* --- 9.5 Teléfono: secciones más livianas --- */
+@media (max-width: 767.98px) {
+  /* Barra superior: el subtítulo genérico ("Gestión completa del sistema") sobraba */
+  #admin-page-subtitle { display: none; }
+
+  /* KPIs compactos (y la mini-gráfica más baja) */
+  .admin-content .grid:has(> .stat-card) { gap: 0.625rem; }
+  .admin-content .stat-card { padding: 0.75rem 0.875rem; border-radius: var(--radius-lg); }
+  .admin-content .stat-card .stat-label { font-size: 0.75rem; line-height: 1.25; gap: 0.375rem; }
+  .admin-content .stat-card .stat-value { font-size: 1.375rem; margin-top: 0.25rem; }
+  .admin-content .stat-card .stat-sub {
+    margin-top: 0.125rem; font-size: 0.6875rem; line-height: 1.3;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .admin-content .stat-card > svg[preserveAspectRatio] { height: 22px !important; margin-top: 0.375rem; }
+
+  /* Pestañas / filtros rápidos: una sola fila que se desliza */
+  .chip-scroll {
+    flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none;
+    margin-inline: -1rem; padding: 0.125rem 1rem 0.375rem; scroll-padding-inline: 1rem;
+  }
+  .chip-scroll::-webkit-scrollbar { display: none; }
+  .chip-scroll > .btn { flex: 0 0 auto; border-radius: 999px; }
+
+  /* Stock por almacén: carrusel (antes 4 tarjetas una debajo de otra ≈ 1400 px) */
+  .wh-stock-grid {
+    display: flex !important; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none;
+    gap: 0.75rem; margin-inline: -1rem; padding: 0.375rem 1rem 1.25rem; scroll-padding-inline: 1rem;
+  }
+  .wh-stock-grid::-webkit-scrollbar { display: none; }
+  .wh-stock-card { flex: 0 0 86%; scroll-snap-align: start; }
+  .wh-stock-hint { display: inline; font-weight: 600; color: var(--primary); }
+
+  /* Filtros: "Buscar" a lo ancho y el resto de a dos */
+  .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .filter-grid > :first-child { grid-column: 1 / -1; }
+  .filter-grid:has(> :nth-child(2):last-child) { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) !important; }
+  .filter-grid:has(> :nth-child(2):last-child) > :first-child { grid-column: auto; }
+  .filter-actions { display: grid !important; grid-template-columns: 1fr 1fr; }
+  .filter-actions > :first-child { grid-column: 1 / -1; }
+  .filter-actions > .btn { justify-content: center; }
+  .stk-filters { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .stk-filters > :nth-child(-n+2) { grid-column: 1 / -1; }
+
+  /* Estados vacíos: menos aire */
+  .admin-content .empty-state { padding: 1.25rem 1rem !important; }
+}
+.wh-stock-hint { display: none; }
+@media (max-width: 767.98px) { .wh-stock-hint { display: inline; } }
+
+/* Casillas de "solo bajo mínimo / agotados": pastillas de 44 px (antes 13×13 px) */
+.chk-chip {
+  min-height: 2.75rem; padding: 0.375rem 0.75rem; line-height: 1.2;
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-elevated); box-shadow: var(--inner-shadow);
+  font-size: 0.8125rem; font-weight: 600; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+.chk-chip input { flex: none; width: 1.125rem; height: 1.125rem; accent-color: var(--primary); }
+.chk-chip:has(input:checked) {
+  border-color: color-mix(in oklab, var(--primary) 55%, var(--border));
+  background: var(--primary-tint); color: var(--primary);
+}
+
+/* --- 9.6 Listas en el teléfono: Historial de ventas y Transferencias (app) ---
+   En vez de una tabla de 8–9 columnas que había que deslizar de lado (el total,
+   el estado y las acciones quedaban fuera de la pantalla), cada fila es una
+   ficha de 2 líneas: código + estado + total arriba, detalles abajo. La venta
+   se toca para abrir el detalle (que ahora trae Completar / Cancelar / Reabrir). */
+.tl-only { display: none; }
+@media (max-width: 640px) {
+  .table-list thead {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  .table-list, .table-list tbody { display: block; width: 100%; }
+  .overflow-x-auto:has(> .table-list) { overflow: visible; }
+  .table-list tbody { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.625rem; background: var(--tc-wrap-bg); }
+  .table-list tbody tr { display: block; }
+  .table-list tbody tr:hover { background: none; }
+  .table-list tbody td.tl-hide { display: none; }
+  .table-list tbody td.tl-only, .table-list tbody td[colspan] { display: block; padding: 0; border: 0; }
+  .tl-tile {
+    position: relative; display: flex; flex-direction: column; gap: 0.1875rem; width: 100%;
+    padding: 0.5625rem 2rem 0.625rem 0.875rem; text-align: left; font: inherit; color: inherit; white-space: normal;
+    background: var(--tc-row-bg); border: 1px solid var(--tile-border); border-left: 3px solid var(--border-strong);
+    border-radius: var(--radius-lg); box-shadow: var(--tile-shadow); min-width: 0; overflow: hidden;
+  }
+  div.tl-tile { padding-right: 0.875rem; }
+  button.tl-tile { cursor: pointer; -webkit-tap-highlight-color: transparent; transition: transform 0.12s ease, border-color 0.15s ease; }
+  button.tl-tile:active { transform: scale(0.99); }
+  button.tl-tile:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  .tl-tile.tl-ok { border-left-color: var(--accent); }
+  .tl-tile.tl-warn { border-left-color: var(--warning); }
+  .tl-tile.tl-bad { border-left-color: var(--danger); }
+  .tl-top { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; min-width: 0; }
+  .tl-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8125rem; font-weight: 700; white-space: nowrap; }
+  .tl-mini { flex: none; font-size: 0.625rem !important; line-height: 1.4; padding: 0.0625rem 0.4375rem; }
+  .tl-amount { margin-left: auto; padding-left: 0.375rem; font-size: 1rem; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tl-meta { font-size: 0.75rem; line-height: 1.4; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tl-meta strong { font-weight: 600; color: var(--text-soft); }
+  .tl-note { font-size: 0.75rem; font-style: italic; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tl-chevron { position: absolute; right: 0.5rem; top: 50%; transform: translateY(-50%); display: inline-flex; color: var(--text-muted); }
+
+  /* Catálogo: la celda del producto ya era flex (miniatura + nombre) */
+  .table-cards tbody td.tc-title.flex { display: flex; }
+}
+
+/* --- 9.7 Tarjetas-resumen de la app: 1 grande + 2 chicas, o 2 lado a lado --- */
+@media (max-width: 767.98px) {
+  .stat-trio, .stat-duo { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 0.625rem !important; }
+  .stat-trio > :first-child { grid-column: 1 / -1; }
+  .stat-trio .stat-card, .stat-duo .stat-card { padding: 0.75rem 0.875rem; }
+  .stat-trio .stat-value, .stat-duo .stat-value { font-size: 1.375rem; margin-top: 0.25rem; }
+  .stat-trio .stat-label, .stat-duo .stat-label { font-size: 0.75rem; }
+  .stat-trio .stat-sub, .stat-duo .stat-sub { margin-top: 0.125rem; font-size: 0.6875rem; }
+
+  /* Historial: buscador a lo ancho; estado, fechas y CSV de a dos */
+  .hist-filters { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hist-filters > :first-child { grid-column: 1 / -1; }
+  .hist-filters > * { width: auto !important; min-width: 0 !important; }
+  .hist-filters > .btn { justify-content: center; }
+
+  /* Filas deslizables: se insinúa que hay más a la derecha */
+  .chip-scroll {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 1.25rem), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 1.25rem), transparent);
+  }
+  .quick-chips > .quick-access-card { flex: 0 0 auto; }
+}
+
+/* --- 9.8 Gestores (app): el botón "Ver ventas" siempre a la derecha del nombre --- */
+.mgr-head { flex-wrap: nowrap !important; align-items: center; gap: 0.75rem; }
+.mgr-head > :first-child { flex: 1 1 auto; min-width: 0; }
+.mgr-head h3 { line-height: 1.25; overflow-wrap: anywhere; }
+.mgr-head > .btn { flex: none; }
+
+/* --- 9.9 Inicio del vendedor: las gráficas sin hueco debajo (antes alto mínimo de 220 px) --- */
+@media (max-width: 767.98px) {
+  .charts-row .card-content { min-height: 0; padding: 0.75rem 1rem 1rem; }
+  .bar-chart-wrap { height: auto; }
+  .donut-wrap { justify-content: flex-start; gap: 1.25rem; flex-wrap: nowrap; }
+  .kpi-row { gap: 0.625rem; }
+  .kpi-row .stat-card { padding: 0.75rem 0.875rem; }
+  .kpi-row .stat-card .stat-value { font-size: 1.375rem; margin: 0.25rem 0 0.125rem; }
+  .kpi-row .stat-card .stat-sub { font-size: 0.6875rem; }
+}
+
+/* Solicitudes: código como etiqueta (sin "·" sueltos al cortar la línea) y quién lo pidió */
+.req-meta { align-items: center; column-gap: 0.5rem; }
+.req-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.6875rem; font-weight: 600;
+  padding: 0.0625rem 0.4375rem; border-radius: 999px; border: 1px solid var(--border); color: var(--text-muted);
+  background: var(--bg-elevated); white-space: nowrap;
+}
+.req-by { font-size: 0.8125rem; line-height: 1.35; color: var(--text-muted); }
+@media (min-width: 768px) {
+  .req-card:has(.req-note) .req-actions { grid-row: 1 / span 4; }
+  .req-card:not(:has(.req-note)) .req-actions { grid-row: 1 / span 3; }
+}
+
+/* Carrusel de stock: la lista interior corta la 4.ª fila por la mitad del texto
+   (filas de 53 px: 12 + 3 × 53 + 31 ≈ 12.625rem) → se nota que se puede deslizar */
+@media (max-width: 767.98px) {
+  .wh-stock-card .card-content { max-height: 12.625rem !important; }
+}
+
+/* Botón "N bajo" del inventario del almacén: zona táctil de 44 px sin agrandar la etiqueta */
+[data-stock-filter="low"] { position: relative; }
+[data-stock-filter="low"]::after { content: ""; position: absolute; inset: -0.5rem -0.25rem; }
+
+/* ============================================================
+   10. CATÁLOGO POR TIPO Y MARCA (v5.12.0)
+   - Venta: chips "Tipo" y "Marca" con contador; un toque filtra.
+     En el teléfono, una fila que se desliza; en computadora se
+     reparten en varias líneas.
+   - Admin: tipos de producto, marcas y "Organizar productos".
+   ============================================================ */
+:root {
+  --c-slate: #64748b; --c-amber: #d97706; --c-blue: #2563eb; --c-emerald: #059669;
+  --c-cyan: #0891b2; --c-violet: #7c3aed; --c-rose: #e11d48; --c-orange: #ea580c;
+  --c-teal: #0d9488; --c-indigo: #4f46e5; --c-pink: #db2777; --c-lime: #65a30d;
+}
+
+/* --- 10.1 Chips del catálogo de venta --- */
+.facet-row { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.facet-row[hidden] { display: none; }
+.facet-label {
+  flex: none; width: 3.25rem; font-size: 0.625rem; font-weight: 800; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-muted);
+}
+.facet-scroll {
+  flex: 1; min-width: 0; display: flex; gap: 0.375rem; overflow-x: auto; scrollbar-width: none;
+  padding: 0.125rem 1.25rem 0.125rem 0.0625rem; scroll-padding-inline: 0.5rem;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 1.25rem), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 1.25rem), transparent);
+}
+.facet-scroll::-webkit-scrollbar { display: none; }
+.facet-chip {
+  position: relative; flex: none; display: inline-flex; align-items: center; gap: 0.375rem;
+  min-height: 2.5rem; padding: 0 0.75rem 0 0.8125rem; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text);
+  font: inherit; font-size: 0.8125rem; font-weight: 600; line-height: 1; white-space: nowrap;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; box-shadow: var(--inner-shadow);
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+.facet-chip::after { content: ""; position: absolute; inset: -0.1875rem -0.125rem; }
+.facet-chip:active { transform: scale(0.97); }
+.facet-chip:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.facet-ico { font-size: 0.9375rem; line-height: 1; }
+.facet-count {
+  min-width: 1.375rem; padding: 0.1875rem 0.375rem; border-radius: 999px; text-align: center;
+  font-size: 0.6875rem; font-weight: 800; font-variant-numeric: tabular-nums;
+  background: color-mix(in oklab, var(--text) 8%, transparent); color: var(--text-muted);
+}
+.facet-chip.is-on {
+  background: var(--primary); border-color: transparent; color: var(--primary-foreground);
+  box-shadow: 0 2px 8px color-mix(in oklab, var(--primary) 35%, transparent);
+}
+.facet-chip.is-on .facet-count { background: color-mix(in oklab, #fff 24%, transparent); color: inherit; }
+.facet-chip.is-empty { opacity: 0.45; }
+@media (hover: hover) {
+  .facet-chip:not(.is-on):hover { border-color: color-mix(in oklab, var(--primary) 45%, var(--border)); }
+}
+@media (min-width: 768px) {
+  .facet-scroll { flex-wrap: wrap; overflow: visible; padding-right: 0; -webkit-mask-image: none; mask-image: none; }
+}
+.catalog-empty { padding: 1.5rem 1rem !important; }
+
+/* --- 10.2 Admin: tipos, categorías y marcas --- */
+.type-pills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.type-pill {
+  display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.4375rem 0.75rem; border-radius: 999px;
+  font-size: 0.8125rem; font-weight: 600; border: 1px solid var(--border); background: var(--bg-elevated);
+}
+.type-pill strong { font-size: 0.6875rem; font-weight: 800; }
+.type-pill.is-ok { border-color: color-mix(in oklab, var(--accent) 40%, var(--border)); }
+.type-pill.is-ok strong { color: var(--accent); }
+.type-pill.is-missing { border-style: dashed; color: var(--text-muted); }
+.type-pill.is-missing strong { color: var(--warning); text-transform: uppercase; letter-spacing: 0.04em; }
+
+.cat-row, .brand-row {
+  display: flex; align-items: center; gap: 0.75rem; padding: 0.625rem 0.5rem 0.625rem 0.75rem;
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+}
+.cat-row-icon {
+  flex: none; width: 2.5rem; height: 2.5rem; display: grid; place-items: center; font-size: 1.25rem;
+  border-radius: var(--radius); background: color-mix(in oklab, var(--text) 5%, transparent);
+}
+.cat-row-text, .brand-row-text { flex: 1; min-width: 0; }
+.cat-row-name, .brand-row-name { font-weight: 650; font-size: 0.9375rem; line-height: 1.3; overflow-wrap: anywhere; }
+.cat-row-meta, .brand-row-meta { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.125rem; }
+.cat-row-actions, .brand-row-actions { flex: none; display: flex; align-items: center; gap: 0.125rem; }
+.sub-chips { display: flex; flex-wrap: wrap; gap: 0.375rem; margin-top: 0.375rem; }
+.sub-chip {
+  display: inline-flex; align-items: center; gap: 0.3125rem; padding: 0.125rem 0.125rem 0.125rem 0.5rem;
+  border-radius: 999px; border: 1px solid var(--border); font-size: 0.75rem; background: var(--bg-elevated);
+}
+.sub-chip-n { font-weight: 800; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.sub-chip-x {
+  position: relative; width: 1.5rem; height: 1.5rem; border-radius: 999px; border: 0; padding: 0;
+  background: transparent; color: var(--text-muted); font-size: 1rem; line-height: 1; cursor: pointer;
+}
+.sub-chip-x::after { content: ""; position: absolute; inset: -0.625rem -0.375rem; }
+.sub-chip-x:hover { color: var(--danger); background: color-mix(in oklab, var(--danger) 12%, transparent); }
+.link-btn {
+  border: 0; background: none; padding: 0; font: inherit; color: var(--primary); font-weight: 700;
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+
+.brand-badge {
+  --b: var(--c-slate);
+  flex: none; width: 2.5rem; height: 2.5rem; border-radius: 999px; display: grid; place-items: center;
+  font-weight: 800; font-size: 1rem; color: var(--b);
+  background: color-mix(in oklab, var(--b) 16%, transparent); border: 1px solid color-mix(in oklab, var(--b) 35%, transparent);
+}
+.brand-slate { --b: var(--c-slate); } .brand-amber { --b: var(--c-amber); } .brand-blue { --b: var(--c-blue); }
+.brand-emerald { --b: var(--c-emerald); } .brand-cyan { --b: var(--c-cyan); } .brand-violet { --b: var(--c-violet); }
+.brand-rose { --b: var(--c-rose); } .brand-orange { --b: var(--c-orange); } .brand-teal { --b: var(--c-teal); }
+.brand-indigo { --b: var(--c-indigo); } .brand-pink { --b: var(--c-pink); } .brand-lime { --b: var(--c-lime); }
+.brand-suggest {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem;
+  border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--primary) 5%, transparent);
+}
+
+.setup-card { border-color: color-mix(in oklab, var(--warning) 45%, var(--border)) !important; }
+.setup-card .card-title svg { color: var(--warning); }
+.setup-steps { margin: 0; padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.375rem; font-size: 0.875rem; }
+
+/* --- 10.3 Organizar productos (tipo y marca de cada uno) --- */
+.org { display: flex; flex-direction: column; gap: 0.625rem; }
+.org-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.org-search { position: relative; flex: 1 1 14rem; min-width: 0; }
+.org-search > span { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); display: inline-flex; }
+.org-search .input { padding-left: 2.25rem; }
+.org-note {
+  margin: 0; padding: 0.5rem 0.75rem; border-radius: var(--radius); font-size: 0.75rem; line-height: 1.4;
+  background: color-mix(in oklab, var(--info) 9%, transparent); border: 1px solid color-mix(in oklab, var(--info) 25%, var(--border));
+}
+.org-list { display: flex; flex-direction: column; gap: 0.5rem; max-height: 52vh; overflow-y: auto; padding-right: 0.125rem; }
+.org-row {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; padding: 0.625rem 0.75rem;
+  border: 1px solid var(--tile-border, var(--border)); border-left: 3px solid transparent;
+  border-radius: var(--radius-lg); background: var(--tile-bg, var(--bg-soft));
+}
+.org-row.is-changed { border-left-color: var(--primary); background: color-mix(in oklab, var(--primary) 6%, var(--tile-bg, var(--bg-soft))); }
+.org-name { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.org-title { font-size: 0.875rem; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
+.org-sub { font-size: 0.6875rem; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.org-sugg { font-family: inherit; font-weight: 800; color: var(--primary); text-transform: uppercase; letter-spacing: 0.04em; }
+.org-fields { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 0.5rem; }
+@media (min-width: 768px) {
+  .org-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); align-items: center; }
+}
+
+/* Organizar: el contador de cambios en su propia línea en el teléfono (antes, columna de 4 líneas) */
+.org-count { flex: 1; }
+@media (max-width: 640px) {
+  .modal-footer:has(.org-count) { flex-wrap: wrap; }
+  .modal-footer .org-count { flex: 1 1 100%; text-align: center; order: -1; }
+  .modal-footer:has(.org-count) > .btn { flex: 1 1 0; justify-content: center; }
+}
+/* Catálogo de venta: alto fijo de la lista → la hoja no salta al filtrar */
+.catalog-body #catalog-list { min-height: min(55vh, 30rem); }
+@media (min-width: 768px) {
+  .facet-row { align-items: flex-start; }
+  .facet-label { padding-top: 0.875rem; }
+}
+
+/* ============================================================
+   11. VENTAS SIN CONEXIÓN (v5.13.0)
+   - Aviso de cola: ventas de ESTE almacén vs. de otros almacenes
+     hechas en el mismo equipo, «para revisar», botones Ver / Subir.
+   - Lista «Ventas en espera» agrupada por almacén.
+   - Notas «Por subir» / «Pendiente de subir» (historial, ticket).
+   ============================================================ */
+.sync-banner { flex-wrap: wrap; row-gap: 0.5rem; }
+.sync-banner-review {
+  background: color-mix(in oklab, var(--danger) 9%, transparent);
+  border-color: color-mix(in oklab, var(--danger) 32%, transparent);
+  color: var(--danger);
+}
+.sync-banner-others {
+  display: flex; align-items: center; gap: 0.3rem;
+  margin-top: 0.3rem; font-size: 0.72rem; font-weight: 600;
+  color: inherit; opacity: 0.9;
+}
+.sync-banner-error, .sync-banner-hint {
+  display: flex; align-items: flex-start; gap: 0.3rem;
+  margin-top: 0.3rem; font-size: 0.72rem; line-height: 1.35;
+}
+.sync-banner-hint { opacity: 0.85; }
+.sync-banner-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-left: auto; }
+.sync-banner-btn { min-height: 2.75rem; white-space: nowrap; }
+@media (max-width: 480px) {
+  .sync-banner { align-items: flex-start; }
+  .sync-banner-content { flex-basis: calc(100% - 2.5rem); }
+  .sync-banner > .sync-banner-btn,
+  .sync-banner-actions { margin-left: 2rem; }
+}
+
+/* Nota «Por subir» (detalle de venta, ticket) */
+.pending-sync-note {
+  display: flex; align-items: flex-start; gap: 0.5rem;
+  padding: 0.6rem 0.75rem; border-radius: var(--radius);
+  font-size: 0.78rem; line-height: 1.4;
+  background: color-mix(in oklab, var(--warning) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--warning) 35%, transparent);
+  color: var(--text, inherit);
+}
+.pending-sync-note svg { flex-shrink: 0; margin-top: 0.1rem; color: var(--warning); }
+.badge-pending-sync { white-space: nowrap; }
+.home-hint-offline { display: flex; align-items: flex-start; gap: 0.35rem; color: var(--warning); }
+
+/* Lista «Ventas en espera» */
+.pending-modal { display: flex; flex-direction: column; gap: 0.9rem; }
+.pending-intro { margin: 0; line-height: 1.45; }
+.pending-group-title {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem;
+  margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 700;
+}
+.pending-group-count { margin-left: auto; font-size: 0.72rem; font-weight: 600; opacity: 0.75; }
+.pending-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.45rem; }
+.pending-item {
+  padding: 0.6rem 0.75rem; border-radius: var(--radius);
+  background: var(--bg-elevated, var(--bg-soft)); border: 1px solid var(--border);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.pending-item.is-blocked { border-color: color-mix(in oklab, var(--danger) 40%, var(--border)); }
+.pending-item-main { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+.pending-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; font-weight: 700; }
+.pending-total { font-weight: 700; font-variant-numeric: tabular-nums; }
+.pending-item-meta {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0.35rem 0.6rem;
+  margin-top: 0.25rem; font-size: 0.72rem; opacity: 0.9;
+}
+.pending-item-meta .badge { margin-left: auto; }
+.pending-reason { margin: 0.4rem 0 0; font-size: 0.74rem; line-height: 1.4; color: var(--danger); }
+.pending-item-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
+.pending-item-actions .btn { min-height: 2.75rem; }
+
+/* Indicador global «Sin conexión»: antes estaba fijo arriba a la derecha y
+   tapaba los botones de la cabecera (actualizar tasas, tema). Ahora cuelga
+   centrado bajo la cabecera, no bloquea toques, y se oculta donde la
+   pantalla ya muestra su propio aviso de conexión. */
+.offline-badge {
+  top: var(--offline-badge-top, 0.5rem);
+  left: 0; right: 0; margin-inline: auto; width: max-content;
+  pointer-events: none;
+  animation: none;
+  background: color-mix(in oklab, var(--warning) 16%, var(--bg-elevated, #fff));
+  color: color-mix(in oklab, var(--warning) 52%, var(--text));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.10);
+}
+body:has(.sync-banner-offline, .home-hint-offline, [data-action="retry-warehouses"]) .offline-badge.show { display: none; }
+
+/* Textos de aviso con mejor contraste (el ámbar puro sobre fondo claro se leía poco) */
+.sync-banner-offline,
+.home-hint-offline { color: color-mix(in oklab, var(--warning) 52%, var(--text)); }
+
+/* Con una hoja abierta (ticket, ventas en espera…), los avisos van ARRIBA, sobre el
+   fondo oscurecido: abajo tapaban el final del ticket y la lista. Tampoco bloquean
+   toques. Navegadores sin :has() → siguen abajo como antes. */
+@media (max-width: 640px) {
+  body:has(#modal-container .modal-overlay) .toast-container {
+    top: calc(0.75rem + env(safe-area-inset-top));
+    bottom: auto;
+  }
+  body:has(#modal-container .modal-overlay) .toast { pointer-events: none; }
+}

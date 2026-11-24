@@ -39,7 +39,7 @@ export function mountManagersView(container, navigate) {
               const isExpanded = expandedManager === m.id;
               return `
                 <div class="card">
-                  <div class="card-header flex justify-between">
+                  <div class="card-header flex justify-between mgr-head">
                     <div class="flex items-center gap-2 min-w-0">
                       <div class="brand-logo" style="background: var(--primary-tint); color: var(--primary); width: 2.5rem; height: 2.5rem">
                         ${icon("users", 16)}

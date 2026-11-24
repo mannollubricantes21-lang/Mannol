@@ -1194,9 +1194,11 @@ code, .code {
 /* Tooltip — simple hover tooltip via aria-label         */
 /* ===================================================== */
 
-[aria-label] {
-  position: relative;
-}
+/* v5.8 (móvil): ELIMINADA la regla `[aria-label] { position: relative; }`.
+   Tenía la misma especificidad que `.bottom-nav` y `.fab` pero venía después,
+   así que les quitaba el `position: fixed`: la barra inferior y el botón de
+   venta se iban al final de la página en vez de quedarse fijos en pantalla.
+   No había ningún tooltip que dependiera de ella. */
 
 /* ===================================================== */
 /* Improved scrollbars for dark theme                    */

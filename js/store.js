@@ -5,8 +5,9 @@
 // Similar API to Zustand but framework-agnostic.
 // =====================================================
 
+import { importLegacyQueue, addToQueue, removeFromQueue, readQueue, subscribeQueue } from "./offline-queue.js";
+
 const STORAGE_KEY = "almacen-pos-state-v1";
-const OFFLINE_QUEUE_MAX = 500; // tope de seguridad para no saturar localStorage
 
 const DEFAULT_STATE = {
   // Auth
@@ -40,7 +41,8 @@ const DEFAULT_STATE = {
   // Payments during checkout
   payments: [],
 
-  // Offline queue
+  // Offline queue — v5.13.0: la cola vive en js/offline-queue.js (clave propia).
+  // Se mantiene este campo (solo lectura, copia) por compatibilidad.
   offlineQueue: [],
 
   // UI
@@ -52,6 +54,8 @@ class Store {
     this.state = { ...DEFAULT_STATE };
     this.listeners = new Set();
     this.load();
+    // Copia de compatibilidad de la cola (sin re-render ni re-guardado)
+    try { subscribeQueue((q) => { this.state.offlineQueue = q; }); } catch {}
   }
 
   load() {
@@ -59,11 +63,25 @@ class Store {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
+        // v5.13.0: mover la cola de versiones anteriores a su clave propia
+        // ANTES de que cualquier save() reescriba este estado.
+        if (Array.isArray(parsed.offlineQueue) && parsed.offlineQueue.length > 0) {
+          try {
+            const n = importLegacyQueue(parsed.offlineQueue);
+            if (n > 0) console.info(`[Store] ${n} venta(s) pendiente(s) movidas a la cola nueva`);
+            delete parsed.offlineQueue;
+          } catch (err) {
+            // Si no se pudo migrar (sin espacio), NO tocar el estado guardado
+            console.warn("[Store] No se pudo migrar la cola offline:", err);
+            this._legacyQueue = parsed.offlineQueue;
+          }
+        }
         this.state = { ...DEFAULT_STATE, ...parsed };
         // Don't persist cart/payments across sessions
         this.state.cart = [];
         this.state.payments = [];
       }
+      this.state.offlineQueue = readQueue();
     } catch (err) {
       console.warn("Store load failed:", err);
     }
@@ -78,9 +96,10 @@ class Store {
         currentWarehouse: this.state.currentWarehouse,
         settings: this.state.settings,
         rates: this.state.rates,
-        offlineQueue: this.state.offlineQueue,
         theme: this.state.theme,
       };
+      // Solo si la migración falló: conservar la cola vieja tal cual estaba
+      if (this._legacyQueue) toSave.offlineQueue = this._legacyQueue;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
     } catch (err) {
       console.warn("Store save failed:", err);
@@ -205,22 +224,16 @@ class Store {
     return this.state.payments.reduce((s, p) => s + p.amountUSD, 0);
   }
 
-  // Offline queue
+  // Offline queue (compatibilidad) — v5.13.0 delega en js/offline-queue.js.
+  // Ya no se descartan ventas antiguas al llegar a un tope.
   enqueueOfflineSale(sale) {
-    this.setState((st) => {
-      const queue = [...st.offlineQueue, sale];
-      // Si excede el tope, descartar las más antiguas y avisar
-      if (queue.length > OFFLINE_QUEUE_MAX) {
-        const dropped = queue.length - OFFLINE_QUEUE_MAX;
-        console.warn(`[Store] Cola offline saturada: descartando ${dropped} venta(s) antigua(s). Sincroniza antes de que se acumulen.`);
-        return { offlineQueue: queue.slice(dropped) };
-      }
-      return { offlineQueue: queue };
-    });
+    addToQueue(sale);
+    this.setState({ offlineQueue: readQueue() });
   }
 
   dequeueOfflineSale(id) {
-    this.setState((st) => ({ offlineQueue: st.offlineQueue.filter((s) => s.id !== id) }));
+    removeFromQueue(id);
+    this.setState({ offlineQueue: readQueue() });
   }
 
   // Theme

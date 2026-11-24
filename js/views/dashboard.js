@@ -22,6 +22,9 @@ import { mountManagersView } from "./managers.js";
 import { mountWarehouseInterior } from "./warehouse-interior.js";
 import { createSyncBanner } from "../components/sync-banner.js";
 
+
+// v5.11.0: en el teléfono las gráficas van más bajas (menos desplazamiento)
+const isPhone = () => typeof matchMedia === "function" && matchMedia("(max-width: 767.98px)").matches;
 const NAV_ITEMS = [
   { id: "dashboard", label: "Inicio", icon: "home" },
   { id: "sales", label: "Ventas", icon: "cart", hideForRoles: ["admin"] },
@@ -89,7 +92,7 @@ export function mountDashboardView(container, navigate) {
       <div class="mobile-shell">
         <div class="bg-diagonal"></div>
 
-        <header class="app-header" style="background: color-mix(in oklab, var(--bg) 70%, transparent);">
+        <header class="app-header">
           <div class="app-header-inner">
             <div class="flex items-center gap-2">
               <button class="btn btn-ghost btn-icon" id="open-drawer-btn" aria-label="Abrir menú lateral" title="Menú">${icon("menu", 20)}</button>
@@ -179,7 +182,11 @@ export function mountDashboardView(container, navigate) {
   function updateNavActive() {
     container.querySelectorAll(".nav-btn[data-nav]").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.nav === activeView);
+      btn.setAttribute("aria-current", btn.dataset.nav === activeView ? "page" : "false");
     });
+    // v5.8 (móvil): el CSS usa este atributo para ocultar el FAB en Ventas
+    const shell = container.querySelector(".mobile-shell");
+    if (shell) shell.dataset.activeView = activeView;
   }
 
   function openDrawer() { drawerOpen = true; renderDrawer(); }
@@ -227,9 +234,10 @@ export function mountDashboardView(container, navigate) {
           ` : ''}
         </div>
         <div class="drawer-footer">
+          ${canFullscreen() ? `<button class="drawer-item" id="fullscreen-btn" style="margin-bottom:0.25rem">${icon("smartphone", 16)}<span style="flex:1;text-align:left">${document.fullscreenElement ? "Salir de pantalla completa" : "Pantalla completa (kiosko)"}</span></button>` : ""}
           <button class="btn btn-ghost btn-block" id="logout-btn" aria-label="Cerrar sesión" style="justify-content:flex-start;color:var(--danger)">${icon("logout", 14)} Cerrar sesión</button>
           <p class="text-xs text-muted text-center mt-2" style="margin-top:0.5rem">${esc(APP_LABEL)} · Acceso por PIN de almacén</p>
-          <div style="margin-top:0.75rem;padding:0.5rem 0.75rem;background:var(--bg-soft);border-radius:var(--radius);font-size:0.625rem;color:var(--text-muted);display:flex;flex-direction:column;gap:0.25rem">
+          <div class="drawer-shortcuts" style="margin-top:0.75rem;padding:0.5rem 0.75rem;background:var(--bg-soft);border-radius:var(--radius);font-size:0.625rem;color:var(--text-muted);display:flex;flex-direction:column;gap:0.25rem">
             <div style="font-weight:600;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.25rem">Atajos</div>
             <div style="display:flex;justify-content:space-between"><span>Buscar</span><span><kbd>Ctrl</kbd>+<kbd>K</kbd></span></div>
             <div style="display:flex;justify-content:space-between"><span>Nueva venta</span><kbd>N</kbd></div>
@@ -242,6 +250,10 @@ export function mountDashboardView(container, navigate) {
       </aside>
     `;
 
+    dc.querySelector("#fullscreen-btn")?.addEventListener("click", () => {
+      toggleFullscreen();
+      closeDrawer();
+    });
     dc.querySelector("#drawer-overlay").addEventListener("click", closeDrawer);
     dc.querySelector("#close-drawer").addEventListener("click", closeDrawer);
     dc.querySelector("#logout-btn").addEventListener("click", async () => {
@@ -263,6 +275,10 @@ export function mountDashboardView(container, navigate) {
     if (cleanup) { try { cleanup(); } catch {} cleanup = null; }
     const content = container.querySelector("#dashboard-content");
     if (!content) return;
+    const shell = container.querySelector(".mobile-shell");
+    if (shell) shell.dataset.activeView = activeView;
+    // Al cambiar de sección, volver arriba (antes se quedaba a mitad de página)
+    try { window.scrollTo({ top: 0 }); } catch {}
 
     try {
       // Si es empleado_pin, mostrar interior del almacén en lugar del overview
@@ -371,7 +387,7 @@ export function mountDashboardView(container, navigate) {
               <div class="card">
                 <div class="card-header"><h2 class="card-title">${icon("trendingUp", 14)} Ventas últimos 7 días</h2></div>
                 <div class="card-content">
-                  <div class="bar-chart-wrap">${barChart(buildLast7DaysData(sales), { height: 180, formatValue: (v) => formatMoney(v, "USD") })}</div>
+                  <div class="bar-chart-wrap">${barChart(buildLast7DaysData(sales), { height: isPhone() ? 132 : 180, formatValue: (v) => formatMoney(v, "USD") })}</div>
                 </div>
               </div>
               <div class="card">
@@ -402,7 +418,7 @@ export function mountDashboardView(container, navigate) {
               ` : `
                 <div style="display:flex;flex-direction:column;gap:0.5rem;max-height:24rem;overflow-y:auto">
                   ${sales.slice(0, 10).map((s) => `
-                    <div class="flex items-center justify-between border rounded p-2 text-sm" style="border-color:var(--border)">
+                    <div class="flex items-center justify-between border rounded p-2 text-sm tile" style="border-color:var(--border)">
                       <div>
                         <div class="font-medium">${esc(s.code)} · ${esc(s.managerName || s.userName || '—')}</div>
                         <div class="text-xs text-muted">${s.items.length} items · ${formatDate(s.createdAt)}</div>
@@ -456,7 +472,7 @@ export function mountDashboardView(container, navigate) {
       if (total === 0) return `<p class="text-xs text-muted">Sin ventas hoy</p>`;
       return `
         <div style="flex-shrink:0">
-          ${donutChart(data, { size: 140, thickness: 16, centerLabel: formatMoney(total, "USD").replace('$', ''), centerSubLabel: "total" })}
+          ${donutChart(data, { size: isPhone() ? 116 : 140, thickness: isPhone() ? 14 : 16, centerLabel: formatMoney(total, "USD").replace('$', ''), centerSubLabel: "total" })}
         </div>
         <div style="flex:1;min-width:8rem">
           ${legend(data.map((d) => ({ label: d.label, value: formatMoney(d.value, d.label), color: d.color })))}
@@ -524,17 +540,18 @@ export function mountDashboardView(container, navigate) {
     if (e.ctrlKey || e.metaKey) return;
 
     const key = e.key.toLowerCase();
-    const shortcuts = {
-      "n": () => { activeView = "sales"; renderActiveView(); updateNavActive(); },
-      "h": () => { activeView = "dashboard"; renderActiveView(); updateNavActive(); },
-      "i": () => { activeView = "stock"; renderActiveView(); updateNavActive(); },
-      "v": () => { activeView = "history"; renderActiveView(); updateNavActive(); },
-      "g": () => { activeView = "managers"; renderActiveView(); updateNavActive(); },
-    };
-    if (shortcuts[key]) {
-      e.preventDefault();
-      shortcuts[key]();
-    }
+    // v5.13.0: los atajos respetan los mismos permisos que el menú (antes un
+    // empleado con PIN abría Historial o Gestores con "v"/"g").
+    const shortcuts = { n: "sales", h: "dashboard", i: "stock", v: "history", g: "managers" };
+    const view = shortcuts[key];
+    if (!view) return;
+    const role = getStore().getState().currentUser?.role;
+    const item = DRAWER_ITEMS.find((i) => i.id === view);
+    if (!item || !item.roles.includes(role)) return;
+    e.preventDefault();
+    activeView = view;
+    renderActiveView();
+    updateNavActive();
   }
   document.addEventListener("keydown", onKeydown);
 
@@ -543,4 +560,18 @@ export function mountDashboardView(container, navigate) {
     if (bannerCleanup) { try { bannerCleanup(); } catch {} }
     document.removeEventListener("keydown", onKeydown);
   };
+}
+
+// ===== v5.8 (móvil): pantalla completa desde el menú =====
+// Reemplaza al botón flotante de "kiosko", que tapaba la pestaña Inicio.
+// En iPhone (Safari) no existe la Fullscreen API, así que ni se muestra.
+function canFullscreen() {
+  return !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
+}
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen?.().catch(() => {});
+  } else {
+    document.exitFullscreen?.().catch(() => {});
+  }
 }

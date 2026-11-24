@@ -5,9 +5,9 @@
 
 import { getStore } from "../store.js";
 import { subscribeSales, subscribeStock, listProducts, listWarehouses, listAllStockAcrossWarehouses, listStockForProductInAllWarehouses, createTransferRequest, listTransferRequests, saveDailyClosure, listDailyClosures } from "../db.js";
-import { computeClosureStats, closureDateKey, validateTransferRequest } from "../sales-stats.js";
+import { computeClosureStats, closureDateKey, validateTransferRequest, buildClosureShareText } from "../sales-stats.js";
 import { formatMoney, formatDate } from "../currency.js";
-import { icon, esc, toast, showModal, closeModal, confirmDialog } from "../ui.js";
+import { icon, esc, toast, showModal, closeModal, confirmDialog, copyText, openWhatsApp } from "../ui.js";
 
 export function mountWarehouseInterior(container, navigate) {
   const store = getStore();
@@ -323,6 +323,13 @@ export function mountWarehouseInterior(container, navigate) {
             <button class="btn ${!todayClosed && todayStats.salesCount > 0 ? 'btn-primary' : 'btn-outline'} btn-sm btn-block" id="close-cash-btn" style="margin-top:0.5rem">
               ${icon("check", 14)} ${todayClosed ? 'Actualizar cierre de hoy' : 'Cerrar caja de hoy'}
             </button>
+            ${todayStats.salesCount > 0 || todayClosed ? `
+              <!-- v5.10.0: enviar el resumen del día por WhatsApp -->
+              <div class="closure-share">
+                <button class="btn btn-whatsapp btn-sm" id="share-closure-wa">${icon("whatsapp", 16)} Enviar por WhatsApp</button>
+                <button class="btn btn-outline btn-sm" id="share-closure-copy" aria-label="Copiar el resumen del cierre" title="Copiar el resumen">${icon("copy", 14)} Copiar</button>
+              </div>
+            ` : ''}
             ${recentClosures.length > 0 ? `
               <button class="btn btn-ghost btn-sm btn-block" data-toggle-closures>
                 Últimos cierres (${recentClosures.length}) ${closuresOpen ? '▲' : '▼'}
@@ -487,7 +494,7 @@ export function mountWarehouseInterior(container, navigate) {
               <div class="text-xs font-semibold text-muted" style="margin-bottom:0.375rem">Mis solicitudes de traspaso</div>
               <div style="display:flex;flex-direction:column;gap:0.25rem">
                 ${myRequests.slice(0, 5).map((r) => `
-                  <div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius-sm)">
+                  <div class="tile" style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius-sm)">
                     <div style="min-width:0">
                       <div class="text-xs font-medium truncate">${esc(r.productName || '—')} · <strong>${r.quantity}</strong> u</div>
                       <div class="text-xs text-muted">Desde ${esc(r.fromWarehouseName || r.fromWarehouseId || '—')} · ${formatDate(r.createdAt)}</div>
@@ -507,7 +514,7 @@ export function mountWarehouseInterior(container, navigate) {
             <div class="card-content" style="padding:0.5rem">
               <div style="max-height:14rem;overflow-y:auto;display:flex;flex-direction:column;gap:0.25rem">
                 ${periodSales.slice(0, 10).map((s) => `
-                  <div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius);border-left:3px solid ${CURR_COLOR[s.currency] || 'var(--accent)'}">
+                  <div class="tile" style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius);border-left:3px solid ${CURR_COLOR[s.currency] || 'var(--accent)'}">
                     <div>
                       <div class="text-xs font-medium">${esc(s.code)} · ${esc(s.managerName || s.userName || '—')}</div>
                       <div class="text-xs text-muted">${s.items.length} items · ${formatDate(s.createdAt)}</div>
@@ -592,6 +599,21 @@ export function mountWarehouseInterior(container, navigate) {
         );
       });
     }
+    // v5.10.0: compartir el cierre del día (WhatsApp o portapapeles)
+    const closureText = () => buildClosureShareText({
+      warehouseName: warehouse.name,
+      warehouseCode: warehouse.code,
+      dateMs: Date.now(),
+      stats: todayStats,
+      closedBy: todayClosed ? (todayClosed.createdByName || "—") : null,
+      fmt: formatMoney,
+    });
+    container.querySelector("#share-closure-wa")?.addEventListener("click", () => openWhatsApp(closureText()));
+    container.querySelector("#share-closure-copy")?.addEventListener("click", async () => {
+      const ok = await copyText(closureText());
+      toast(ok ? "Resumen del cierre copiado" : "No se pudo copiar el resumen", ok ? "success" : "warning");
+    });
+
     const toggleClosuresBtn = container.querySelector("[data-toggle-closures]");
     if (toggleClosuresBtn) {
       toggleClosuresBtn.addEventListener("click", () => { closuresOpen = !closuresOpen; render(); });

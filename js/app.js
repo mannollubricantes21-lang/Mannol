@@ -9,6 +9,7 @@ import { setupAutoSync } from "./offline-sync.js";
 import { setupGlobalSearch } from "./global-search.js";
 import { askPermission, notifyConnectionRestored } from "./push-notify.js";
 import { setupUpdateBanner } from "./update-banner.js";
+import { setupTableCards } from "./ui.js";
 import { mountHomeView } from "./views/home.js";
 import { mountPinLoginView } from "./views/pin-login.js";
 import { mountUserLoginView } from "./views/user-login.js";
@@ -127,6 +128,7 @@ function init() {
     console.error("[App] #app container not found");
     return;
   }
+  setupTableCards(container); // v5.10.0: tablas como tarjetas en el móvil (Inventario)
 
   const navigate = (view) => {
     // v5.4.0: recordar el último destino para reabrirlo al volver
@@ -223,6 +225,17 @@ function init() {
   // Setup auto-sync: triggers on 'online' event + periodic check every 30s
   setupAutoSync();
 
+  // v5.13.0: precarga en segundo plano de lo necesario para vender sin
+  // conexión en cualquier almacén (al abrir y al volver internet).
+  const warmUp = () => {
+    import("./db.js")
+      .then((m) => m.warmOfflineCache())
+      .then((r) => { if (r && r.total) console.info(`[Offline] Datos guardados para trabajar sin conexión: ${r.ok}/${r.total}`); })
+      .catch(() => {});
+  };
+  setTimeout(warmUp, 4000);
+  window.addEventListener("online", () => setTimeout(warmUp, 6000));
+
   // Setup global search palette (Cmd/Ctrl+K)
   setupGlobalSearch((view) => navigate(view));
 
@@ -251,13 +264,32 @@ function setupOfflineBadge() {
     badge.innerHTML = `<span class="dot"></span><span>Sin conexión</span>`;
     document.body.appendChild(badge);
   }
+  // v5.13.0: colgar el indicador justo bajo la cabecera de la pantalla actual
+  // (las cabeceras cambian de alto según la vista), sin tapar sus botones.
+  let timer = null;
+  function place() {
+    const h = document.querySelector(".app-header, .premium-header, .admin-topbar");
+    let top = 8;
+    if (h) {
+      const r = h.getBoundingClientRect();
+      if (r.height > 0 && r.bottom > 0) top = Math.round(r.bottom - 11);
+    }
+    badge.style.setProperty("--offline-badge-top", `${Math.max(4, top)}px`);
+  }
   function update() {
-    if (navigator.onLine) badge.classList.remove("show");
-    else badge.classList.add("show");
+    if (navigator.onLine) {
+      badge.classList.remove("show");
+      if (timer) { clearInterval(timer); timer = null; }
+    } else {
+      place();
+      badge.classList.add("show");
+      if (!timer) timer = setInterval(place, 1000);
+    }
   }
   update();
   window.addEventListener("online", update);
   window.addEventListener("offline", update);
+  window.addEventListener("resize", () => { if (!navigator.onLine) place(); });
 }
 
 // ===== Kiosk mode — fullscreen toggle =====

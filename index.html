@@ -24,6 +24,8 @@
 
   <!-- Styles -->
   <link rel="stylesheet" href="./css/styles.css" />
+  <!-- v5.8: capa de mejoras para móvil (navegación fija, cobro visible, PIN con teclado, etc.) -->
+  <link rel="stylesheet" href="./css/mobile-ux.css" />
 
   <!-- Theme bootstrap (evita FOUC) -->
   <script>
@@ -126,7 +128,7 @@
     <h2>⚠️ No se pudo cargar la app</h2>
     <p>Esto puede deberse a:</p>
     <p>• El archivo <code>js/supabase-config.js</code> no existe (copia <code>supabase-config.example.js</code> y renómbralo)<br>
-       • No hay conexión a internet (requerida para cargar Supabase desde el CDN)<br>
+       • Es la primera vez que se abre en este equipo y no hay internet (ábrela una vez con conexión: después funciona sin ella)<br>
        • El navegador bloquea la ejecución de módulos ES</p>
     <p style="margin-top:1rem">
       <strong>¿Primera vez?</strong> Usa el asistente de configuración:<br>
@@ -150,7 +152,7 @@
   <!--
     Bootstrap with error handling.
     We use dynamic import() so that if app.js (or any of its dependencies)
-    fails to load — e.g. CDN blocked, syntax error, missing file — we can
+    fails to load — e.g. first visit offline, syntax error, missing file — we can
     catch the error and show a friendly message instead of an infinite spinner.
   -->
   <script type="module">

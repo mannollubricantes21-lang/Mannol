@@ -12,6 +12,52 @@
 
 const SUPABASE_VERSION = "2.108.2";
 const ESM_CDN = `https://esm.sh/@supabase/supabase-js@${SUPABASE_VERSION}`;
+// v5.13.0: copia LOCAL de la librería (mismo número de versión), guardada
+// por el service worker → la app abre y funciona SIN CONEXIÓN. El CDN
+// queda solo como respaldo si la copia local no se pudiera cargar.
+const LOCAL_MODULE = "./supabase-js.min.js";
+
+// Última configuración válida leída de js/supabase-config.js. Respaldo
+// para abrir sin conexión si ese archivo no estuviera en caché.
+const LAST_GOOD_CONFIG_KEY = "mannol-supabase-config-lastgood-v1";
+
+// En los tests (vitest) NUNCA se crea un cliente real: js/supabase-config.js
+// apunta a la base de datos de PRODUCCIÓN.
+function isTestEnv() {
+  try {
+    return typeof process !== "undefined" && !!process.env && (!!process.env.VITEST || process.env.NODE_ENV === "test");
+  } catch {
+    return false;
+  }
+}
+
+async function loadSupabaseModule() {
+  if (isTestEnv()) throw new Error("tests: sin cliente real de Supabase");
+  try {
+    const mod = await import(LOCAL_MODULE);
+    if (mod && typeof mod.createClient === "function") return mod;
+    throw new Error("la copia local no exporta createClient");
+  } catch (localErr) {
+    console.warn("[Supabase] copia local no disponible, probando el CDN:", localErr);
+    return await import(/* @vite-ignore */ ESM_CDN);
+  }
+}
+
+/**
+ * ¿Queda una sesión de Supabase (email + contraseña) guardada en este
+ * equipo? Sin conexión el token puede estar vencido y no renovarse, pero
+ * mientras siga guardado el usuario NO cerró sesión.
+ */
+export function hasPersistedSupabaseSession() {
+  try {
+    if (typeof localStorage === "undefined") return false;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && /^sb-.+-auth-token$/.test(k)) return true;
+    }
+  } catch {}
+  return false;
+}
 
 // localStorage key used by the in-app Setup Wizard (setup.html).
 // The wizard writes { url, anonKey } here so users don't need to
@@ -130,10 +176,26 @@ async function loadConfig() {
         if (_isValidConfig(fileCfg) || mod.isSupabaseConfigured === true) {
           _config = fileCfg;
           _configured = true;
+          try {
+            if (_isValidConfig(fileCfg)) {
+              localStorage.setItem(LAST_GOOD_CONFIG_KEY, JSON.stringify({ url: fileCfg.url, anonKey: fileCfg.anonKey }));
+            }
+          } catch {}
           return;
         }
       } catch {
-        // File doesn't exist — that's OK, fall through to demo mode.
+        // File doesn't exist (or no se pudo leer sin conexión) — ver respaldo.
+        // v5.13.0: si ya funcionó antes en este equipo, usar la última
+        // configuración válida en vez de caer en "modo demo" sin conexión.
+        try {
+          const last = JSON.parse(localStorage.getItem(LAST_GOOD_CONFIG_KEY) || "null");
+          if (last && _isValidConfig(last)) {
+            console.info("[Supabase] supabase-config.js no disponible: usando la última configuración guardada");
+            _config = last;
+            _configured = true;
+            return;
+          }
+        } catch {}
       }
 
       // 3) No config found — demo mode.
@@ -149,11 +211,90 @@ async function loadConfig() {
 }
 
 /**
+ * v5.12.0: URL del proyecto de Supabase configurado (o null en modo demo).
+ * Solo se usa para armar el enlace "Abrir el editor SQL" del admin.
+ */
+export async function getSupabaseProjectUrl() {
+  await loadConfig();
+  return _configured && _config && _config.url ? String(_config.url) : null;
+}
+
+// =====================================================
+// v5.13.0 — Lecturas disponibles sin conexión desde la 1ª visita
+// =====================================================
+// El service worker (sw.js) guarda las lecturas de Supabase en la caché
+// "mannol-pos-data-v1"... pero solo cuando ya controla la página. En la
+// primera visita tras instalar/actualizar, las primeras consultas salen
+// antes de que tome el control y no se guardaban. Mientras la página NO
+// esté controlada, este fetch hace lo mismo que el SW: guarda cada lectura
+// correcta en esa caché y, si falla la red, responde con la copia.
+// La clave DEBE coincidir con sw.js#dataKey.
+const DATA_CACHE = "mannol-pos-data-v1";
+
+function headerValue(headers, name) {
+  if (!headers) return "";
+  try {
+    if (typeof headers.get === "function") return headers.get(name) || "";
+    const k = Object.keys(headers).find((x) => x.toLowerCase() === name);
+    return k ? String(headers[k]) : "";
+  } catch {
+    return "";
+  }
+}
+
+function authScopeOf(headers) {
+  const token = headerValue(headers, "authorization").replace(/^Bearer\s+/i, "");
+  const parts = token.split(".");
+  if (parts.length !== 3) return "none";
+  try {
+    const json = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return `${json.role || "?"}:${json.sub || ""}`;
+  } catch {
+    return "none";
+  }
+}
+
+/** Misma clave que sw.js#dataKey (URL + tipo de respuesta + quién pregunta). */
+export function offlineDataKey(url, headers) {
+  const u = new URL(url, typeof location !== "undefined" ? location.href : undefined);
+  if (headerValue(headers, "accept").includes("vnd.pgrst.object")) u.searchParams.set("__mannol_accept", "object");
+  u.searchParams.set("__mannol_scope", authScopeOf(headers));
+  return u.toString();
+}
+
+function isCacheableRead(method, url) {
+  return method === "GET" && url.includes("/rest/v1/") && !url.includes("/rest/v1/rpc/") && !url.includes("client_ref=");
+}
+
+async function offlineAwareFetch(input, init = {}) {
+  const method = String(init?.method || (typeof input === "object" && input?.method) || "GET").toUpperCase();
+  const url = typeof input === "string" ? input : String(input?.url || input);
+  const headers = init?.headers || (typeof input === "object" ? input?.headers : null);
+  const canCache = typeof caches !== "undefined" && isCacheableRead(method, url);
+  const controlled = typeof navigator !== "undefined" && !!navigator.serviceWorker?.controller;
+  if (!canCache || controlled) return fetch(input, init); // el SW ya se encarga
+  try {
+    const res = await fetch(input, init);
+    if (res && res.status === 200) {
+      const copy = res.clone(); // antes de que la app lea el cuerpo
+      caches.open(DATA_CACHE).then((c) => c.put(offlineDataKey(url, headers), copy)).catch(() => {});
+    }
+    return res;
+  } catch (err) {
+    const cached = await caches.open(DATA_CACHE).then((c) => c.match(offlineDataKey(url, headers))).catch(() => null);
+    if (cached) return cached;
+    throw err;
+  }
+}
+
+/**
  * Initialize Supabase client (lazy, cached).
  * Returns null if:
  *   - Not configured (placeholder credentials)
  *   - supabase-config.js missing
- *   - CDN unreachable
+ *   - la librería no se pudo cargar (ni la copia local ni el CDN)
+ * v5.13.0: que devuelva null NO significa "modo demo" — db.js decide el
+ * modo demo solo por la configuración (isSupabaseConfiguredAsync).
  */
 export async function getSupabase() {
   if (_cached) return _cached;
@@ -164,8 +305,8 @@ export async function getSupabase() {
     if (!_configured) return null;
 
     try {
-      // Dynamic import from ESM CDN
-      const supabaseMod = await import(ESM_CDN);
+      // v5.13.0: copia local primero (funciona sin conexión), CDN de respaldo
+      const supabaseMod = await loadSupabaseModule();
       const { createClient } = supabaseMod;
 
       const client = createClient(_config.url, _config.anonKey, {
@@ -176,6 +317,9 @@ export async function getSupabase() {
         },
         realtime: {
           params: { eventsPerSecond: 10 },
+        },
+        global: {
+          fetch: (input, init) => offlineAwareFetch(input, init),
         },
       });
 
