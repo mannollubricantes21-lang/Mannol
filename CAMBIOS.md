@@ -1,5 +1,32 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.13.2 (2026-11-23) — La app en PC: menú fijo y barra superior flotante
+
+En la computadora (pantallas de 1024 px o más) la app se veía mal: el contenido quedaba corrido a
+la derecha con una franja vacía de 288 px a la izquierda, la barra superior era un bloque cuadrado
+de borde a borde (desalineado con las tarjetas) y no había navegación visible (la barra inferior se
+oculta en PC y el menú solo salía al tocar ☰). Causa: el CSS reservaba el sitio de un menú fijo que
+la app nunca dibujaba.
+
+- **Menú lateral fijo** a la izquierda, flotante y redondeado, oscuro como el del panel admin:
+  logo, usuario, secciones (con la activa marcada), pantalla completa, cerrar sesión y atajos de
+  teclado. Respeta los mismos permisos que antes. En portátiles de 768 px de alto se desplaza
+  entero, así que ninguna sección queda escondida.
+- **Barra superior flotante y redondeada**, alineada exactamente con el contenido; muestra la
+  sección actual (Inicio, Ventas, Inventario…) en lugar de repetir el logo, que ya está en el menú.
+- **Contenido centrado** con ancho máximo (antes se estiraba de lado a lado).
+- **Almacén en 2 columnas** desde 1280 px: Resumen (4 cuadros en una fila) y Registrar venta a
+  la izquierda, Cierre de caja a la derecha; debajo Inventario y Ventas recientes.
+- **Inicio (elegir almacén)** más ancho, con los almacenes en 2 columnas y la barra flotante
+  (antes era la columna del teléfono en medio de la pantalla).
+- Fondo sin la banda oscura diagonal que partía la página en dos detrás de las tarjetas (como en el
+  móvil desde la v5.11); un brillo verde muy suave.
+- Avisos abajo a la derecha (arriba tapaban los botones de la barra). El botón flotante de kiosko
+  se oculta cuando está el menú fijo (la misma opción está en el menú).
+- **En el teléfono no cambia nada** (comparado píxel a píxel con la versión anterior).
+- Pruebas: 195 (6 nuevas del menú en PC: fijo en PC, igual que antes en el móvil, sección activa,
+  atajos, cambio PC ↔ móvil).
+
 ## v5.13.1 (2026-11-23) — Logo nuevo: gota de aceite + engranaje
 
 - **Logo nuevo**: gota de aceite dorada sobre un engranaje blanco, con el verde de la app. Está en:

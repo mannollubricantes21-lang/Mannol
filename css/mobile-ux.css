@@ -1408,3 +1408,166 @@ body:has(.sync-banner-offline, .home-hint-offline, [data-action="retry-warehouse
   }
   body:has(#modal-container .modal-overlay) .toast { pointer-events: none; }
 }
+
+/* ============================================================
+   12. PC (≥ 1024 px) — v5.13.2
+   - Menú lateral FIJO y flotante, oscuro como el del panel admin. Antes el
+     contenido dejaba 18rem vacíos a la izquierda esperando un menú que solo
+     aparecía al tocar ☰ (y en PC no había otra navegación visible).
+   - Barra superior flotante y redondeada (antes un bloque cuadrado de borde a
+     borde, desalineado con el contenido); muestra la sección actual.
+   - Contenido centrado con ancho máximo; el almacén va en 2 columnas desde 1280 px.
+   - Inicio (elegir almacén) más ancho, con los almacenes en 2 columnas.
+   - Avisos abajo a la derecha (arriba tapaban los botones de la barra).
+   En el teléfono y la tablet en vertical no cambia nada.
+   ============================================================ */
+.app-header-section { display: none; }
+
+@media (min-width: 1024px) {
+  :root {
+    --dock-w: 16rem;
+    --dock-gap: 1rem;
+    --dock-space: calc(var(--dock-w) + var(--dock-gap) * 2);
+    --page-max: 76rem;
+    --home-max: 62rem;
+  }
+
+  /* --- Sin hueco fijo: el espacio del menú solo se reserva si el menú está --- */
+  .app-header,
+  .mobile-main { margin-left: 0; }
+  .mobile-main { max-width: none; padding: 1.25rem 1.5rem 2.5rem; }
+  .mobile-shell.has-dock .mobile-main { margin-left: var(--dock-space); }
+  .mobile-main > * { max-width: var(--page-max); margin-inline: auto; }
+
+  /* --- Barra superior flotante, alineada con el contenido --- */
+  .app-header {
+    top: var(--dock-gap);
+    margin: var(--dock-gap) 1.5rem 0;
+    border: 1px solid var(--border);
+    border-radius: 1.125rem;
+    box-shadow: var(--float);
+    background: color-mix(in oklab, var(--bg-elevated) 86%, transparent);
+  }
+  .mobile-shell.has-dock .app-header {
+    margin-left: calc(var(--dock-space) + max(1.5rem, (100% - var(--dock-space) - var(--page-max)) / 2));
+    margin-right: max(1.5rem, calc((100% - var(--dock-space) - var(--page-max)) / 2));
+  }
+  .app-header-inner { max-width: none; height: 3.75rem; padding: 0 0.625rem 0 1.25rem; }
+  /* Con el menú fijo: la ☰ y el logo sobran (están en el menú); se ve la sección */
+  .mobile-shell.has-dock #open-drawer-btn,
+  .mobile-shell.has-dock .app-header-logo,
+  .mobile-shell.has-dock .app-header-brand { display: none; }
+  .mobile-shell.has-dock .app-header-section { display: inline; }
+  .mobile-shell.has-dock .app-header h1 { font-size: 1.0625rem; letter-spacing: -0.01em; }
+
+  /* --- Menú lateral fijo (tema oscuro propio, como el panel admin) --- */
+  .drawer.drawer--docked {
+    top: var(--dock-gap);
+    left: var(--dock-gap);
+    bottom: var(--dock-gap);
+    height: auto;
+    width: var(--dock-w);
+    max-width: none;
+    z-index: 35;
+    border-radius: 1.375rem;
+    border: 1px solid oklch(1 0 0 / 8%);
+    background: linear-gradient(180deg, oklch(0.205 0.02 235) 0%, oklch(0.155 0.018 235) 100%);
+    box-shadow: var(--float);
+    animation: none;
+    color-scheme: dark;
+    --text: oklch(0.96 0.008 235);
+    --text-soft: oklch(0.86 0.012 235);
+    --text-muted: oklch(0.7 0.015 235);
+    --border: oklch(1 0 0 / 9%);
+    --bg-soft: oklch(1 0 0 / 6%);
+    color: var(--text);
+  }
+  /* En pantallas bajas (portátil de 768 px) desplaza el menú entero: antes la parte
+     de abajo fija (kiosko, salir, atajos) dejaba sin sitio a las secciones y
+     "Transferencias" quedaba escondida */
+  .drawer.drawer--docked { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+  .drawer--docked .drawer-header { padding: 1rem 1rem 0.875rem; border-bottom-color: oklch(1 0 0 / 8%); }
+  .drawer--docked .drawer-body { flex: 0 0 auto; overflow: visible; padding: 0.75rem 0.625rem; }
+  .drawer--docked .drawer-footer { margin-top: auto; padding: 0.625rem; border-top-color: oklch(1 0 0 / 8%); }
+  .drawer--docked .drawer-item { position: relative; color: oklch(0.84 0.012 235); }
+  .drawer--docked .drawer-item:hover { background: oklch(1 0 0 / 7%); color: var(--text); }
+  .drawer--docked .drawer-item.active {
+    background: color-mix(in oklab, var(--primary) 30%, oklch(1 0 0 / 6%));
+    color: oklch(0.97 0.02 165);
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px oklch(1 0 0 / 10%);
+  }
+  .drawer--docked .drawer-item.active::before {
+    content: "";
+    position: absolute;
+    left: -0.625rem; top: 0.375rem; bottom: 0.375rem;
+    width: 3px;
+    border-radius: 999px;
+    background: var(--primary);
+  }
+  .drawer--docked .card-dark .brand-logo { background: oklch(1 0 0 / 9%) !important; color: oklch(0.86 0.1 165) !important; box-shadow: none; }
+  .drawer--docked .badge-outline { color: var(--text-soft); border-color: oklch(1 0 0 / 16%); }
+  .drawer--docked #logout-btn { color: oklch(0.76 0.15 25) !important; }
+  .drawer--docked #logout-btn:hover { background: oklch(0.58 0.2 25 / 18%); }
+  .drawer--docked kbd { background: oklch(1 0 0 / 8%); border-color: oklch(1 0 0 / 14%); color: var(--text-soft); }
+  /* El botón flotante de kiosko tapaba el menú: la misma opción está en el menú */
+  body:has(.drawer--docked) .kiosk-btn { display: none; }
+
+  /* En el menú fijo la tarjeta del usuario es más estrecha: sin la etiqueta técnica del
+     rol (EMPLEADO_PIN) el nombre se lee completo */
+  .drawer--docked .card-dark .badge { display: none; }
+
+  /* --- Fondo: sin la banda oscura diagonal (partía la página en dos detrás de las
+     tarjetas, igual que en el móvil desde la v5.11); un brillo verde muy suave --- */
+  .bg-diagonal::after { display: none; }
+  .bg-diagonal::before {
+    background:
+      radial-gradient(60rem 40rem at 100% 0%, color-mix(in oklab, var(--primary) 8%, transparent), transparent 70%),
+      radial-gradient(48rem 34rem at 0% 100%, color-mix(in oklab, var(--primary) 5%, transparent), transparent 70%),
+      var(--bg);
+  }
+
+  /* --- Avisos abajo a la derecha --- */
+  .toast-container { top: auto; bottom: 1.25rem; right: 1.25rem; }
+
+  /* --- Almacén (empleado): resumen en 4 cuadros --- */
+  .wi-resumen .kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .wi-resumen .kpi-value,
+  .wi-resumen .kpi-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* --- Inicio (elegir almacén): más ancho, almacenes en 2 columnas --- */
+  .premium-header {
+    top: var(--dock-gap);
+    width: min(var(--home-max), calc(100% - 3rem));
+    margin: var(--dock-gap) auto 0;
+    border: 1px solid var(--border);
+    border-radius: 1.125rem;
+    box-shadow: var(--float);
+  }
+  .premium-header-inner { max-width: none; height: 3.75rem; padding: 0 0.75rem 0 1rem; }
+  .premium-home-main { max-width: none; width: min(var(--home-max), calc(100% - 3rem)); padding: 1.5rem 0 3rem; }
+  .premium-home-main .wh-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Almacén en 2 columnas cuando hay sitio de sobra */
+@media (min-width: 1280px) {
+  .wi-layout {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    grid-template-areas:
+      "hero    hero"
+      "resumen cierre"
+      "cta     cierre"
+      "inv     recientes";
+    align-items: start;
+    gap: 1rem !important;
+  }
+  .wi-layout > * { grid-column: 1 / -1; }
+  .wi-layout > .wi-hero { grid-area: hero; }
+  .wi-layout > .wi-resumen { grid-area: resumen; }
+  .wi-layout > .wi-cta { grid-area: cta; }
+  .wi-layout > .wi-cierre { grid-area: cierre; }
+  .wi-layout > .wi-inv { grid-area: inv; }
+  .wi-layout > .wi-recientes { grid-area: recientes; }
+  .wi-layout:not(:has(> .wi-recientes)) > .wi-inv { grid-column: 1 / -1; }
+}

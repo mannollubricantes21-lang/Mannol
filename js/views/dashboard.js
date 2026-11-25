@@ -25,6 +25,10 @@ import { createSyncBanner } from "../components/sync-banner.js";
 
 // v5.11.0: en el teléfono las gráficas van más bajas (menos desplazamiento)
 const isPhone = () => typeof matchMedia === "function" && matchMedia("(max-width: 767.98px)").matches;
+// v5.13.2 (PC): desde 1024 px el menú lateral queda FIJO. Antes solo aparecía al
+// tocar ☰ y el contenido dejaba su hueco vacío a la izquierda (sin navegación visible).
+const DESKTOP_MQ = "(min-width: 1024px)";
+const isDesktop = () => typeof matchMedia === "function" && matchMedia(DESKTOP_MQ).matches;
 const NAV_ITEMS = [
   { id: "dashboard", label: "Inicio", icon: "home" },
   { id: "sales", label: "Ventas", icon: "cart", hideForRoles: ["admin"] },
@@ -49,6 +53,11 @@ const DRAWER_ADMIN_ITEMS = [
   { id: "transfers", label: "Transferencias", icon: "creditCard", roles: ["admin", "warehouse"] },
   { id: "users", label: "Usuarios", icon: "userCog", roles: ["admin"] },
 ];
+
+// Título de la sección actual (en PC la barra superior muestra la sección; el logo ya está en el menú)
+function sectionLabel(id) {
+  return [...DRAWER_ITEMS, ...DRAWER_ADMIN_ITEMS].find((i) => i.id === id)?.label || "Inicio";
+}
 
 // Subtítulo del header: nombre de persona + almacén (sin repetir el código
 // si ya viene en el displayName; muestra el nombre del local, no el código).
@@ -97,9 +106,9 @@ export function mountDashboardView(container, navigate) {
             <div class="flex items-center gap-2">
               <button class="btn btn-ghost btn-icon" id="open-drawer-btn" aria-label="Abrir menú lateral" title="Menú">${icon("menu", 20)}</button>
               <div class="flex items-center gap-2 min-w-0">
-                <div class="brand-logo brand-logo--mark">${brandMark()}</div>
+                <div class="brand-logo brand-logo--mark app-header-logo">${brandMark()}</div>
                 <div class="min-w-0" style="line-height: 1.2;">
-                  <h1 class="font-bold text-base truncate" style="margin:0">MANNOL</h1>
+                  <h1 class="font-bold text-base truncate" style="margin:0"><span class="app-header-brand">MANNOL</span><span class="app-header-section" id="app-header-section">${esc(sectionLabel(activeView))}</span></h1>
                   <p class="text-xs text-muted truncate" style="margin:0">${headerSubtitle(user, warehouse)}</p>
                 </div>
               </div>
@@ -177,6 +186,8 @@ export function mountDashboardView(container, navigate) {
       if (bannerCleanup) { try { bannerCleanup(); } catch {} }
       bannerCleanup = createSyncBanner(bannerMount);
     }
+
+    renderDrawer(); // en PC queda fijo a la izquierda
   }
 
   function updateNavActive() {
@@ -187,6 +198,18 @@ export function mountDashboardView(container, navigate) {
     // v5.8 (móvil): el CSS usa este atributo para ocultar el FAB en Ventas
     const shell = container.querySelector(".mobile-shell");
     if (shell) shell.dataset.activeView = activeView;
+    syncSectionUI();
+  }
+
+  // Menú fijo (PC) y título de la barra superior al cambiar de sección
+  function syncSectionUI() {
+    container.querySelectorAll(".drawer-item[data-drawer-nav]").forEach((btn) => {
+      const on = btn.dataset.drawerNav === activeView;
+      btn.classList.toggle("active", on);
+      if (on) btn.setAttribute("aria-current", "page"); else btn.removeAttribute("aria-current");
+    });
+    const title = container.querySelector("#app-header-section");
+    if (title) title.textContent = sectionLabel(activeView);
   }
 
   function openDrawer() { drawerOpen = true; renderDrawer(); }
@@ -197,21 +220,24 @@ export function mountDashboardView(container, navigate) {
     if (!dc) return;
     const state = store.getState();
     const user = state.currentUser;
-    if (!drawerOpen) { dc.innerHTML = ""; return; }
+    const docked = isDesktop() && !!user;
+    const shellEl = container.querySelector(".mobile-shell");
+    if (shellEl) shellEl.classList.toggle("has-dock", docked);
+    if (!drawerOpen && !docked) { dc.innerHTML = ""; return; }
     const warehouse = state.currentWarehouse;
     const allowedDrawer = DRAWER_ITEMS.filter((i) => i.roles.includes(user.role));
     const allowedAdmin = DRAWER_ADMIN_ITEMS.filter((i) => i.roles.includes(user.role));
 
     dc.innerHTML = `
-      <div class="drawer-overlay" id="drawer-overlay"></div>
-      <aside class="drawer">
+      ${docked ? "" : `<div class="drawer-overlay" id="drawer-overlay"></div>`}
+      <aside class="drawer${docked ? " drawer--docked" : ""}" aria-label="Menú">
         <div class="drawer-header">
           <div class="brand-logo brand-logo--mark">${brandMark()}</div>
           <div class="min-w-0" style="flex:1">
             <p class="font-bold" style="margin:0">MANNOL</p>
             <p class="text-xs text-muted truncate" style="margin:0">${user.displayName}</p>
           </div>
-          <button class="btn btn-ghost btn-icon" id="close-drawer" aria-label="Cerrar menú" title="Cerrar">${icon("x", 18)}</button>
+          ${docked ? "" : `<button class="btn btn-ghost btn-icon" id="close-drawer" aria-label="Cerrar menú" title="Cerrar">${icon("x", 18)}</button>`}
         </div>
         <div class="drawer-body">
           <div class="card-dark" style="background: var(--bg-soft); color: var(--text); border-color: var(--border); border-radius: var(--radius-lg); padding: 0.75rem; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.75rem;">
@@ -223,7 +249,7 @@ export function mountDashboardView(container, navigate) {
             <span class="badge badge-outline" style="font-size: 0.5625rem">${user.role.toUpperCase()}</span>
           </div>
           <div style="display:flex;flex-direction:column;gap:0.25rem">
-            ${allowedDrawer.map((item) => `<button class="drawer-item ${activeView === item.id ? 'active' : ''}" data-drawer-nav="${item.id}">${icon(item.icon, 16)}<span style="flex:1;text-align:left">${item.label}</span></button>`).join('')}
+            ${allowedDrawer.map((item) => `<button class="drawer-item ${activeView === item.id ? 'active' : ''}" data-drawer-nav="${item.id}"${activeView === item.id ? ' aria-current="page"' : ''}>${icon(item.icon, 16)}<span style="flex:1;text-align:left">${item.label}</span></button>`).join('')}
           </div>
           ${allowedAdmin.length > 0 ? `
             <div class="separator"></div>
@@ -254,8 +280,8 @@ export function mountDashboardView(container, navigate) {
       toggleFullscreen();
       closeDrawer();
     });
-    dc.querySelector("#drawer-overlay").addEventListener("click", closeDrawer);
-    dc.querySelector("#close-drawer").addEventListener("click", closeDrawer);
+    dc.querySelector("#drawer-overlay")?.addEventListener("click", closeDrawer);
+    dc.querySelector("#close-drawer")?.addEventListener("click", closeDrawer);
     dc.querySelector("#logout-btn").addEventListener("click", async () => {
       await logout();
       toast("Sesión cerrada", "info");
@@ -555,10 +581,16 @@ export function mountDashboardView(container, navigate) {
   }
   document.addEventListener("keydown", onKeydown);
 
+  // PC ↔ móvil (redimensionar ventana / girar tablet): fijar o soltar el menú
+  const desktopMq = typeof matchMedia === "function" ? matchMedia(DESKTOP_MQ) : null;
+  const onDesktopChange = () => { drawerOpen = false; renderDrawer(); };
+  desktopMq?.addEventListener?.("change", onDesktopChange);
+
   return () => {
     if (cleanup) { try { cleanup(); } catch {} }
     if (bannerCleanup) { try { bannerCleanup(); } catch {} }
     document.removeEventListener("keydown", onKeydown);
+    desktopMq?.removeEventListener?.("change", onDesktopChange);
   };
 }
 

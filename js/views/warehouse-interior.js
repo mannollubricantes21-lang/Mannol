@@ -210,9 +210,9 @@ export function mountWarehouseInterior(container, navigate) {
     const todayClosed = recentClosures.find((c) => c.closureDate === todayKey);
 
     container.innerHTML = `
-      <div style="display:flex;flex-direction:column;gap:0.875rem">
+      <div class="wi-layout" style="display:flex;flex-direction:column;gap:0.875rem">
         <!-- Hero del almacén (v5.7.0) -->
-        <div class="wh-hero">
+        <div class="wh-hero wi-hero">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem">
             <div style="display:flex;align-items:center;gap:0.5rem;min-width:0">
               <span class="wh-chip">${icon("store", 11)} ${esc(warehouse.code)}</span>
@@ -229,7 +229,7 @@ export function mountWarehouseInterior(container, navigate) {
         </div>
 
         <!-- Resumen con período integrado (v5.7.0) -->
-        <div class="card">
+        <div class="card wi-resumen">
           <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;padding:0.625rem 0.75rem">
             <h3 class="card-title flex items-center gap-1">${icon("activity", 14)} Resumen</h3>
             <div class="seg-group">
@@ -287,12 +287,12 @@ export function mountWarehouseInterior(container, navigate) {
         </div>
 
         <!-- Botón registrar venta (v5.7.0) -->
-        <button class="btn cta-sale btn-block" id="register-sale-btn">
+        <button class="btn cta-sale btn-block wi-cta" id="register-sale-btn">
           ${icon("cart", 20)} Registrar venta
         </button>
 
         <!-- Cierre de caja (v5.5.0) -->
-        <div class="card">
+        <div class="card wi-cierre">
           <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
             <h3 class="card-title flex items-center gap-1">${icon("receipt", 14)} Cierre de caja</h3>
             ${todayClosed
@@ -352,7 +352,7 @@ export function mountWarehouseInterior(container, navigate) {
         </div>
 
         <!-- Inventario con tabs: Stock / Otros almacenes / Transferencias -->
-        <div class="card">
+        <div class="card wi-inv">
           <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem">
             <h3 class="card-title flex items-center gap-1">${icon("boxes", 14)} Inventario</h3>
             <div style="display:flex;gap:0.25rem">
@@ -509,7 +509,7 @@ export function mountWarehouseInterior(container, navigate) {
 
         <!-- Ventas recientes -->
         ${periodSales.length > 0 ? `
-          <div class="card">
+          <div class="card wi-recientes">
             <div class="card-header"><h3 class="card-title">Ventas recientes</h3></div>
             <div class="card-content" style="padding:0.5rem">
               <div style="max-height:14rem;overflow-y:auto;display:flex;flex-direction:column;gap:0.25rem">
