@@ -1260,7 +1260,7 @@ CREATE OR REPLACE FUNCTION public.deduct_sale_stock(
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_item        jsonb;
@@ -1646,7 +1646,7 @@ CREATE OR REPLACE FUNCTION public.register_sale(p_sale jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_id          text;
@@ -1886,7 +1886,7 @@ BEGIN
     UPDATE public.sales SET status = 'PENDIENTE', cancelled_at = NULL, cancel_reason = NULL WHERE id = p_sale_id;
   END IF;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions;
 
 
 -- ===== Verificación (opcional) =====
@@ -2072,7 +2072,7 @@ create or replace function public.verify_warehouse_pin(p_code text, p_pin text)
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   wh public.warehouses%rowtype;
@@ -2889,7 +2889,7 @@ create or replace function public.verify_warehouse_pin(p_code text, p_pin text)
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   wh public.warehouses%rowtype;
@@ -3135,7 +3135,7 @@ returns text
 language sql
 stable
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
   select lower(u.email)
     from public.users u
@@ -3241,3 +3241,15 @@ create policy stock_transfers_delete_admin on public.stock_transfers
 -- ===== Fin. Comprobación (opcional): tablas sin RLS (debería salir vacío) =====
 -- select relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
 --  where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity;
+
+
+-- ############################################################
+-- ## 7 · Funciones de cifrado de Supabase (pgcrypto vive en «extensions»)
+-- ############################################################
+-- digest(), crypt() y gen_salt() están en el esquema «extensions» de
+-- Supabase. Sin esto, validar el PIN fallaba con «function digest does
+-- not exist» (la app decía «No se pudo validar el PIN»).
+alter function public.verify_warehouse_pin(text, text) set search_path = public, extensions;
+alter function public.recompute_pin_hash() set search_path = public, extensions;
+alter function public.create_admin_user(text, text, text, text, text, uuid[]) set search_path = public, extensions;
+alter function public.change_user_password(uuid, text) set search_path = public, extensions;

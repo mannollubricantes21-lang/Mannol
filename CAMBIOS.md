@@ -1,5 +1,14 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.23.2 (2026-11-25) — El PIN vuelve a validar
+
+- En Supabase, `digest()`, `crypt()` y `gen_salt()` (pgcrypto) están en el
+  esquema `extensions`. Las funciones del PIN y de contraseñas solo buscaban
+  en `public`, así que `verify_warehouse_pin` fallaba siempre («No se pudo
+  validar el PIN»). Ahora usan `search_path = public, extensions`.
+  Arreglo corto para una base ya instalada: 4 líneas `alter function …`
+  (también incluidas al final de `instalar.sql`).
+
 ## v5.23.1 (2026-11-25) — Limpieza del repositorio
 
 - Se eliminan el asistente de configuración (`setup.html`, `js/setup-wizard.js`,
