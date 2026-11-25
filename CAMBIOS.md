@@ -911,3 +911,14 @@ Dos causas encadenadas, confirmadas con probes REST contra la BD real:
 - `policies.sql`: incluye la misma política para instalaciones nuevas.
 - `INSTALACION_SUPABASE.md`: nuevo apartado "añadí stock y NO aparece / Otros almacenes carga eterno" con diagnóstico.
 - sw.js: caché v13. Sin cambios funcionales en la app (el fix es 100% SQL).
+
+## v5.16.0 — Cobro más seguro (2026-11-24)
+- **Pago en varias monedas validado:** ya no se puede registrar si no cuadra con el total. Línea en vivo «Falta / Sobra / Pago completo» y botón «Resto» por moneda; el botón de registrar se deshabilita (con el motivo) hasta que cuadra.
+- **Montos en su moneda:** `paidMN`/`paidEUR` se guardan en pesos/euros y `payments[].amountUSD` / `exchangeRate` llevan la conversión con la tasa del día (antes el total en USD se guardaba como MN/EUR). Sin tasa de cambio no se vende en esa moneda (USD siempre funciona).
+- **Vuelto** calculado en la moneda elegida (antes comparaba contra el total en USD).
+- **Errores visibles:** `handleRegister` captura excepciones y avisa; el botón muestra «Registrando…».
+- **Stock** de menudeo se recomprueba al registrar. **Tarjeta obligatoria** si hay pago por transferencia.
+- **Borrador del carrito** por almacén (12 h): sobrevive a recargas y actualizaciones.
+- Gestores y tarjetas se reintentan si fallan al cargar.
+- Nuevo `js/payment-utils.js` (+ tests) añadido a la precarga del service worker; `CACHE_VERSION` v38.
+- **Pendiente (no incluido):** endurecer RLS de Supabase (PIN, `sales`, `cards` legibles por `anon`) — ver documento de revisión.
