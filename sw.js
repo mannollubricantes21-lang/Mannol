@@ -17,7 +17,7 @@
 //    red no responde en 4 s se abre la copia guardada.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v33";
+const CACHE_VERSION = "mannol-pos-supabase-v34";
 const DATA_CACHE = "mannol-pos-data-v1"; // respuestas de Supabase (se conserva entre versiones)
 const NAV_TIMEOUT_MS = 4000;
 const API_TIMEOUT_MS = 6000;
@@ -82,6 +82,10 @@ const STATIC_ASSETS = [
   "./icons/favicon.png",
   "./icons/icon-64.png",
   "./icons/icon-maskable-512.png",
+  "./icons/icon-maskable-192.png",
+  "./icons/apple-touch-icon.png",
+  "./icons/favicon-32.png",
+  "./icons/logo-192.png",
 ];
 
 // ===== Lifecycle =====

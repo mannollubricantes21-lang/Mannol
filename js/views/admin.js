@@ -26,7 +26,7 @@ import {
 } from "../db.js";
 import { logout } from "../auth.js";
 import { formatMoney, formatDate, formatDateShort } from "../currency.js";
-import { toast, icon, showModal, closeModal, confirmDialog, esc, copyText } from "../ui.js";
+import { toast, icon, showModal, closeModal, confirmDialog, esc, copyText, brandMark } from "../ui.js";
 import { getSupabaseProjectUrl } from "../supabase.js";
 import {
   DEFAULT_CATEGORY_TYPES, missingDefaultTypes, missingDefaultBrands, knownBrandNames, canonicalBrand,
@@ -239,7 +239,7 @@ export function mountAdminView(container, navigateOrUser) {
         <!-- Sidebar -->
         <aside class="admin-sidebar" id="admin-sidebar">
           <div class="admin-sidebar-header">
-            <div class="brand-logo">${icon("droplet", 18)}</div>
+            <div class="brand-logo brand-logo--mark">${brandMark()}</div>
             <div style="min-width:0;flex:1">
               <p class="font-bold" style="margin:0;font-size:0.875rem">MANNOL Admin</p>
               <p class="text-xs text-muted truncate" style="margin:0">${user.displayName}</p>

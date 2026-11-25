@@ -6,7 +6,7 @@
 import { getStore } from "../store.js";
 import { listWarehouses, subscribeRates, syncElToqueRates, getSettings } from "../db.js";
 import { formatMoney, formatDate, convertAmount, formatMoneyGrouped, parseAmountInput } from "../currency.js";
-import { toast, icon, esc, showModal } from "../ui.js";
+import { toast, icon, esc, showModal, brandMark } from "../ui.js";
 import { APP_LABEL } from "../version.js";
 import { isSupabaseConfiguredAsync } from "../supabase.js";
 
@@ -61,8 +61,8 @@ export function renderHomeView(navigate) {
             ${icon("menu", 20)}
           </button>
           <div class="flex items-center gap-2 min-w-0">
-            <div class="brand-logo" id="home-logo" style="cursor: pointer; user-select: none;" title="MANNOL" role="button" tabindex="0" aria-label="Logo MANNOL">
-              ${icon("droplet", 18)}
+            <div class="brand-logo brand-logo--mark" id="home-logo" style="cursor: pointer; user-select: none;" title="MANNOL" role="button" tabindex="0" aria-label="Logo MANNOL">
+              ${brandMark()}
             </div>
             <div class="min-w-0">
               <h1 class="font-bold text-base truncate" style="margin:0;line-height:1.2;letter-spacing:-0.01em">MANNOL</h1>

@@ -18,7 +18,7 @@
 import { getStore, applyTheme } from "./store.js";
 import { getSupabase, isSupabaseConfiguredAsync, isSupabaseConfigured } from "./supabase.js";
 import { logout, loginWithEmail } from "./auth.js";
-import { toast, icon, esc, setupTableCards } from "./ui.js";
+import { toast, icon, esc, setupTableCards, brandMark } from "./ui.js";
 import { setupGlobalSearch } from "./global-search.js";
 import { setupUpdateBanner } from "./update-banner.js";
 import { notifyLowStock } from "./push-notify.js";
@@ -202,7 +202,7 @@ function renderNeedsConfig(container) {
       <div class="admin-main">
         <div class="admin-topbar">
           <div class="flex items-center gap-2">
-            <div class="brand-logo">${icon("droplet", 18)}</div>
+            <div class="brand-logo brand-logo--mark">${brandMark()}</div>
             <h1 class="font-bold text-base" style="margin:0">MANNOL Admin</h1>
           </div>
           <a href="./index.html" class="btn btn-outline btn-sm">${icon("arrowLeft", 14)} Volver</a>
@@ -235,7 +235,7 @@ function renderAdminLogin(container, errorMessage) {
       <div class="admin-main">
         <div class="admin-topbar">
           <div class="flex items-center gap-2">
-            <div class="brand-logo">${icon("droplet", 18)}</div>
+            <div class="brand-logo brand-logo--mark">${brandMark()}</div>
             <h1 class="font-bold text-base" style="margin:0">MANNOL Admin</h1>
           </div>
           <a href="./index.html" class="btn btn-outline btn-sm">${icon("arrowLeft", 14)} Volver a la app</a>
@@ -345,7 +345,7 @@ function showError(container, message) {
       <div class="admin-main">
         <div class="admin-topbar">
           <div class="flex items-center gap-2">
-            <div class="brand-logo">${icon("droplet", 18)}</div>
+            <div class="brand-logo brand-logo--mark">${brandMark()}</div>
             <h1 class="font-bold text-base" style="margin:0">MANNOL Admin</h1>
           </div>
           <a href="./index.html" class="btn btn-outline btn-sm">${icon("arrowLeft", 14)} Volver</a>

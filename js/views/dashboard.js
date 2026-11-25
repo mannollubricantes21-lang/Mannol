@@ -8,7 +8,7 @@ import { APP_LABEL } from "../version.js";
 import { subscribeSales, listWarehouses, listManagers, listCards, listCategories } from "../db.js";
 import { logout } from "../auth.js";
 import { formatMoney, formatDate, formatDateShort, skeletonCard, skeletonStatCard } from "../currency.js";
-import { toast, icon, esc } from "../ui.js";
+import { toast, icon, esc, brandMark } from "../ui.js";
 import { barChart, donutChart, legend, COLORS } from "../charts.js";
 import { mountSalesView } from "./sales.js";
 import { mountStockView } from "./stock.js";
@@ -97,7 +97,7 @@ export function mountDashboardView(container, navigate) {
             <div class="flex items-center gap-2">
               <button class="btn btn-ghost btn-icon" id="open-drawer-btn" aria-label="Abrir menú lateral" title="Menú">${icon("menu", 20)}</button>
               <div class="flex items-center gap-2 min-w-0">
-                <div class="brand-logo">${icon("droplet", 18)}</div>
+                <div class="brand-logo brand-logo--mark">${brandMark()}</div>
                 <div class="min-w-0" style="line-height: 1.2;">
                   <h1 class="font-bold text-base truncate" style="margin:0">MANNOL</h1>
                   <p class="text-xs text-muted truncate" style="margin:0">${headerSubtitle(user, warehouse)}</p>
@@ -206,7 +206,7 @@ export function mountDashboardView(container, navigate) {
       <div class="drawer-overlay" id="drawer-overlay"></div>
       <aside class="drawer">
         <div class="drawer-header">
-          <div class="brand-logo">${icon("droplet", 18)}</div>
+          <div class="brand-logo brand-logo--mark">${brandMark()}</div>
           <div class="min-w-0" style="flex:1">
             <p class="font-bold" style="margin:0">MANNOL</p>
             <p class="text-xs text-muted truncate" style="margin:0">${user.displayName}</p>

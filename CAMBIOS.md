@@ -1,5 +1,26 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.13.1 (2026-11-23) — Logo nuevo: gota de aceite + engranaje
+
+- **Logo nuevo**: gota de aceite dorada sobre un engranaje blanco, con el verde de la app. Está en:
+  - el ícono del teléfono al instalar la app (Android, iPhone y computadora) y en la pestaña del
+    navegador;
+  - la cabecera, el inicio, el menú lateral y el panel admin (antes había una gota genérica).
+- Íconos preparados para cada sistema:
+  - Android: ícono "a sangre" (sin bordes) para que el teléfono lo recorte con su forma (círculo,
+    cuadrado redondeado…); antes el de 192 px tenía esquinas transparentes.
+  - iPhone: ícono propio de 180 px y opaco; antes usaba uno con esquinas transparentes y salían negras.
+  - Favicon de 32 px para la pestaña del navegador; el admin también tiene ícono ahora.
+  - En tamaños pequeños el dibujo va más grande para que se distinga.
+- El logo queda guardado para verse sin conexión (caché v34).
+- Los 3 toques en el logo del inicio siguen abriendo el acceso admin.
+- Pruebas: 189 (8 nuevas: tamaños, íconos opacos para Android/iPhone y guardado sin conexión).
+- **En teléfonos que ya tienen la app instalada**:
+  - Chrome en Android cambia el ícono solo en uno o dos días.
+  - En iPhone y en otros navegadores (Yandex, etc.) hay que quitar el ícono de la pantalla de inicio y
+    volver a agregarlo.
+  - Dentro de la app el logo nuevo sale enseguida.
+
 ## v5.13.0 (2026-11-23) — Abrir y vender sin conexión, sin mezclar almacenes
 
 - **La app abre sin internet.** La versión publicada nunca llegaba a instalar su modo sin conexión:

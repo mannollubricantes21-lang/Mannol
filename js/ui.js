@@ -252,6 +252,12 @@ export const icons = {
   activity: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>`,
 };
 
+// Logo de la app (gota de aceite + engranaje) — v5.13.1. Va dentro de .brand-logo:
+// el CSS lo redondea y, si la imagen no carga, queda el cuadro verde de siempre.
+export function brandMark() {
+  return '<img class="brand-mark" src="./icons/logo-192.png" width="36" height="36" alt="" decoding="async" draggable="false">';
+}
+
 export function icon(name, size = 20) {
   const svg = icons[name];
   if (!svg) return "";
