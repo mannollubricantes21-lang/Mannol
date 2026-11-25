@@ -12,6 +12,7 @@ import { toast, icon, showModal, closeModal, esc, confirmDialog } from "../ui.js
 import { computeTopSellers, findProductByCode } from "../sales-stats.js";
 import { openScanner, canUseCamera } from "../barcode-scanner.js";
 import { buildCatalogFacets, filterCatalog, NO_CATEGORY } from "../catalog-facets.js";
+import { roundCents, rateUSD, usdToNative, summarizeMultiPayment } from "../payment-utils.js";
 
 const CURRENCY_META = {
   USD: { icon: "$", label: "Efectivo", sublabel: "Dólar", color: "var(--accent-usd)" },
@@ -60,11 +61,81 @@ export function mountSalesView(container, navigate) {
   // v5.10.0: más vendidos del almacén (ids, de mayor a menor)
   let topSellerIds = [];
 
+  // v5.16: borrador del carrito. Sobrevive a recargas y a actualizaciones de
+  // la app (antes una venta a medias se perdía). Solo menudeo, 12 h de vida.
+  const DRAFT_TTL_MS = 12 * 3600 * 1000;
+  const draftWh = store.getState().currentWarehouse;
+  const draftKey = draftWh ? `mannol-cart-draft-${draftWh.id}` : null;
+  function saveDraft() {
+    if (!draftKey) return;
+    try {
+      if (saleType !== "RETAIL" || (cart.length === 0 && !note)) localStorage.removeItem(draftKey);
+      else localStorage.setItem(draftKey, JSON.stringify({ ts: Date.now(), cart, note }));
+    } catch {}
+  }
+  if (draftKey) {
+    try {
+      const d = JSON.parse(localStorage.getItem(draftKey) || "null");
+      const valid = d && Array.isArray(d.cart) && Date.now() - (d.ts || 0) < DRAFT_TTL_MS &&
+        d.cart.every((i) => i && i.productId && Number(i.quantity) > 0 && Number.isFinite(Number(i.unitPrice)));
+      if (valid && d.cart.length > 0) {
+        cart = d.cart.map((i) => ({ ...i, quantity: Number(i.quantity), unitPrice: Number(i.unitPrice), subtotal: Number(i.quantity) * Number(i.unitPrice) }));
+        note = typeof d.note === "string" ? d.note : "";
+        setTimeout(() => toast("Se recuperó la venta que tenías a medias", "info", 3500), 400);
+      } else if (d) localStorage.removeItem(draftKey);
+    } catch {}
+  }
+
+  // v5.16: estado del pago en varias monedas (falta / sobra) en vivo
+  const payRates = () => store.getState().rates || {};
+  function multiSummary() {
+    return summarizeMultiPayment(multiPayments, roundCents(cartTotal()), payRates());
+  }
+  function multiStatusHtml() {
+    const s = multiSummary();
+    let color = "var(--text-muted)", text;
+    if (s.missingRates.length) { color = "var(--danger, #B3261E)"; text = `Sin tasa de cambio para ${s.missingRates.join(", ")}`; }
+    else if (s.lines.length === 0) text = `Ingresa los montos · Total ${formatMoney(cartTotal(), "USD")}`;
+    else if (s.missingUSD > 0) { color = "#7A4E00"; text = `Falta ${formatMoney(s.missingUSD, "USD")} (equivalente en USD)`; }
+    else if (s.overUSD > 0) { color = "var(--danger, #B3261E)"; text = `Sobra ${formatMoney(s.overUSD, "USD")}: ajusta los montos`; }
+    else { color = "var(--primary)"; text = "Pago completo"; }
+    return `<span style="color:${color};font-weight:600">${text}</span>`;
+  }
+  function registerBtnState() {
+    if (paymentMode !== "MULTI") return { disabled: false, label: "Registrar venta" };
+    const s = multiSummary();
+    if (s.ok) return { disabled: false, label: "Registrar venta" };
+    if (s.missingRates.length) return { disabled: true, label: "Falta la tasa de cambio" };
+    if (s.lines.length === 0) return { disabled: true, label: "Ingresa los pagos" };
+    if (s.missingUSD > 0) return { disabled: true, label: `Falta ${formatMoney(s.missingUSD, "USD")}` };
+    return { disabled: true, label: `Sobra ${formatMoney(s.overUSD, "USD")}` };
+  }
+  function refreshRegisterBtn() {
+    const b = container.querySelector("#register-sale-btn");
+    if (!b || registering) return;
+    const st = registerBtnState();
+    b.disabled = st.disabled;
+    b.innerHTML = `${icon("check", 20)} ${st.label}`;
+  }
+  function refreshMultiStatus() {
+    const el = container.querySelector("#multi-status");
+    if (el) el.innerHTML = multiStatusHtml();
+    refreshRegisterBtn();
+  }
+  // Total expresado en la moneda elegida (para el vuelto)
+  function changeTotal() {
+    const t = roundCents(cartTotal());
+    const n = usdToNative(t, selectedCurrency, payRates());
+    return n == null ? t : n;
+  }
+
   // Cargar datos
   // Flag para evitar re-fetch si la vista se monta varias veces
   let catalogsLoaded = false;
   let catalogsLoading = false;
-  if (!catalogsLoaded && !catalogsLoading) {
+  let catalogsDisposed = false;
+  function loadCatalogs(attempt = 1) {
+    if (catalogsDisposed || catalogsLoaded || catalogsLoading) return;
     catalogsLoading = true;
     Promise.all([listCards(), listManagers()]).then(([c, m]) => {
       cards = c;
@@ -72,10 +143,15 @@ export function mountSalesView(container, navigate) {
       catalogsLoaded = true;
       catalogsLoading = false;
       render();
-    }).catch(() => {
+    }).catch((err) => {
       catalogsLoading = false;
+      console.warn(`[Ventas] gestores/tarjetas no cargaron (intento ${attempt}):`, err);
+      // v5.16: antes se quedaban vacíos para siempre; ahora se reintenta
+      if (attempt < 4) setTimeout(() => loadCatalogs(attempt + 1), 3000 * attempt);
+      else toast("No se pudieron cargar gestores y tarjetas. Revisa la conexión y vuelve a entrar a Ventas.", "warning", 6000);
     });
   }
+  loadCatalogs();
 
   const unsubProducts = subscribeProducts((items) => {
     products = items.filter((p) => p.active !== false);
@@ -150,6 +226,7 @@ export function mountSalesView(container, navigate) {
       return;
     }
 
+    saveDraft();
     container.innerHTML = `
       <div class="sale-form-panel" style="display:flex;flex-direction:column;gap:1rem">
         <div class="flex items-center justify-between">
@@ -286,10 +363,14 @@ export function mountSalesView(container, navigate) {
                       <span style="font-size:1.25rem;font-weight:700;color:${CURRENCY_META[curr].color}">${CURRENCY_META[curr].icon}</span>
                       <span class="font-semibold text-sm">${curr}</span>
                     </div>
-                    <input class="input" type="number" step="0.01" placeholder="0.00" data-multi-currency="${curr}" value="${multiPayments[curr] || ''}" />
+                    <div style="display:flex;gap:0.375rem;align-items:center">
+                      <input class="input" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-multi-currency="${curr}" value="${multiPayments[curr] || ''}" aria-label="Monto en ${curr}" />
+                      <button type="button" class="btn btn-outline btn-sm" data-multi-rest="${curr}" style="min-height:2.75rem" aria-label="Completar con ${curr}">Resto</button>
+                    </div>
                   </div>
                 `).join("")}
               </div>
+              <div id="multi-status" class="text-sm" style="margin-top:0.5rem" aria-live="polite">${multiStatusHtml()}</div>
             `}
 
             ${selectedCurrency === 'TRANSFERENCIA' || (paymentMode === 'MULTI' && multiPayments.TRANSFERENCIA > 0) ? `
@@ -316,16 +397,16 @@ export function mountSalesView(container, navigate) {
             <div class="card" style="padding:0.875rem 1rem">
               <label class="label label-xs flex items-center gap-1">${icon("receipt", 12)} Vuelto · ¿Con cuánto paga el cliente? (${selectedCurrency})</label>
               <input class="input" type="number" step="0.01" min="0" id="paid-with" value="${paidWith || ''}" placeholder="0.00" style="max-width:12rem" inputmode="decimal" />
-              <div class="text-sm font-semibold" id="change-due" style="margin-top:0.375rem;color:${paidWith > 0 && paidWith >= cartTotal() ? 'var(--primary)' : 'var(--text-muted)'}">
-                ${paidWith > 0 ? (paidWith >= cartTotal() ? `Vuelto: ${formatMoney(paidWith - cartTotal(), selectedCurrency)}` : `Faltan ${formatMoney(cartTotal() - paidWith, selectedCurrency)}`) : `Total: ${formatMoney(cartTotal(), selectedCurrency)}`}
+              <div class="text-sm font-semibold" id="change-due" style="margin-top:0.375rem;color:${paidWith > 0 && paidWith >= changeTotal() ? 'var(--primary)' : 'var(--text-muted)'}">
+                ${paidWith > 0 ? (paidWith >= changeTotal() ? `Vuelto: ${formatMoney(paidWith - changeTotal(), selectedCurrency)}` : `Faltan ${formatMoney(changeTotal() - paidWith, selectedCurrency)}`) : `Total: ${formatMoney(changeTotal(), selectedCurrency)}`}
               </div>
             </div>
           ` : ''}
 
           <!-- Botones -->
           <div style="display:flex;flex-direction:column;gap:0.5rem">
-            <button class="btn btn-primary btn-block btn-lg" id="register-sale-btn" style="font-size:1.125rem;font-weight:700">
-              ${icon("check", 20)} Registrar venta
+            <button class="btn btn-primary btn-block btn-lg" id="register-sale-btn" style="font-size:1.125rem;font-weight:700" ${registerBtnState().disabled ? "disabled" : ""}>
+              ${icon("check", 20)} ${registerBtnState().label}
             </button>
             <button class="btn btn-ghost btn-block" id="cancel-sale-btn">Cancelar</button>
           </div>
@@ -679,7 +760,7 @@ export function mountSalesView(container, navigate) {
         paidWith = parseFloat(e.target.value) || 0;
         const el = container.querySelector("#change-due");
         if (!el) return;
-        const t = cartTotal();
+        const t = changeTotal();
         el.textContent = paidWith > 0
           ? (paidWith >= t ? `Vuelto: ${formatMoney(paidWith - t, selectedCurrency)}` : `Faltan ${formatMoney(t - paidWith, selectedCurrency)}`)
           : `Total: ${formatMoney(t, selectedCurrency)}`;
@@ -745,6 +826,21 @@ export function mountSalesView(container, navigate) {
       input.addEventListener("input", (e) => {
         const curr = e.target.dataset.multiCurrency;
         multiPayments[curr] = parseFloat(e.target.value) || 0;
+        refreshMultiStatus();
+      });
+    });
+    container.querySelectorAll("[data-multi-rest]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const curr = btn.dataset.multiRest;
+        const others = { ...multiPayments, [curr]: 0 };
+        const sum = summarizeMultiPayment(others, roundCents(cartTotal()), payRates());
+        if (sum.missingUSD <= 0) { toast("Ya está completo: no falta nada por cobrar", "info", 2500); return; }
+        const native = usdToNative(sum.missingUSD, curr, payRates());
+        if (native == null) { toast(`No hay tasa de cambio para ${curr}`, "error"); return; }
+        multiPayments[curr] = native;
+        const input = container.querySelector(`[data-multi-currency="${curr}"]`);
+        if (input) input.value = String(native);
+        refreshMultiStatus();
       });
     });
 
@@ -1151,17 +1247,31 @@ export function mountSalesView(container, navigate) {
   async function handleRegister() {
     if (registering) return;
     registering = true;
+    // v5.16: feedback visual y sin doble toque
+    const btn = container.querySelector("#register-sale-btn");
+    const prevHtml = btn ? btn.innerHTML : null;
+    if (btn) { btn.disabled = true; btn.setAttribute("aria-busy", "true"); btn.textContent = "Registrando…"; }
     try {
       await doRegister();
+    } catch (err) {
+      // v5.16: antes un error aquí no mostraba nada y la venta no se registraba
+      console.error("[Ventas] error al registrar:", err);
+      toast(`No se pudo registrar la venta (${err?.message || "error inesperado"}). Revisa los datos e inténtalo de nuevo.`, "error", 7000);
     } finally {
       registering = false;
+      const b = container.querySelector("#register-sale-btn");
+      if (b) {
+        b.removeAttribute("aria-busy");
+        if (prevHtml != null && b.textContent === "Registrando…") b.innerHTML = prevHtml;
+        refreshRegisterBtn();
+      }
     }
   }
 
   async function doRegister() {
     const user = store.getState().currentUser;
     const wh = store.getState().currentWarehouse;
-    const total = cartTotal();
+    const total = roundCents(cartTotal());
 
     // Validación según modo
     if (saleType === "WHOLESALE") {
@@ -1173,20 +1283,41 @@ export function mountSalesView(container, navigate) {
       if (wholesaleBoxes > maxBoxes) { toast(`Solo hay ${maxBoxes} cajas disponibles en stock`, "error"); return; }
     } else {
       if (cart.length === 0) { toast("Agrega productos a la venta", "error"); return; }
+      // v5.16: el stock pudo cambiar mientras se armaba la venta
+      const over = cart.find((i) => i.quantity > getStockQty(i.productId));
+      if (over) { toast(`Stock insuficiente de «${over.name}»: quedan ${getStockQty(over.productId)}`, "error", 5000); return; }
     }
 
-    // Validar pago
+    // Validar pago (v5.16): cada moneda se guarda en SU moneda y el total se
+    // compara en USD con la tasa del día (antes se guardaba el total en USD
+    // como si fuera MN/EUR y el pago múltiple no se comparaba con el total).
+    const rates = payRates();
     let paidUSD = 0, paidMN = 0, paidEUR = 0, paidTransfer = 0;
+    let paymentLines;
     if (paymentMode === "SINGLE") {
-      if (selectedCurrency === "USD") paidUSD = total;
-      else if (selectedCurrency === "MN") paidMN = total;
-      else if (selectedCurrency === "EUR") paidEUR = total;
-      else if (selectedCurrency === "TRANSFERENCIA") paidTransfer = total;
+      const native = usdToNative(total, selectedCurrency, rates);
+      if (native == null) {
+        toast(`No hay tasa de cambio para ${selectedCurrency}. Abre Inicio con conexión para cargarla.`, "error", 6000);
+        return;
+      }
+      paymentLines = [{ currency: selectedCurrency, amount: native, amountUSD: total, exchangeRate: rateUSD(selectedCurrency, rates) }];
     } else {
-      paidUSD = multiPayments.USD || 0;
-      paidMN = multiPayments.MN || 0;
-      paidEUR = multiPayments.EUR || 0;
-      paidTransfer = multiPayments.TRANSFERENCIA || 0;
+      const sum = summarizeMultiPayment(multiPayments, total, rates);
+      if (sum.missingRates.length) { toast(`No hay tasa de cambio para ${sum.missingRates.join(", ")}`, "error", 6000); return; }
+      if (sum.lines.length === 0) { toast("Ingresa los montos del pago", "error"); return; }
+      if (sum.missingUSD > 0) { toast(`Falta cobrar ${formatMoney(sum.missingUSD, "USD")}`, "error"); return; }
+      if (sum.overUSD > 0) { toast(`Sobra ${formatMoney(sum.overUSD, "USD")}: ajusta los montos`, "error"); return; }
+      paymentLines = sum.lines;
+    }
+    for (const l of paymentLines) {
+      if (l.currency === "USD") paidUSD = l.amount;
+      else if (l.currency === "MN") paidMN = l.amount;
+      else if (l.currency === "EUR") paidEUR = l.amount;
+      else if (l.currency === "TRANSFERENCIA") paidTransfer = l.amount;
+    }
+    if (paidTransfer > 0 && !selectedCardId) {
+      toast("Selecciona la tarjeta de transferencia", "error");
+      return;
     }
 
     // Calcular comisiones y items según modo
@@ -1284,7 +1415,7 @@ export function mountSalesView(container, navigate) {
       items: saleItems,
       totalAmount: total,
       totalUSD: total,
-      payments: paymentMode === "MULTI" ? Object.entries(multiPayments).filter(([_, v]) => v > 0).map(([currency, amount]) => ({ currency, amount, amountUSD: amount, exchangeRate: 1 })) : [{ currency: selectedCurrency, amount: total, amountUSD: total, exchangeRate: 1 }],
+      payments: paymentLines,
       isMultiCurrency: paymentMode === "MULTI",
       paymentMode,
       currency: selectedCurrency,
@@ -1357,6 +1488,7 @@ export function mountSalesView(container, navigate) {
   render();
 
   return () => {
+    catalogsDisposed = true;
     teardownCheckoutBar();
     unsubProducts();
     unsubStock();
