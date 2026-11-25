@@ -127,15 +127,9 @@
   <div class="error-screen" id="error-screen">
     <h2>⚠️ No se pudo cargar la app</h2>
     <p>Esto puede deberse a:</p>
-    <p>• El archivo <code>js/supabase-config.js</code> no existe (copia <code>supabase-config.example.js</code> y renómbralo)<br>
+    <p>• Falta el archivo <code>js/supabase-config.js</code> (la conexión con Supabase) o tiene datos incorrectos<br>
        • Es la primera vez que se abre en este equipo y no hay internet (ábrela una vez con conexión: después funciona sin ella)<br>
        • El navegador bloquea la ejecución de módulos ES</p>
-    <p style="margin-top:1rem">
-      <strong>¿Primera vez?</strong> Usa el asistente de configuración:<br>
-      <a href="./setup.html" style="display:inline-block;margin-top:0.5rem;padding:0.5rem 1rem;background:#10b981;color:white;text-decoration:none;border-radius:0.5rem;font-weight:600">
-        Abrir asistente de configuración →
-      </a>
-    </p>
     <button class="retry-btn" onclick="location.reload()">Reintentar</button>
     <details>
       <summary>Ver detalles técnicos</summary>

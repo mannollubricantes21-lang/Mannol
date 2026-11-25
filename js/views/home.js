@@ -108,16 +108,13 @@ export function renderHomeView(navigate) {
                 <div style="flex:1;min-width:0">
                   <h3 class="premium-setup-banner-title">Conecta Supabase en este dispositivo</h3>
                   <p class="premium-setup-banner-desc">
-                    Estás en <strong>modo demo</strong>. Los datos no se guardan en la nube.
-                    Conecta tu base de datos Supabase con el asistente — 10 minutos, sin tocar código.
+                    Estás en <strong>modo demo</strong>: los datos no se guardan en la nube.
+                    Revisa que <code>js/supabase-config.js</code> tenga la URL y la clave de tu proyecto.
                   </p>
                 </div>
                 <button class="btn btn-ghost btn-sm" data-action="dismiss-setup" aria-label="Ocultar banner" title="Ocultar este banner">${icon("x", 16)}</button>
               </div>
-              <a href="./setup.html" class="premium-setup-banner-btn" style="align-self:stretch">
-                ${icon("zap", 16)} Configurar Supabase ahora
-              </a>
-              <p class="premium-setup-banner-hint">¿Ya tenés Supabase? Solo necesitás tu URL y tu anon key. <button class="btn btn-ghost btn-sm" data-action="dismiss-setup" style="padding:0 0.25rem;font-size:0.6875rem;color:var(--text-muted)">No volver a mostrar</button></p>
+              <p class="premium-setup-banner-hint"><button class="btn btn-ghost btn-sm" data-action="dismiss-setup" style="padding:0 0.25rem;font-size:0.6875rem;color:var(--text-muted)">No volver a mostrar</button></p>
             </div>
           </section>
         ` : ''}
@@ -371,7 +368,7 @@ export function mountHomeView(container, navigate) {
     container.querySelectorAll('[data-action="dismiss-setup"]').forEach((btn) => {
       btn.addEventListener("click", () => {
         try { localStorage.setItem("mannol_setup_banner_dismissed", "1"); } catch {}
-        toast("Banner ocultado · El asistente sigue disponible en setup.html", "info", 2500);
+        toast("Aviso ocultado", "info", 2500);
         render();
       });
     });
@@ -447,7 +444,6 @@ export function mountHomeView(container, navigate) {
           <button class="drawer-item" data-menu="rates">${icon("refresh", 18)}<span style="flex:1;text-align:left">Actualizar tasas del día</span></button>
           <button class="drawer-item" data-menu="theme">${st.theme === "dark" ? icon("sun", 18) : icon("moon", 18)}<span style="flex:1;text-align:left">${st.theme === "dark" ? "Tema claro" : "Tema oscuro"}</span></button>
           ${canFs ? `<button class="drawer-item" data-menu="fullscreen">${icon("smartphone", 18)}<span style="flex:1;text-align:left">${document.fullscreenElement ? "Salir de pantalla completa" : "Pantalla completa (kiosko)"}</span></button>` : ""}
-          ${!st._supabaseConfigured ? `<a class="drawer-item" href="./setup.html">${icon("settings", 18)}<span style="flex:1;text-align:left">Asistente de configuración</span></a>` : ""}
           <p class="home-menu-version">${esc(APP_LABEL)}</p>
         </div>
       `,

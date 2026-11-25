@@ -59,7 +59,7 @@ export function hasPersistedSupabaseSession() {
   return false;
 }
 
-// localStorage key used by the in-app Setup Wizard (setup.html).
+// localStorage key de la configuración guardada en este equipo (antiguo asistente).
 // The wizard writes { url, anonKey } here so users don't need to
 // manually create js/supabase-config.js — they can configure the
 // app entirely from the UI.
@@ -80,7 +80,7 @@ let _initPromise = null;
 /**
  * Read Supabase config from localStorage.
  * Returns null if no config is stored.
- * Used by setup.html wizard AND by loadConfig() as a fallback.
+ * Used by loadConfig() as a fallback (config guardada por el antiguo asistente).
  */
 export function getStoredSupabaseConfig() {
   try {
@@ -96,7 +96,7 @@ export function getStoredSupabaseConfig() {
 
 /**
  * Save Supabase config to localStorage.
- * Used by setup.html wizard.
+ * (Lo usaba el antiguo asistente setup.html, ya eliminado.)
  */
 export function saveStoredSupabaseConfig(url, anonKey) {
   try {
@@ -180,7 +180,7 @@ async function loadConfig() {
         fileFailed = true; // no existe o no se pudo leer sin conexión
       }
 
-      // 2) Config del asistente (setup.html) guardada en este equipo
+      // 2) Config guardada en este equipo por el antiguo asistente
       const stored = getStoredSupabaseConfig();
       if (stored && _isValidConfig(stored)) {
         _config = stored;

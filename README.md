@@ -136,7 +136,6 @@ Mannol/
 ├── offline.html            ← Fallback sin conexión
 ├── package.json            ← Dependencias dev (Vitest, etc)
 ├── vitest.config.js        ← Configuración de tests
-├── REVIEW.md               ← Análisis completo del proyecto
 ├── README.md               ← Este archivo
 ├── .github/
 │   └── workflows/

@@ -688,7 +688,7 @@ export function mountDashboardView(container, navigate) {
 
   // ===== Keyboard shortcuts =====
   function onKeydown(e) {
-    // Escape cierra el drawer (pendiente del REVIEW.md, hecho en v5.17)
+    // Escape cierra el drawer (v5.17)
     if (e.key === "Escape" && drawerOpen) {
       const docked = isDesktop() && !!getStore().getState().currentUser;
       if (!docked) { e.preventDefault(); closeDrawer(); }

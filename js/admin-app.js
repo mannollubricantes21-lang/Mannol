@@ -211,10 +211,9 @@ function renderNeedsConfig(container) {
           <div class="empty-state" style="padding: 3rem 1.5rem">
             <div class="empty-state-icon" style="color: var(--primary)">${icon("droplet", 32)}</div>
             <p class="empty-state-title">Conecta Supabase en este dispositivo</p>
-            <p class="empty-state-desc">Este navegador todavía no tiene las credenciales de tu Supabase. Conecta una sola vez y después entrás solo con tu email y contraseña.</p>
-            <div style="margin-top: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem; max-width: 24rem; margin-left: auto; margin-right: auto;">
-              <a href="./setup.html" class="btn btn-primary" style="text-decoration:none">${icon("zap", 14)} Conectar Supabase (1 min)</a>
-              <p class="text-xs text-muted text-center" style="margin-top:0.5rem">¿Ya lo conectaste antes? Tu navegador borró la configuración. Vuelve a hacer el wizard paso 5 (pegar URL + key) y listo.</p>
+            <p class="empty-state-desc">La app no encontró la conexión con Supabase. Revisa que <code>js/supabase-config.js</code> esté en el repositorio con la URL y la clave pública de tu proyecto, y recarga la página.</p>
+            <div style="margin-top: 1.5rem; display: flex; justify-content: center;">
+              <button type="button" class="btn btn-primary" onclick="location.reload()">${icon("refresh", 14)} Recargar</button>
             </div>
           </div>
         </div>

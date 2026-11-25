@@ -1,5 +1,12 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.23.1 (2026-11-25) — Limpieza del repositorio
+
+- Se eliminan el asistente de configuración (`setup.html`, `js/setup-wizard.js`,
+  `css/setup-wizard.css`): la conexión ya va en `js/supabase-config.js`. Los
+  avisos que lo enlazaban ahora dicen qué revisar.
+- Se eliminan `MEJORAS.md` y `REVIEW.md` (notas antiguas).
+
 ## v5.23.0 (2026-11-25) — Base de datos en un solo archivo + venta más clara
 
 > ⚠️ Ejecuta **una vez** `supabase/instalar.sql` entero (Supabase → SQL Editor).
@@ -16,6 +23,10 @@
   la v3 no creaba `card_movements` (tipo de `sale_id` distinto al de `sales.id`);
   la de marcas usaba `is_admin()` antes de crearla; y los permisos por columna
   de tarjetas caían si faltaba `initial_balance`.
+- **Seguridad**: `card_movements` (movimientos de tarjeta) y `stock_transfers`
+  (traspasos) no tenían RLS: cualquiera con la clave pública podía leerlas o
+  escribirlas. Ahora solo usuarios con cuenta; el acceso por PIN solo puede
+  anotar el cobro por transferencia de una venta. Ninguna tabla queda sin RLS.
 - Documentación: `INSTALACION_SUPABASE.md` y `MANUAL_SETUP.md` (desactualizados)
   se sustituyen por `supabase/README.md`. El asistente de configuración y el
   admin apuntan a `instalar.sql`.
