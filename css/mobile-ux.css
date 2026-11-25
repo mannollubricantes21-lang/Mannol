@@ -1558,7 +1558,11 @@ body:has(.sync-banner-offline, .home-hint-offline, [data-action="retry-warehouse
       "hero    hero"
       "resumen cierre"
       "cta     cierre"
+      "inv     ganado"
       "inv     recientes";
+    /* la última fila absorbe la altura sobrante del inventario (sin hueco entre
+       «Lo que llevas ganado» y «Ventas recientes») */
+    grid-template-rows: auto auto auto auto 1fr;
     align-items: start;
     gap: 1rem !important;
   }
@@ -1569,5 +1573,334 @@ body:has(.sync-banner-offline, .home-hint-offline, [data-action="retry-warehouse
   .wi-layout > .wi-cierre { grid-area: cierre; }
   .wi-layout > .wi-inv { grid-area: inv; }
   .wi-layout > .wi-recientes { grid-area: recientes; }
-  .wi-layout:not(:has(> .wi-recientes)) > .wi-inv { grid-column: 1 / -1; }
+  .wi-layout > .wi-ganado { grid-area: ganado; } /* v5.14.0: lo que lleva ganado */
 }
+
+/* ============================================================
+   13. LO QUE LLEVA GANADO EL VENDEDOR — v5.14.0
+   Comisión fija por producto del mes en curso (y el mes pasado, para el
+   día de cobro). Con dos vendedores (lunes a viernes / fin de semana) van
+   dos importes lado a lado y se marca el turno de hoy.
+   ============================================================ */
+.earn-card { overflow: hidden; }
+.earn-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  padding: 0.625rem 0.75rem; border-bottom: 1px solid var(--border);
+}
+.earn-month {
+  font-size: 0.6875rem; font-weight: 700; text-transform: capitalize;
+  padding: 0.125rem 0.5rem; border-radius: 999px;
+  background: var(--primary-tint); color: var(--primary);
+}
+.earn-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.625rem; }
+.earn-shifts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+.earn-card--split .earn-shifts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.earn-shift {
+  min-width: 0; display: flex; flex-direction: column; gap: 0.125rem;
+  padding: 0.625rem 0.75rem; border-radius: var(--radius);
+  background: color-mix(in oklab, var(--primary) 7%, var(--bg-soft));
+  border: 1px solid color-mix(in oklab, var(--primary) 16%, var(--border));
+}
+.earn-shift.is-today {
+  border-color: color-mix(in oklab, var(--primary) 60%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--primary) 30%, transparent);
+}
+.earn-shift-head { display: flex; align-items: center; justify-content: space-between; gap: 0.375rem; }
+.earn-shift-days {
+  font-size: 0.625rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.earn-today-pill {
+  flex-shrink: 0; font-size: 0.5625rem; font-weight: 800; letter-spacing: 0.03em;
+  padding: 0.0625rem 0.4375rem; border-radius: 999px;
+  background: var(--primary); color: var(--primary-foreground, #fff);
+}
+.earn-shift-name {
+  font-size: 0.8125rem; font-weight: 700; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.earn-amount {
+  font-size: 1.625rem; font-weight: 800; line-height: 1.15; letter-spacing: -0.01em;
+  color: var(--accent-usd, var(--primary)); font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+}
+.earn-card--split .earn-amount { font-size: 1.25rem; }
+.earn-amount-usd { font-size: 0.875rem; font-weight: 700; color: var(--text-soft); }
+.earn-sub { font-size: 0.75rem; color: var(--text-muted); }
+.earn-line { font-size: 0.75rem; color: var(--text-soft); }
+.earn-line strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.earn-pending { color: color-mix(in oklab, var(--warning) 72%, var(--text)); }
+.earn-queued { display: flex; align-items: center; gap: 0.25rem; color: var(--text-muted); }
+.earn-prev { margin-top: 0.25rem; padding-top: 0.375rem; border-top: 1px dashed var(--border); }
+.earn-hint {
+  display: flex; align-items: flex-start; gap: 0.375rem; margin: 0;
+  padding: 0.5rem 0.625rem; border-radius: var(--radius-sm); font-size: 0.75rem;
+  background: color-mix(in oklab, var(--warning) 12%, transparent);
+  color: color-mix(in oklab, var(--warning) 62%, var(--text));
+}
+.earn-hint svg, .earn-note svg { flex-shrink: 0; margin-top: 0.125rem; }
+.earn-details summary {
+  cursor: pointer; min-height: 2.75rem; display: flex; align-items: center; gap: 0.375rem;
+  font-size: 0.8125rem; font-weight: 600; color: var(--primary);
+  border-top: 1px solid var(--border);
+}
+.earn-details summary::-webkit-details-marker { display: none; }
+.earn-details summary::before {
+  content: ""; width: 0.4rem; height: 0.4rem; margin: 0 0.2rem 0 0.1rem;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg); transition: transform 0.15s;
+}
+.earn-details[open] summary::before { transform: rotate(45deg); }
+.earn-details { list-style: none; }
+.earn-details > summary { list-style: none; }
+.earn-det-title {
+  margin: 0.5rem 0 0.125rem; font-size: 0.625rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);
+}
+.earn-det-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.earn-det-list li {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.625rem; align-items: baseline;
+  padding: 0.4375rem 0; border-bottom: 1px solid var(--border); font-size: 0.8125rem;
+}
+.earn-det-list li:last-child { border-bottom: none; }
+.earn-det-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.earn-det-qty { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; }
+.earn-det-amt { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.earn-det-list li.is-zero { color: var(--text-muted); }
+.earn-det-list li.is-zero .earn-det-amt { font-weight: 500; }
+.earn-note { display: flex; align-items: flex-start; gap: 0.25rem; margin: 0; font-size: 0.6875rem; color: var(--text-muted); }
+@media (max-width: 359.98px) {
+  .earn-card--split .earn-amount { font-size: 1.0625rem; }
+}
+
+/* Admin (v5.14.0): «¿Quién vende?» en el formulario de almacén y aviso de
+   productos sin comisión de vendedor en Comisiones vendedores */
+.wh-sellers-box {
+  display: flex; flex-direction: column; gap: 0.5rem;
+  padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius);
+  background: color-mix(in oklab, var(--primary) 4%, transparent);
+}
+.wh-sellers-box [hidden] { display: none !important; }
+.wc-warn {
+  border-color: color-mix(in oklab, var(--warning) 45%, var(--border)) !important;
+  background: color-mix(in oklab, var(--warning) 7%, var(--bg-elevated)) !important;
+}
+.wc-warn svg { color: var(--warning); }
+
+/* ============================================================
+   14. BARRA SUPERIOR FLOTANTE TAMBIÉN EN EL TELÉFONO — v5.15.0
+   En v5.13.2 solo se arregló en PC (§12): en el teléfono seguía siendo una
+   franja cuadrada pegada a los bordes. Ahora flota separada de los bordes,
+   con esquinas redondeadas, borde fino y sombra (como en PC y las tarjetas).
+   La del panel admin también, en todos los tamaños.
+   ============================================================ */
+@media (max-width: 1023.98px) {
+  :root { --bar-gap: 0.5rem; --bar-side: 0.75rem; }
+  .app-header,
+  .premium-header {
+    top: calc(env(safe-area-inset-top) + var(--bar-gap));
+    margin: calc(env(safe-area-inset-top) + var(--bar-gap)) max(var(--bar-side), env(safe-area-inset-right)) 0 max(var(--bar-side), env(safe-area-inset-left));
+    padding-top: 0;
+    border: 1px solid var(--border);
+    border-radius: 1.125rem;
+    background: color-mix(in oklab, var(--bg-elevated) 88%, transparent);
+    box-shadow: var(--float);
+  }
+  .app-header-inner,
+  .premium-header-inner { height: 3.5rem; padding: 0 0.375rem; }
+  /* iPhone instalado: la franja de la hora queda tapada (el contenido no asoma detrás) */
+  .mobile-shell::before {
+    content: ""; position: fixed; top: 0; left: 0; right: 0; height: env(safe-area-inset-top);
+    background: var(--bg); z-index: 31; pointer-events: none;
+  }
+}
+@media (min-width: 640px) and (max-width: 1023.98px) {
+  :root { --bar-gap: 0.75rem; --bar-side: 1rem; }
+  .app-header-inner { height: 3.75rem; padding: 0 0.625rem; }
+  /* Inicio: la barra con el mismo ancho que la columna de almacenes */
+  .premium-header { width: min(29rem, calc(100% - 2 * var(--bar-side))); margin-inline: auto; }
+}
+
+/* Panel admin: barra flotante alineada con el contenido */
+.admin-topbar {
+  top: 0.75rem;
+  margin: 0.75rem max(2rem, calc((100% - 96rem) / 2 + 2rem)) 0;
+  padding: 0.625rem 0.75rem 0.625rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 1.125rem;
+  background: color-mix(in oklab, var(--bg-elevated) 86%, transparent);
+  box-shadow: var(--float);
+}
+@media (max-width: 768px) {
+  .admin-topbar {
+    top: calc(env(safe-area-inset-top) + 0.5rem);
+    margin: calc(env(safe-area-inset-top) + 0.5rem) max(0.75rem, env(safe-area-inset-right)) 0 max(0.75rem, env(safe-area-inset-left));
+    padding: 0.375rem 0.375rem 0.375rem 0.25rem;
+  }
+  .admin-main::before {
+    content: ""; position: fixed; top: 0; left: 0; right: 0; height: env(safe-area-inset-top);
+    background: var(--bg); z-index: 11; pointer-events: none;
+  }
+}
+
+/* ============================================================
+   15. FORMULARIO DE PRODUCTO (admin) — v5.15.0
+   Secciones con título, marca con botones (se ven todas), números con
+   teclado decimal, precios por caja en filas y errores bajo cada campo.
+   ============================================================ */
+.modal--product [hidden] { display: none !important; }
+.pf { display: flex; flex-direction: column; gap: 0.875rem; }
+.pf-sec {
+  display: flex; flex-direction: column; gap: 0.75rem;
+  padding: 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--bg-soft) 55%, var(--bg-elevated));
+}
+.pf-sec-head { display: flex; align-items: center; gap: 0.625rem; min-height: 2rem; }
+.pf-sec-ico {
+  flex: none; width: 2rem; height: 2rem; border-radius: 0.625rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in oklab, var(--primary) 14%, transparent); color: var(--primary);
+}
+.pf-sec-titles { flex: 1; min-width: 0; }
+.pf-sec-title { margin: 0; font-size: 0.9375rem; font-weight: 700; letter-spacing: -0.01em; line-height: 1.25; }
+.pf-sec-sub { margin: 0.125rem 0 0; font-size: 0.75rem; line-height: 1.3; color: var(--text-muted); }
+
+.pf-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+.pf-span2, .pf-field--wide { grid-column: 1 / -1; }
+@media (min-width: 560px) {
+  .pf-field--wide { grid-column: auto; }
+  /* Precio · costo · stock mínimo en una fila; la ganancia debajo */
+  .pf-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pf-grid--3 .pf-margin { order: 1; }
+}
+.pf-field { display: flex; flex-direction: column; gap: 0.3125rem; min-width: 0; }
+.pf-label { font-size: 0.8125rem; font-weight: 600; color: var(--text-soft); }
+.pf-req { color: var(--danger); }
+.pf-hint { margin: 0; font-size: 0.75rem; line-height: 1.35; color: var(--text-muted); }
+.pf-hint:empty { display: none; }
+.pf-msg, .pf-warn { margin: 0; font-size: 0.75rem; font-weight: 600; line-height: 1.35; }
+.pf-msg { color: var(--danger); }
+.pf-warn { color: color-mix(in oklab, var(--warning) 62%, var(--text)); }
+.modal--product .input.is-invalid,
+.modal--product .select.is-invalid {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--danger) 18%, transparent);
+}
+.modal--product input[inputmode="decimal"],
+.modal--product input[inputmode="numeric"] { font-variant-numeric: tabular-nums; }
+
+/* Campo + unidad (USD, unid., pomos) o + moneda */
+.pf-ig { display: flex; align-items: stretch; min-width: 0; }
+.pf-ig > .input { flex: 1; min-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.pf-ig > .input:focus { position: relative; z-index: 1; }
+.pf-ig > .pf-unit,
+.pf-ig > .select {
+  flex: none; margin-left: -1px;
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.pf-unit {
+  display: inline-flex; align-items: center; padding: 0 0.75rem;
+  font-size: 0.75rem; font-weight: 700; color: var(--text-muted); background: var(--bg-soft);
+}
+.pf-ig > .select { width: auto; min-width: 5.25rem; font-weight: 700; background-color: var(--bg-soft); }
+
+/* Marca: todas como botones */
+.pf-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.125rem; margin: -0.125rem; border-radius: var(--radius); }
+.pf-chips.is-invalid { box-shadow: 0 0 0 2px color-mix(in oklab, var(--danger) 60%, transparent); }
+.pf-chip {
+  position: relative; display: inline-flex; align-items: center; gap: 0.375rem;
+  min-height: 2.5rem; padding: 0 0.9375rem; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text);
+  font: inherit; font-size: 0.875rem; font-weight: 600; line-height: 1; white-space: nowrap;
+  cursor: pointer; box-shadow: var(--inner-shadow); -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+.pf-chip:active { transform: scale(0.97); }
+.pf-chip:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.pf-chip.is-on {
+  background: var(--primary); border-color: transparent; color: var(--primary-foreground);
+  box-shadow: 0 2px 8px color-mix(in oklab, var(--primary) 35%, transparent);
+}
+.pf-chip.is-on:not(.pf-chip--add)::before { content: "✓"; font-weight: 800; }
+.pf-chip.is-match { border-color: var(--primary); color: var(--primary); }
+.pf-chip--add { border-style: dashed; background: transparent; color: var(--primary); box-shadow: none; }
+.pf-chip--add.is-on { border-style: solid; }
+@media (hover: hover) {
+  .pf-chip:not(.is-on):hover { border-color: color-mix(in oklab, var(--primary) 45%, var(--border)); }
+}
+@media (pointer: coarse) { .pf-chip { min-height: 2.75rem; } }
+.pf-other { display: flex; flex-direction: column; gap: 0.3125rem; margin-top: 0.25rem; }
+
+/* Interruptores */
+.pf-switch {
+  position: relative; display: flex; align-items: center; gap: 0.75rem;
+  min-height: 2.75rem; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.pf-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
+.pf-switch-track {
+  position: relative; flex: none; width: 2.875rem; height: 1.625rem; border-radius: 999px;
+  background: var(--border-strong); box-shadow: inset 0 1px 2px oklch(0 0 0 / 0.15);
+  transition: background 0.18s ease;
+}
+.pf-switch-track::after {
+  content: ""; position: absolute; top: 0.1875rem; left: 0.1875rem;
+  width: 1.25rem; height: 1.25rem; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px oklch(0 0 0 / 0.3);
+  transition: transform 0.18s ease;
+}
+.pf-switch input:checked + .pf-switch-track { background: var(--primary); }
+.pf-switch input:checked + .pf-switch-track::after { transform: translateX(1.25rem); }
+.pf-switch input:focus-visible + .pf-switch-track { outline: 2px solid var(--primary); outline-offset: 2px; }
+.pf-switch-text { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; font-size: 0.875rem; }
+.pf-switch-text small { font-size: 0.75rem; color: var(--text-muted); }
+.pf-switch--head { flex: none; padding-left: 0.5rem; }
+
+/* Ganancia al momento */
+.pf-margin { display: flex; align-items: center; gap: 0.375rem; margin: -0.25rem 0 0; font-size: 0.8125rem; color: var(--text-muted); }
+.pf-margin.is-good { color: var(--primary); }
+.pf-margin.is-bad { color: var(--danger); }
+
+/* Venta por caja: precios "desde N cajas" */
+.pf-wh-body { display: flex; flex-direction: column; gap: 0.75rem; }
+.pf-tiers-intro { margin-top: -0.25rem; }
+.pf-tiers { display: flex; flex-direction: column; gap: 0.625rem; }
+.pf-tier {
+  display: flex; flex-direction: column; gap: 0.5rem;
+  padding: 0.625rem 0.75rem 0.75rem;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-elevated); box-shadow: var(--inner-shadow);
+}
+.pf-tier-head { display: flex; align-items: center; gap: 0.5rem; min-height: 2rem; }
+.pf-tier-range { flex: 1; min-width: 0; font-size: 0.875rem; font-weight: 700; }
+.pf-tier-tag {
+  padding: 0.1875rem 0.5rem; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-soft);
+  font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-muted);
+}
+.pf-tier-del { color: var(--danger); }
+.pf-tier-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem 0.625rem; }
+@media (min-width: 640px) { .pf-tier-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.pf-mini { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; font-size: 0.75rem; font-weight: 600; color: var(--text-muted); }
+.pf-static {
+  display: flex; align-items: center; min-height: 2.5rem; padding: 0 0.75rem;
+  border: 1px dashed var(--border); border-radius: var(--radius); background: var(--bg-soft);
+  font-size: 0.875rem; font-weight: 600; color: var(--text-soft);
+}
+@media (pointer: coarse) { .pf-static { min-height: 2.75rem; } }
+.pf-tier-sum { margin: 0; font-size: 0.75rem; color: var(--text-soft); }
+.pf-tier-sum:empty { display: none; }
+.pf-tier-sum strong { color: var(--primary); }
+.pf-tier-add { align-self: flex-start; }
+
+/* Foto */
+.pf-image { display: flex; align-items: flex-start; gap: 0.875rem; }
+.pf-thumb {
+  flex: none; width: 5rem; height: 5rem; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-soft); color: var(--text-muted);
+}
+.pf-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.pf-image-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.pf-image-btns { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.modal--product .modal-footer .btn-primary { min-width: 9.5rem; }

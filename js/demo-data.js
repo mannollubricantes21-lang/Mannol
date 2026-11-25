@@ -40,6 +40,10 @@ export const DEMO_WAREHOUSES = [
     hasPin: true,
     sellerCommissionPercent: 4,
     sellerCommissionCurrency: "USD",
+    // v5.14.0: dos vendedores — uno de lunes a viernes y otro sábado y domingo
+    sellerWeekendSplit: true,
+    sellerName: "Ana",
+    sellerWeekendName: "Luis",
     createdAt: Date.now() - 86400000 * 20,
   },
   {
@@ -208,7 +212,8 @@ export const DEMO_SALES = (() => {
   const warehouses = DEMO_WAREHOUSES;
   const cards = DEMO_CARDS;
 
-  for (let day = 29; day >= 0; day--) {
+  // v5.14.0: ~2 meses, para que «Mes pasado» de la comisión tenga datos
+  for (let day = 59; day >= 0; day--) {
     const dayStart = Date.now() - day * 86400000;
     const salesPerDay = Math.floor(Math.random() * 5) + 1;
     for (let i = 0; i < salesPerDay; i++) {
@@ -230,6 +235,11 @@ export const DEMO_SALES = (() => {
           subtotal,
           commission: p.commission,
           commissionCurrency: p.commissionCurrency,
+          // Igual que una venta real: la comisión configurada al vender viaja en el ítem
+          gestorCommission: p.gestorCommission ?? 0,
+          gestorCommissionCurrency: p.gestorCommissionCurrency ?? "USD",
+          vendorCommission: p.vendorCommission ?? 0,
+          vendorCommissionCurrency: p.vendorCommissionCurrency ?? "MN",
         });
         total += subtotal;
       }

@@ -12,7 +12,7 @@ import {
   fetchBrands, saveBrand, deleteBrand, renameBrandInProducts, updateProductsCatalogFields,
   listManagers, saveManager, deleteManager,
   listCards, saveCard, deleteCard,
-  listWarehouseCommissions,
+  listSalesInRange, lastWarehouseSaveSkippedSellers,
   listStock, listSales, adjustStock,
   getRateConfig, saveRateConfig, syncRatesFromElToque,
   listStockMovements,
@@ -34,13 +34,12 @@ import {
   suggestCategoryId, suggestBrand,
 } from "../catalog-facets.js";
 import { CURRENCIES, CATEGORY_COLORS, STOCK_REASONS, STOCK_REASON_LABELS } from "../types.js";
-import { uploadImageAsWebP, pickImageFile } from "../image-upload.js";
 import { lineChart, barChart, sparkline, COLORS } from "../charts.js";
 import { exportToCSV, exportMultipleCSVs } from "../csv-export.js";
-import { closureDateKey, aggregateClosuresReport, reportPeriodRange, findProductByCode } from "../sales-stats.js";
-import { openScanner, canUseCamera } from "../barcode-scanner.js";
+import { computeSellerEarnings, saleVendorCommission, productsWithoutVendorCommission, monthRange, moneyPair } from "../seller-earnings.js";
+import { closureDateKey, aggregateClosuresReport, reportPeriodRange } from "../sales-stats.js";
 import { getGitHubConfig, saveGitHubConfig, testGitHubConnection, isGitHubConfigured } from "../github-storage.js";
-import { detectViscosityFromName } from "../viscosity.js";
+import { showProductDialog } from "./product-dialog.js";
 
 // Secciones agrupadas por categoría para mejor organización
 const NAV_SECTIONS = [
@@ -61,7 +60,7 @@ const NAV_SECTIONS = [
   {
     label: "Finanzas",
     items: [
-      { id: "warehouseCommissions", label: "Comisiones locales", icon: "wallet" },
+      { id: "warehouseCommissions", label: "Comisiones vendedores", icon: "wallet" },
       { id: "profit", label: "Ganancia/Inversión", icon: "trendingUp" },
       { id: "rates", label: "Tasas", icon: "trendingUp" },
     ],
@@ -554,8 +553,9 @@ export function mountAdminView(container, navigateOrUser) {
                   tarjeta_nombre: s.cardName,
                   comision_gestor_usd: s.gestorCommissionUSD,
                   comision_gestor_mn: s.gestorCommissionMN,
-                  comision_vendedor_usd: s.vendorCommissionUSD,
-                  comision_vendedor_mn: s.vendorCommissionMN,
+                  // v5.14.0: desde los ítems (los totales por venta no llegaban a la nube)
+                  comision_vendedor_usd: saleVendorCommission(s).usd,
+                  comision_vendedor_mn: saleVendorCommission(s).mn,
                   cajas: s.boxes || "",
                   precio_por_caja: s.pricePerBox || "",
                   comision_vendedor_por_caja: s.vendorCommissionPerBox || "",
@@ -1859,270 +1859,7 @@ export function mountAdminView(container, navigateOrUser) {
     });
   }
 
-  function showProductDialog(product, categories, onSaved, brandCtx = {}) {
-    const isNew = !product;
-    const p = product || {};
-    // v5.12.0: marcas sugeridas (lista de Admin → Marcas + las que ya usan los productos)
-    const brandOptions = brandCtx.known || [];
-    const registeredBrands = (brandCtx.brands || []).map((b) => b.name);
-    const close = showModal({
-      title: isNew ? "Nuevo producto" : "Editar producto",
-      size: "lg",
-      body: `
-        <div style="display:flex;flex-direction:column;gap:0.75rem">
-          <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Nombre *</label><input class="input" id="p-name" value="${esc(p.name || '')}" /></div>
-            <div><label class="label label-xs" for="p-brand">Marca *</label><input class="input" id="p-brand" value="${esc(p.brand || (isNew ? (brandOptions[0] || "") : ""))}" list="p-brand-list" autocomplete="off" placeholder="MANNOL, Royal…" />
-              <datalist id="p-brand-list">${brandOptions.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
-          </div>
-          <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs" for="p-sku">SKU / código de barras</label>
-              <div class="${canUseCamera() ? "input-scan" : ""}" style="position:relative">
-                <input class="input" id="p-sku" value="${esc(p.sku || '')}" autocomplete="off" />
-                ${canUseCamera() ? `<button type="button" class="scan-btn" id="p-sku-scan" aria-label="Escanear el código de barras del producto" title="Escanear código de barras">${icon("scan", 18)}</button>` : ""}
-              </div>
-            </div>
-            <div><label class="label label-xs">Viscosidad</label><input class="input" id="p-viscosity" value="${esc(p.viscosity || '')}" placeholder="5W-30" /><p class="text-xs text-muted" style="margin:0.2rem 0 0">Se rellena sola desde el nombre (editable)</p></div>
-          </div>
-          <div><label class="label label-xs" for="p-category">Tipo (categoría)</label>
-            <select class="select" id="p-category">
-              <option value="">(sin categoría)</option>
-              ${sortCategories(categories.filter(c => !c.parentId)).map((c) => `
-                <option value="${esc(c.id)}" ${p.categoryId === c.id ? 'selected' : ''}>${esc(c.icon ? `${c.icon} ` : "")}${esc(c.name)}</option>
-                ${sortCategories(categories.filter((x) => x.parentId === c.id)).map((x) => `<option value="${esc(x.id)}" ${p.categoryId === x.id ? 'selected' : ''}>   └ ${esc(x.name)}</option>`).join("")}
-              `).join('')}
-            </select>
-          </div>
-          <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Precio USD *</label><input class="input" type="number" step="0.01" id="p-price" value="${p.salePrice || ''}" /></div>
-            <div><label class="label label-xs">Stock mínimo</label><input class="input" type="number" id="p-minStock" value="${p.minStock ?? 5}" /></div>
-          </div>
-
-          <hr class="separator" />
-          <p class="text-xs font-semibold text-muted" style="margin:0 0 0.25rem">Comisión del gestor (por unidad)</p>
-          <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Monto *</label><input class="input" type="number" step="0.01" id="p-gestorCommission" value="${p.gestorCommission ?? p.commission ?? 1}" /></div>
-            <div><label class="label label-xs">Moneda</label>
-              <select class="select" id="p-gestorCommissionCurrency">
-                <option value="USD" ${p.gestorCommissionCurrency === 'USD' ? 'selected' : ''}>USD</option>
-                <option value="MN" ${p.gestorCommissionCurrency === 'MN' ? 'selected' : ''}>MN</option>
-              </select>
-            </div>
-          </div>
-
-          <p class="text-xs font-semibold text-muted" style="margin:0.5rem 0 0.25rem">Comisión del vendedor (por unidad)</p>
-          <div class="grid grid-cols-2 gap-2">
-            <div><label class="label label-xs">Monto *</label><input class="input" type="number" step="0.01" id="p-vendorCommission" value="${p.vendorCommission ?? 0}" /></div>
-            <div><label class="label label-xs">Moneda</label>
-              <select class="select" id="p-vendorCommissionCurrency">
-                <option value="USD" ${p.vendorCommissionCurrency === 'USD' ? 'selected' : ''}>USD</option>
-                <option value="MN" ${p.vendorCommissionCurrency === 'MN' ? 'selected' : ''}>MN</option>
-              </select>
-            </div>
-          </div>
-
-          <hr class="separator" />
-          <div style="background: color-mix(in oklab, var(--primary) 5%, transparent); padding: 0.5rem 0.75rem; border-radius: var(--radius); border: 1px dashed color-mix(in oklab, var(--primary) 30%, transparent);">
-            <p class="text-xs font-semibold" style="color: var(--primary); margin: 0 0 0.25rem">${icon("boxes", 12)} Venta mayorista (opcional)</p>
-            <p class="text-xs text-muted" style="margin: 0 0 0.5rem">Configura cajas y precios escalonados. Si dejas "pomos por caja" vacío, el producto no se vende al por mayor.</p>
-          </div>
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="label label-xs">Pomos por caja</label>
-              <input class="input" type="number" min="1" id="p-unitsPerBox" value="${p.unitsPerBox ?? ''}" placeholder="Ej: 6 (vacío = no mayorista)" />
-            </div>
-            <div>
-              <label class="label label-xs">Costo USD (para cálculo de ganancia)</label>
-              <input class="input" type="number" step="0.01" id="p-costPrice" value="${p.costPrice ?? ''}" placeholder="0.00" />
-            </div>
-          </div>
-          <div>
-            <label class="label label-xs">Tiers de precio mayorista (JSON)</label>
-            <p class="text-xs text-muted" style="margin-bottom: 0.25rem">Formato: <code>[{"minBoxes":1,"maxBoxes":5,"pricePerUnit":22,"vendorCommission":0.5,"gestorCommission":0.3}]</code></p>
-            <textarea class="textarea" id="p-wholesaleTiers" style="min-height:5rem;font-family:ui-monospace,monospace;font-size:0.75rem" placeholder='[{"minBoxes":1,"maxBoxes":5,"pricePerUnit":22,"vendorCommission":0.5,"gestorCommission":0.3}]'>${p.wholesaleTiers ? JSON.stringify(p.wholesaleTiers, null, 2) : ''}</textarea>
-            <div id="p-wholesaleTiers-error" class="text-xs text-danger" style="margin-top:0.25rem;display:none"></div>
-          </div>
-          <div>
-            <label class="label label-xs">Imagen del producto</label>
-            <div style="display:flex;gap:0.5rem;align-items:center">
-              <div id="p-image-preview" style="width:3rem;height:3rem;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--bg-soft);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-                ${p.imageUrl ? `<img src="${esc(p.imageUrl)}" style="width:100%;height:100%;object-fit:cover" />` : icon("tags", 20)}
-              </div>
-              <div style="flex:1;display:flex;flex-direction:column;gap:0.25rem">
-                <button type="button" class="btn btn-outline btn-sm" id="p-upload-btn">
-                  ${icon("download", 12)} Subir imagen
-                </button>
-                <input class="input" id="p-image" value="${p.imageUrl || ''}" placeholder="URL o sube archivo" style="font-size:0.75rem" />
-                <p class="text-xs text-muted" id="p-image-info" style="margin:0">Se convierte a WebP automáticamente</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      `,
-      footer: `<button class="btn btn-outline" id="p-cancel">Cancelar</button><button class="btn btn-primary" id="p-save">Guardar</button>`,
-    });
-    document.querySelector("#p-cancel").addEventListener("click", close);
-
-    // ===== Auto-detectar viscosidad desde el nombre =====
-    // El nombre del producto ya suele traer la viscosidad ("MANNOL 5W-30...").
-    // Se extrae automáticamente para no escribirla dos veces. El campo sigue
-    // siendo editable: solo se rellena si está vacío o si el último valor
-    // fue autocompletado (nunca pisa un valor escrito a mano).
-    const nameInput = document.querySelector("#p-name");
-    const viscInput = document.querySelector("#p-viscosity");
-    let lastAutoViscosity = null;
-    if (nameInput && viscInput) {
-      nameInput.addEventListener("input", () => {
-        const detected = detectViscosityFromName(nameInput.value);
-        if (!detected) return;
-        const current = viscInput.value.trim();
-        if (!current || current === lastAutoViscosity) {
-          if (current !== detected) {
-            viscInput.value = detected;
-          }
-          lastAutoViscosity = detected;
-        }
-      });
-    }
-
-    // ===== Upload de imagen con conversión a WebP =====
-    const uploadBtn = document.querySelector("#p-upload-btn");
-    const imageInput = document.querySelector("#p-image");
-    const imagePreview = document.querySelector("#p-image-preview");
-    const imageInfo = document.querySelector("#p-image-info");
-    let uploadedImageUrl = p.imageUrl || null;
-    let uploadedThumbUrl = p.thumbUrl || null; // miniatura 200px (se genera al subir)
-
-    if (uploadBtn) {
-      uploadBtn.addEventListener("click", async () => {
-        try {
-          uploadBtn.disabled = true;
-          uploadBtn.innerHTML = `<div class="spinner spinner-sm"></div> Convirtiendo...`;
-          const file = await pickImageFile("image/jpeg,image/png,image/webp,image/jpg");
-          uploadBtn.innerHTML = `<div class="spinner spinner-sm"></div> Subiendo...`;
-
-          const result = await uploadImageAsWebP(file, "products");
-          uploadedImageUrl = result.url;
-          uploadedThumbUrl = result.thumbUrl || null;
-
-          // Actualizar UI
-          imageInput.value = result.url;
-          imagePreview.innerHTML = `<img src="${result.thumbUrl || result.url}" style="width:100%;height:100%;object-fit:cover" />`;
-          const savedText = result.savedPct > 0 ? ` · ${result.savedPct}% más pequeño` : "";
-          const thumbText = result.thumbUrl ? ` · miniatura ${formatBytes(result.thumbSize)}` : "";
-          imageInfo.innerHTML = `<span style="color:var(--accent)">WebP ${formatBytes(result.webpSize)}${savedText}${thumbText}</span>`;
-          toast(`Imagen convertida a WebP${savedText}`, "success");
-        } catch (err) {
-          if (err.message !== "No se seleccionó ningún archivo") {
-            toast("Error al subir imagen: " + err.message, "error");
-          }
-        } finally {
-          uploadBtn.disabled = false;
-          uploadBtn.innerHTML = `${icon("download", 12)} Subir imagen`;
-        }
-      });
-    }
-
-    // v5.10.0: escanear el código de barras del envase → queda guardado en el SKU
-    // (así en la venta se añade el producto escaneándolo)
-    document.querySelector("#p-sku-scan")?.addEventListener("click", () => {
-      openScanner({
-        title: "Código de barras del producto",
-        hint: "Apunta al código de barras del envase",
-        onCode: async (code) => {
-          const input = document.querySelector("#p-sku");
-          if (input) input.value = code;
-          try {
-            const all = await listProducts();
-            const other = findProductByCode((all || []).filter((x) => x.id !== p.id), code);
-            if (other) setTimeout(() => toast(`Atención: el código ${code} ya está en “${other.name}”`, "warning", 6000), 400);
-          } catch {}
-          return { ok: true, message: `Código ${code} · recuerda Guardar` };
-        },
-      });
-    });
-
-    document.querySelector("#p-save").addEventListener("click", async () => {
-      // Parsear wholesaleTiers
-      const tiersText = document.querySelector("#p-wholesaleTiers").value.trim();
-      let wholesaleTiers = [];
-      if (tiersText) {
-        try {
-          wholesaleTiers = JSON.parse(tiersText);
-          if (!Array.isArray(wholesaleTiers)) {
-            throw new Error("Debe ser un array");
-          }
-          // Validar cada tier
-          for (const tier of wholesaleTiers) {
-            if (typeof tier.minBoxes !== "number") throw new Error("Cada tier debe tener minBoxes (número)");
-            if (typeof tier.pricePerUnit !== "number") throw new Error("Cada tier debe tener pricePerUnit (número)");
-          }
-        } catch (err) {
-          const errBox = document.querySelector("#p-wholesaleTiers-error");
-          if (errBox) {
-            errBox.textContent = "JSON inválido: " + err.message;
-            errBox.style.display = "block";
-          }
-          toast("Revisa el formato de los tiers", "error");
-          return;
-        }
-      }
-      const unitsPerBoxVal = document.querySelector("#p-unitsPerBox").value.trim();
-      const costPriceVal = document.querySelector("#p-costPrice").value.trim();
-
-      const data = {
-        ...(p.id ? { id: p.id } : {}),
-        name: document.querySelector("#p-name").value.trim(),
-        brand: canonicalBrand(document.querySelector("#p-brand").value, brandOptions),
-        sku: document.querySelector("#p-sku").value.trim() || null,
-        viscosity: document.querySelector("#p-viscosity").value.trim() || null,
-        categoryId: document.querySelector("#p-category").value || null,
-        categoryName: categories.find((c) => c.id === document.querySelector("#p-category").value)?.name || null,
-        salePrice: parseFloat(document.querySelector("#p-price").value) || 0,
-        minStock: parseInt(document.querySelector("#p-minStock").value) || 0,
-        costPrice: costPriceVal ? parseFloat(costPriceVal) : 0,
-        // 2 comisiones separadas: gestor y vendedor
-        gestorCommission: parseFloat(document.querySelector("#p-gestorCommission").value) || 0,
-        gestorCommissionCurrency: document.querySelector("#p-gestorCommissionCurrency").value,
-        vendorCommission: parseFloat(document.querySelector("#p-vendorCommission").value) || 0,
-        vendorCommissionCurrency: document.querySelector("#p-vendorCommissionCurrency").value,
-        // Mayorista
-        unitsPerBox: unitsPerBoxVal ? parseInt(unitsPerBoxVal) : null,
-        wholesaleTiers: wholesaleTiers,
-        imageUrl: document.querySelector("#p-image").value.trim() || null,
-        thumbUrl: uploadedThumbUrl,
-        active: true,
-      };
-      if (!data.name || !data.brand) { toast("Nombre y marca son obligatorios", "error"); return; }
-      // Validar coherencia: si hay tiers, debe haber unitsPerBox
-      if (wholesaleTiers.length > 0 && !data.unitsPerBox) {
-        toast("Para usar tiers mayorista, define 'pomos por caja'", "error");
-        return;
-      }
-      // Estado de guardado + error real en pantalla (antes fallaba en silencio)
-      const saveBtn = document.querySelector("#p-save");
-      const cancelBtn = document.querySelector("#p-cancel");
-      saveBtn.disabled = true;
-      cancelBtn.disabled = true;
-      saveBtn.innerHTML = `<div class="spinner spinner-sm"></div> Guardando...`;
-      try {
-        await saveProduct(data);
-        // v5.12.0: una marca nueva escrita aquí se añade sola a la lista de marcas
-        if (!brandCtx.missingTable && brandCtx.brands && !registeredBrands.some((n) => normalizeKey(n) === normalizeKey(data.brand))) {
-          try { await saveBrand({ name: data.brand, sortOrder: 100 }); } catch (err) { console.warn("[marca] no se añadió a la lista:", err); }
-        }
-        toast("Producto guardado", "success");
-        close();
-        onSaved();
-      } catch (err) {
-        console.error("Error al guardar producto:", err);
-        toast("No se pudo guardar: " + (err.message || "error desconocido"), "error", 6000);
-        saveBtn.disabled = false;
-        cancelBtn.disabled = false;
-        saveBtn.innerHTML = `${icon("save", 14)} Guardar`;
-      }
-    });
-  }
+  // v5.15.0: el formulario de producto vive en ./product-dialog.js
 
   // ===== CATEGORIES =====
   // =====================================================
@@ -2780,7 +2517,7 @@ export function mountAdminView(container, navigateOrUser) {
           </div>
           <div class="overflow-x-auto">
             <table class="table table-cards">
-              <thead><tr><th>Nombre</th><th>Código</th><th>Dirección</th><th class="text-right">Comisión vendedor</th><th class="text-center">PIN de acceso</th><th class="text-right">Acciones</th></tr></thead>
+              <thead><tr><th>Nombre</th><th>Código</th><th>Dirección</th><th>Vendedores</th><th class="text-center">PIN de acceso</th><th class="text-right">Acciones</th></tr></thead>
               <tbody>
                 ${warehouses.map((w) => {
                   const pinVisible = pinRevealState.has(w.id);
@@ -2789,7 +2526,7 @@ export function mountAdminView(container, navigateOrUser) {
                     <td class="font-medium">${esc(w.name)}</td>
                     <td><span class="badge badge-outline">${esc(w.code)}</span></td>
                     <td class="text-xs text-muted">${esc(w.address || '—')}</td>
-                    <td class="text-right text-xs">${w.sellerCommissionPercent}% ${esc(w.sellerCommissionCurrency || 'USD')}</td>
+                    <td class="text-xs">${sellersSummaryHtml(w)}</td>
                     <td class="text-center">
                       ${w.pin ? `
                         <div style="display:inline-flex;align-items:center;gap:0.375rem">
@@ -2939,14 +2676,20 @@ export function mountAdminView(container, navigateOrUser) {
             </div>
             <div><label class="label label-xs">Dirección</label><input class="input" id="w-address" value="${esc(w.address || '')}" /></div>
             <div><label class="label label-xs">Teléfono</label><input class="input" id="w-phone" value="${esc(w.phone || '')}" /></div>
-            <div class="grid grid-cols-2 gap-2">
-              <div><label class="label label-xs">Comisión vendedor (%)</label><input class="input" type="number" step="0.1" id="w-commission" value="${w.sellerCommissionPercent ?? 3}" /></div>
-              <div><label class="label label-xs">Moneda comisión</label>
-                <select class="select" id="w-currency">
-                  <option value="USD" ${w.sellerCommissionCurrency === 'USD' ? 'selected' : ''}>USD</option>
-                  <option value="MN" ${w.sellerCommissionCurrency === 'MN' ? 'selected' : ''}>MN</option>
+            <!-- v5.14.0: quién vende (la comisión es el monto fijo de cada producto) -->
+            <div class="wh-sellers-box">
+              <div>
+                <label class="label label-xs" for="w-seller-mode">¿Quién vende en este almacén?</label>
+                <select class="select" id="w-seller-mode">
+                  <option value="one" ${w.sellerWeekendSplit ? '' : 'selected'}>Una persona</option>
+                  <option value="split" ${w.sellerWeekendSplit ? 'selected' : ''}>Dos personas: una de lunes a viernes y otra sábado y domingo</option>
                 </select>
               </div>
+              <div class="grid grid-cols-2 gap-2">
+                <div><label class="label label-xs" for="w-seller-name" id="w-seller-name-label">${w.sellerWeekendSplit ? 'Lunes a viernes' : 'Nombre del vendedor'} <span class="text-muted">(opcional)</span></label><input class="input" id="w-seller-name" value="${esc(w.sellerName || '')}" placeholder="Ej: Ana" maxlength="40" autocomplete="off" /></div>
+                <div id="w-seller-weekend-wrap"${w.sellerWeekendSplit ? '' : ' hidden'}><label class="label label-xs" for="w-seller-weekend">Sábado y domingo <span class="text-muted">(opcional)</span></label><input class="input" id="w-seller-weekend" value="${esc(w.sellerWeekendName || '')}" placeholder="Ej: Luis" maxlength="40" autocomplete="off" /></div>
+              </div>
+              <p class="text-xs text-muted" style="margin:0">El vendedor gana el monto fijo de cada producto (Productos → «Comisión del vendedor»). Con dos personas, cada venta cuenta para quien trabaja ese día. Lo ven en su pantalla y en Comisiones vendedores.</p>
             </div>
             <div><label class="label label-xs">PIN (vacío = acceso libre, mínimo 4 dígitos)</label><input class="input" id="w-pin" value="${esc(w.pin || '')}" placeholder="2025" minlength="4" maxlength="8" pattern="[0-9]{4,8}" inputmode="numeric" /></div>
 
@@ -2991,6 +2734,12 @@ export function mountAdminView(container, navigateOrUser) {
       });
 
       document.querySelector("#w-cancel").addEventListener("click", close);
+      const sellerMode = document.querySelector("#w-seller-mode");
+      sellerMode?.addEventListener("change", () => {
+        const split = sellerMode.value === "split";
+        document.querySelector("#w-seller-weekend-wrap").hidden = !split;
+        document.querySelector("#w-seller-name-label").firstChild.textContent = split ? "Lunes a viernes " : "Nombre del vendedor ";
+      });
 
       // Toggle expandir/contraer sección de stock
       const expandBtn = document.querySelector("#w-expand-stock");
@@ -3012,8 +2761,11 @@ export function mountAdminView(container, navigateOrUser) {
           code: document.querySelector("#w-code").value.trim().toUpperCase(),
           address: document.querySelector("#w-address").value.trim() || null,
           phone: document.querySelector("#w-phone").value.trim() || null,
-          sellerCommissionPercent: parseFloat(document.querySelector("#w-commission").value) || 0,
-          sellerCommissionCurrency: document.querySelector("#w-currency").value,
+          // v5.14.0: quién vende (el % antiguo del almacén ya no se edita aquí)
+          sellerWeekendSplit: document.querySelector("#w-seller-mode").value === "split",
+          sellerName: document.querySelector("#w-seller-name").value.trim() || null,
+          sellerWeekendName: (document.querySelector("#w-seller-mode").value === "split"
+            ? document.querySelector("#w-seller-weekend").value.trim() : "") || null,
           pin: pin || null,
           active: true,
           _createdBy: getStore().getState().currentUser,
@@ -3053,6 +2805,9 @@ export function mountAdminView(container, navigateOrUser) {
             await saveWarehouse(data);
           }
           toast("Almacén guardado" + (stockItems.length > 0 ? ` · ${stockItems.length} productos con stock` : ""), "success");
+          if (lastWarehouseSaveSkippedSellers) {
+            toast("Falta un paso para guardar quién vende: ejecuta en Supabase el archivo supabase/migration-v5.14-vendedores.sql", "warning", 9000);
+          }
           close();
           onSaved();
         } catch (err) {
@@ -5287,70 +5042,133 @@ export function mountAdminView(container, navigateOrUser) {
     });
   }
 
-  // ===== WAREHOUSE COMMISSIONS (locales) =====
+  // ===== COMISIONES DE VENDEDORES (v5.14.0) =====
+  // Monto fijo por cada producto vendido (lo configurado en el producto al
+  // vender), por almacén y —si venden dos personas— por turno (lunes a viernes /
+  // sábado y domingo). Son los mismos números que cada vendedor ve en su
+  // pantalla. Antes esta tabla calculaba un % del total vendido por almacén,
+  // que no es como se paga a los vendedores (el % es de los gestores).
   function mountWarehouseCommissionsPanel(content, gen) {
+    gen = gen ?? tabGeneration;
     const now = new Date();
     let period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
     let loading = true;
-    let commissions = [];
+    let rows = [];          // [{ w, sh }] una fila por vendedor (almacén o turno)
+    let failed = [];        // almacenes cuyas ventas no se pudieron cargar
+    let unconfigured = [];  // productos activos sin comisión de vendedor
+    let range = monthRange(now.getTime(), 0);
 
     async function load() {
       loading = true;
       render();
       const [y, m] = period.split("-").map(Number);
-      commissions = await listWarehouseCommissions(y, m);
+      const ref = new Date(y, m - 1, 15).getTime();
+      const r = monthRange(ref, 0);
+      const [warehouses, products] = await Promise.all([
+        listWarehouses().catch(() => []),
+        listProducts().catch(() => []),
+      ]);
+      if (gen !== tabGeneration) return;
+      const active = warehouses.filter((w) => w.active !== false);
+      const results = await Promise.all(active.map((w) => listSalesInRange({ warehouseId: w.id, from: r.from, to: r.to })));
+      if (gen !== tabGeneration) return;
+      rows = [];
+      failed = [];
+      active.forEach((w, i) => {
+        if (!results[i]) { failed.push(w); return; }
+        computeSellerEarnings(results[i], { warehouse: w, now: ref }).shifts.forEach((sh) => rows.push({ w, sh }));
+      });
+      unconfigured = productsWithoutVendorCommission(products);
+      range = r;
       loading = false;
       render();
     }
 
+    function sellerCell(w, sh) {
+      if (sh.key === "all") return sh.name ? `<strong>${esc(sh.name)}</strong>` : `<span class="text-muted">Una persona</span>`;
+      return `<div class="text-xs text-muted">${esc(sh.label)}</div>${sh.name ? `<strong>${esc(sh.name)}</strong>` : ""}`;
+    }
+
     function render() {
-      const total = commissions.reduce((s, c) => s + c.amount, 0);
+      if (gen !== tabGeneration) return;
+      const t = rows.reduce((a, { sh }) => ({
+        sales: a.sales + sh.sales, units: a.units + sh.units,
+        usd: a.usd + sh.usd, mn: a.mn + sh.mn,
+      }), { sales: 0, units: 0, usd: 0, mn: 0 });
       content.innerHTML = `
         <div style="display:flex;flex-direction:column;gap:1rem">
           <div class="flex items-center justify-between flex-wrap gap-2">
             <div>
-              <h2 class="text-lg font-bold">Comisiones de vendedores (locales)</h2>
-              <p class="text-xs text-muted">Calculadas como % del total vendido</p>
+              <h2 class="text-lg font-bold">Comisiones de vendedores</h2>
+              <p class="text-xs text-muted">Monto fijo por cada producto vendido (el que configuras en cada producto). Es lo mismo que cada vendedor ve en su pantalla.</p>
             </div>
             <div class="flex gap-2 items-center">
-              <input class="input" type="month" id="wc-period" value="${period}" style="width:10rem" />
+              <input class="input" type="month" id="wc-period" value="${period}" style="width:10rem" aria-label="Mes" />
+              <button class="btn btn-outline btn-sm" id="wc-csv" ${loading || rows.length === 0 ? "disabled" : ""} title="Exportar a CSV">${icon("download", 14)} CSV</button>
             </div>
           </div>
+          ${!loading && unconfigured.length ? `
+            <div class="card wc-warn">
+              <div class="card-content" style="display:flex;gap:0.75rem;align-items:center;justify-content:space-between;flex-wrap:wrap">
+                <div style="min-width:0;flex:1 1 16rem">
+                  <div class="font-semibold text-sm flex items-center gap-1">${icon("alertTriangle", 14)} ${unconfigured.length} ${unconfigured.length === 1 ? "producto" : "productos"} sin comisión de vendedor</div>
+                  <div class="text-xs text-muted" style="margin-top:0.25rem">${esc(unconfigured.slice(0, 5).map((p) => p.name).join(" · "))}${unconfigured.length > 5 ? ` y ${unconfigured.length - 5} más` : ""}. Al venderlos, el vendedor no gana nada.</div>
+                </div>
+                <button class="btn btn-outline btn-sm" data-wc-jump="products">${icon("tags", 14)} Configurar en Productos</button>
+              </div>
+            </div>` : ""}
           <div class="card">
             <div class="overflow-x-auto">
               ${loading ? `<div class="empty-state"><div class="spinner"></div></div>` : `
                 <table class="table">
-                  <thead><tr><th>Almacén</th><th class="text-center">Ventas</th><th class="text-right">Total vendido</th><th class="text-right">%</th><th class="text-right">Comisión</th></tr></thead>
+                  <thead><tr><th>Almacén</th><th>Vendedor</th><th class="text-center">Ventas</th><th class="text-center">Productos</th><th class="text-right">Comisión</th></tr></thead>
                   <tbody>
-                    ${commissions.map((c) => `
+                    ${rows.map(({ w, sh }) => `
                       <tr>
-                        <td class="font-medium">${esc(c.warehouseName)} <span class="badge badge-outline">${esc(c.warehouseCode)}</span></td>
-                        <td class="text-center">${c.salesCount}</td>
-                        <td class="text-right">${formatMoney(c.totalSales, "USD")}</td>
-                        <td class="text-right">${c.commissionPercent}%</td>
-                        <td class="text-right font-bold">${formatMoney(c.amount, c.commissionCurrency)}</td>
-                      </tr>
-                    `).join('')}
+                        <td class="font-medium">${esc(w.name)} <span class="badge badge-outline">${esc(w.code)}</span></td>
+                        <td>${sellerCell(w, sh)}</td>
+                        <td class="text-center">${sh.sales}</td>
+                        <td class="text-center">${sh.units}</td>
+                        <td class="text-right" style="white-space:nowrap"><strong>${moneyPair(sh.usd, sh.mn)}</strong>${sh.pending.usd || sh.pending.mn ? `<div class="text-xs text-muted">+ ${moneyPair(sh.pending.usd, sh.pending.mn)} por confirmar</div>` : ""}</td>
+                      </tr>`).join("")}
+                    ${failed.map((w) => `<tr><td class="font-medium">${esc(w.name)} <span class="badge badge-outline">${esc(w.code)}</span></td><td colspan="4" class="text-xs text-danger">No se pudieron cargar las ventas (¿sin conexión?).</td></tr>`).join("")}
                   </tbody>
                   <tfoot>
                     <tr style="background:var(--bg-soft);font-weight:700">
-                      <td colspan="4">Total</td>
-                      <td class="text-right">${formatMoney(total, "USD")}</td>
+                      <td colspan="2" style="text-transform:capitalize">Total · ${esc(range.label)}</td>
+                      <td class="text-center">${t.sales}</td>
+                      <td class="text-center">${t.units}</td>
+                      <td class="text-right" style="white-space:nowrap">${moneyPair(t.usd, t.mn)}</td>
                     </tr>
                   </tfoot>
                 </table>
               `}
             </div>
           </div>
+          <p class="text-xs text-muted" style="margin:0">Solo cuentan las ventas completadas (las pendientes de confirmar salen aparte; las canceladas no cuentan). Cada venta usa la comisión que tenía el producto cuando se vendió. Para indicar quién vende —una persona, o dos: lunes a viernes y fin de semana— edita el almacén en <strong>Almacenes</strong>.</p>
         </div>
       `;
-      const periodInput = content.querySelector("#wc-period");
-      if (periodInput) {
-        periodInput.addEventListener("change", (e) => {
-          period = e.target.value;
-          load();
-        });
-      }
+      content.querySelector("#wc-period")?.addEventListener("change", (e) => {
+        if (!e.target.value) return;
+        period = e.target.value;
+        load();
+      });
+      content.querySelector("[data-wc-jump]")?.addEventListener("click", () => window.__adminNavigateTo?.("products"));
+      content.querySelector("#wc-csv")?.addEventListener("click", () => {
+        exportToCSV(`comisiones-vendedores-${period}.csv`, rows.map(({ w, sh }) => ({
+          mes: period,
+          almacen: w.name,
+          codigo: w.code,
+          turno: sh.key === "all" ? "Todos los días" : sh.label,
+          vendedor: sh.name || "",
+          ventas: sh.sales,
+          productos: sh.units,
+          comision_mn: sh.mn,
+          comision_usd: sh.usd,
+          por_confirmar_mn: sh.pending.mn,
+          por_confirmar_usd: sh.pending.usd,
+        })));
+      });
     }
 
     load();
@@ -5666,10 +5484,11 @@ export function mountAdminView(container, navigateOrUser) {
   return () => {};
 }
 
-// ===== Helper: formatear bytes =====
-function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return "0 B";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+// v5.14.0: columna «Vendedores» de la tabla de almacenes
+function sellersSummaryHtml(w) {
+  if (w && w.sellerWeekendSplit) {
+    return `<div class="text-muted">L–V: <strong style="color:var(--text)">${esc(w.sellerName || "—")}</strong></div>`
+      + `<div class="text-muted">S–D: <strong style="color:var(--text)">${esc(w.sellerWeekendName || "—")}</strong></div>`;
+  }
+  return w && w.sellerName ? `<strong>${esc(w.sellerName)}</strong>` : `<span class="text-muted">Una persona</span>`;
 }

@@ -63,6 +63,10 @@ create table if not exists public.warehouses (
   pin text,
   seller_commission_percent numeric not null default 0,
   seller_commission_currency text not null default 'USD' check (seller_commission_currency in ('USD','MN')),
+  -- v5.14: quién vende (una persona, o dos: lunes a viernes + fin de semana)
+  seller_weekend_split boolean not null default false,
+  seller_name text,
+  seller_weekend_name text,
   created_at timestamptz not null default now()
 );
 

@@ -5,7 +5,8 @@
 
 import { getStore } from "../store.js";
 import { APP_LABEL } from "../version.js";
-import { subscribeSales, listWarehouses, listManagers, listCards, listCategories } from "../db.js";
+import { subscribeSales, listWarehouses, listManagers, listCards, listCategories, listSalesInRange } from "../db.js";
+import { computeSellerEarnings, renderSellerEarningsCard, monthRange } from "../seller-earnings.js";
 import { logout } from "../auth.js";
 import { formatMoney, formatDate, formatDateShort, skeletonCard, skeletonStatCard } from "../currency.js";
 import { toast, icon, esc, brandMark } from "../ui.js";
@@ -343,6 +344,25 @@ export function mountDashboardView(container, navigate) {
     const warehouse = store.getState().currentWarehouse;
     let sales = [];
     let isLoading = true;
+    // v5.14.0: lo que lleva ganado el vendedor (monto fijo por producto).
+    // Solo vendedores de almacén: los gestores cobran aparte (porcentaje).
+    const showEarnings = !!warehouse && ["warehouse", "vendedor"].includes(user?.role);
+    let sellerWh = warehouse;
+    let prevSales = null;
+    let prevLoading = false;
+    let earnOpen = false;
+    if (showEarnings) {
+      listWarehouses().then((ws) => {
+        const me = ws.find((w) => w.id === warehouse.id);
+        if (me) { sellerWh = { ...warehouse, ...me }; if (!isLoading) renderOverview(); }
+      }).catch(() => {});
+      const r = monthRange(Date.now(), -1);
+      prevLoading = true;
+      listSalesInRange({ warehouseId: warehouse.id, from: r.from, to: r.to })
+        .then((list) => { prevSales = list; })
+        .catch(() => {})
+        .finally(() => { prevLoading = false; if (!isLoading) renderOverview(); });
+    }
 
     function renderOverview() {
       const today = new Date();
@@ -408,6 +428,12 @@ export function mountDashboardView(container, navigate) {
             </div>
           </div>
 
+          ${showEarnings ? `<div class="overview-earn" style="grid-column: 1 / -1">${renderSellerEarningsCard(
+            computeSellerEarnings(sales, { warehouse: sellerWh }),
+            prevSales ? computeSellerEarnings(prevSales, { warehouse: sellerWh, offset: -1 }) : null,
+            { open: earnOpen, prevLoading },
+          )}</div>` : ""}
+
           ${sales.length > 0 ? `
             <div class="charts-row" style="grid-column: 1 / -1">
               <div class="card">
@@ -461,6 +487,7 @@ export function mountDashboardView(container, navigate) {
           </div>
         </div>
       `;
+      content.querySelector("[data-earn-details]")?.addEventListener("toggle", (e) => { earnOpen = e.currentTarget.open; });
     }
 
     function buildLast7DaysData(sales) {

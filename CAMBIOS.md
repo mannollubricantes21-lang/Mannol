@@ -1,5 +1,86 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.15.0 (2026-11-23) — Barra flotante en el teléfono y nuevo formulario de producto
+
+- **Barra superior en el teléfono**: en v5.13.2 solo se arregló en PC. En el teléfono y la tableta
+  seguía siendo una franja cuadrada pegada a los bordes. Ahora flota separada de los bordes, con
+  esquinas redondeadas, borde fino y sombra, igual que en PC y que las tarjetas. Vale para todas
+  las pantallas y para los temas claro y oscuro. Con la app instalada en iPhone, la franja de la
+  hora queda tapada para que el contenido no asome detrás.
+- **Panel admin**: su barra superior también flota, en el teléfono y en PC.
+- **Marca: ahora salen todas**. Antes era un campo con sugerencias que solo mostraba las marcas
+  que coincidían con lo escrito. Como un producto nuevo empezaba con «MANNOL» puesto, las demás
+  marcas añadidas no salían nunca.
+  - Todas las marcas (las de Admin → Marcas y las que ya tienen los productos) salen como
+    botones: se toca una y queda elegida.
+  - «Otra marca» sirve para escribir una nueva. Se guarda bien escrita («fuchs titan» → «Fuchs
+    Titan») y se añade sola a la lista de marcas, así que la verán todos.
+  - Si la marca ya existe, aunque se escriba distinto («castrol»), avisa y usa la que ya está,
+    sin duplicarla.
+- **Formulario de producto rediseñado** (Admin → Productos → Nuevo / Editar):
+  - Está en 5 bloques con título: Producto, Precio y stock, Comisiones, Venta por caja y Foto.
+  - Al escribir el nombre se eligen solos la marca, la viscosidad y el tipo. Se pueden cambiar.
+  - Al poner precio y costo se ve la ganancia por unidad («Ganas 7.00 USD por unidad»), o
+    «Pierdes» en rojo si el costo es mayor.
+  - La comisión del vendedor va primero, porque es la que suma en «Lo que llevas ganado». Si
+    queda en 0, el formulario lo avisa.
+  - La venta por caja se enciende con un interruptor. Se ponen los pomos por caja y los precios
+    «desde N cajas» en filas, con el total por caja ya calculado. Antes había que escribir esos
+    precios a mano en formato de código (JSON).
+  - Los números aceptan coma o punto (22,50 o 22.50), y en el teléfono sale el teclado numérico.
+  - Cada error sale en rojo debajo de su campo y no se guarda hasta corregirlo. El precio de
+    venta ahora es obligatorio (antes se podía guardar un producto a 0).
+  - Si se toca fuera del formulario con cambios sin guardar, pregunta antes de cerrarlo.
+  - El interruptor «Se puede vender» oculta un producto de la venta sin borrarlo.
+- **Arreglos**:
+  - Editar un producto lo volvía a activar siempre. Ahora respeta «Se puede vender».
+  - Si se cambiaba la foto pegando otro enlace, la lista seguía mostrando la miniatura de la foto
+    vieja.
+  - Venta por caja: el último precio vale para cualquier cantidad mayor. Antes, pasando el tope
+    del último tramo, se volvía al precio de 1 caja. Se aplica al guardar el producto.
+- **Pruebas**: 262, de ellas 42 nuevas: la lógica del formulario, el formulario en pantalla
+  (marcas, errores, venta por caja, guardado) y que todo lo que carga la app y el admin quede
+  guardado para abrir sin conexión.
+
+## v5.14.0 (2026-11-23) — Lo que lleva ganado el vendedor
+
+- **El vendedor ve lo que lleva ganado** en su pantalla (al entrar con el PIN del almacén y
+  también si entra con usuario). La tarjeta «Lo que llevas ganado» muestra:
+  - lo del mes en curso, lo de hoy y cuántas ventas y productos cuentan;
+  - **lo del mes pasado**, para saber cuánto cobrar;
+  - «Ver detalle por producto», con de dónde sale cada importe.
+- **Cálculo**: monto fijo por cada producto vendido, el que configuras en Productos →
+  «Comisión del vendedor (por unidad)», en MN o USD.
+  - Cuenta lo que tenía el producto cuando se vendió: si cambias la comisión, vale para las
+    ventas nuevas. En mayorista va por caja.
+  - Solo cuentan las ventas completadas. Las pendientes salen aparte («por confirmar») y las
+    canceladas no cuentan.
+  - Las ventas hechas sin conexión cuentan, y la tarjeta avisa que están por subir.
+- **Dos vendedores en un almacén** (uno de lunes a viernes y otro sábado y domingo):
+  - Se configura en Admin → Almacenes → Editar → «¿Quién vende en este almacén?», con los
+    nombres opcionales.
+  - Cada venta cuenta para quien trabaja ese día.
+  - En la pantalla salen los dos importes, con «Hoy» en el turno del día.
+- **Admin → Comisiones vendedores** (antes «Comisiones locales»):
+  - Muestra lo de cada almacén y turno por mes, con exportación CSV, y avisa de los productos
+    sin comisión de vendedor.
+  - Antes calculaba un % de lo vendido por almacén, que no es como se paga a los vendedores.
+    El % es de los gestores, se configura en cada gestor y no cambia.
+- **Arreglos**:
+  - Guardar un almacén desde el admin (crear o editar) fallaba en silencio: el formulario
+    mandaba un dato interno que la base de datos rechazaba, y aun así decía «Almacén guardado».
+    Ahora guarda y, si algo falla, lo dice. Además, editar ya no manda el almacén al final de
+    la lista.
+  - Los totales de comisión por venta nunca llegaban a la base de datos, porque el nombre del
+    campo se convertía mal. No se perdió nada: cada producto vendido guarda su comisión y de ahí
+    se calcula todo. La exportación de ventas del admin también se calcula así.
+- **Migración**: ejecutar una vez `supabase/migration-v5.14-vendedores.sql`, que añade 3
+  columnas a almacenes y se puede repetir sin problema. Sin ella todo funciona, pero no se puede
+  guardar quién vende (el admin lo avisa al guardar).
+- **Pruebas**: 220, de ellas 25 nuevas (cálculo, mayorista, meses, turnos, guardado de
+  almacenes). También se comprobó contra PostgREST 12, el mismo servidor de Supabase, con 2500
+  ventas en un mes.
+
 ## v5.13.2 (2026-11-23) — La app en PC: menú fijo y barra superior flotante
 
 En la computadora (pantallas de 1024 px o más) la app se veía mal: el contenido quedaba corrido a

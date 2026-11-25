@@ -198,16 +198,21 @@ export function mountSettingsView(container, navigate) {
         toast("El PIN debe tener entre 4 y 8 dígitos numéricos", "error");
         return;
       }
-      await saveWarehouse({
-        ...(w.id ? { id: w.id } : {}),
-        name, code,
-        address: document.querySelector("#wh-address").value,
-        phone: document.querySelector("#wh-phone").value,
-        sellerCommissionPercent: parseFloat(document.querySelector("#wh-vendor").value) || 0,
-        sellerCommissionCurrency: document.querySelector("#wh-currency").value,
-        pin: pin || null,
-        active: f.active,
-      });
+      try {
+        await saveWarehouse({
+          ...(w.id ? { id: w.id } : {}),
+          name, code,
+          address: document.querySelector("#wh-address").value,
+          phone: document.querySelector("#wh-phone").value,
+          sellerCommissionPercent: parseFloat(document.querySelector("#wh-vendor").value) || 0,
+          sellerCommissionCurrency: document.querySelector("#wh-currency").value,
+          pin: pin || null,
+          active: f.active,
+        });
+      } catch (err) {
+        toast("Error al guardar almacén: " + (err.message || "desconocido"), "error");
+        return;
+      }
       toast("Almacén guardado", "success");
       close();
       load();

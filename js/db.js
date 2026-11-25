@@ -758,12 +758,46 @@ export function subscribeWarehouses(cb) {
  * @param {Partial<Warehouse>} w
  * @returns {Promise<string>} warehouse id
  */
+// v5.14.0: columnas reales de `warehouses`. Lo demás que envíe la UI se
+// descarta aquí: el formulario del admin mandaba `_createdBy` (para la
+// auditoría del stock inicial) → «_created_by» no existe → PGRST204, y el
+// almacén NO se guardaba aunque la pantalla dijera «Almacén guardado».
+export const WAREHOUSE_SELLER_COLUMNS = ["seller_weekend_split", "seller_name", "seller_weekend_name"];
+export const WAREHOUSE_COLUMNS = new Set([
+  "id", "name", "code", "address", "phone", "active", "pin",
+  "seller_commission_percent", "seller_commission_currency", "created_at",
+  ...WAREHOUSE_SELLER_COLUMNS, // migration-v5.14-vendedores.sql
+]);
+
+export function sanitizeWarehouseRow(r) {
+  const out = {};
+  for (const [k, v] of Object.entries(r || {})) {
+    if (WAREHOUSE_COLUMNS.has(k)) out[k] = v;
+  }
+  return out;
+}
+
+/** ¿Falta alguna columna de vendedores? (migración v5.14 aún sin ejecutar) */
+export function isMissingSellerColumnsError(err) {
+  if (!err || (err.code !== "PGRST204" && err.code !== "42703")) return false;
+  const text = `${err.message || ""} ${err.details || ""} ${err.hint || ""}`;
+  return WAREHOUSE_SELLER_COLUMNS.some((c) => text.includes(c));
+}
+
+// true si el último guardado omitió los vendedores del almacén porque la
+// migración v5.14 aún no se ejecutó (el resto del almacén sí se guardó).
+export let lastWarehouseSaveSkippedSellers = false;
+
 export async function saveWarehouse(w) {
   const s = await sb();
   _whCache = { ts: 0, data: null }; // invalidar caché de warehouses
+  lastWarehouseSaveSkippedSellers = false;
   if (!s) return "demo-id";
-  try {
-    const r = toRow({ ...w, createdAt: w.createdAt || Date.now() });
+  // Al editar NO se reescribe created_at (antes se ponía la fecha actual y el
+  // almacén pasaba al final de la lista, que se ordena por fecha de creación).
+  const base = w.id ? { ...w } : { ...w, createdAt: w.createdAt || Date.now() };
+  const full = sanitizeWarehouseRow(toRow(base));
+  const attempt = async (r) => {
     if (w.id) {
       const { error } = await s.from("warehouses").update(r).eq("id", w.id);
       if (error) throw error;
@@ -772,9 +806,21 @@ export async function saveWarehouse(w) {
     const { data, error } = await s.from("warehouses").insert(r).select().single();
     if (error) throw error;
     return data.id;
+  };
+  try {
+    return await attempt(full);
   } catch (err) {
+    if (isMissingSellerColumnsError(err) && WAREHOUSE_SELLER_COLUMNS.some((c) => c in full)) {
+      const r = { ...full };
+      WAREHOUSE_SELLER_COLUMNS.forEach((c) => { delete r[c]; });
+      const id = await attempt(r); // si también falla, el error sube a la pantalla
+      lastWarehouseSaveSkippedSellers = true;
+      return id;
+    }
     console.error("saveWarehouse failed:", err);
-    return "demo-id";
+    // v5.14.0: el error llega a la pantalla (antes devolvía "demo-id" y el admin
+    // veía «Almacén guardado» aunque no se hubiera guardado nada)
+    throw err;
   }
 }
 
@@ -1889,6 +1935,42 @@ export async function listSales(filters = {}) {
     return mergePendingSales(items, readQueue(), filters);
   } catch {
     return mergePendingSales([], readQueue(), filters);
+  }
+}
+
+/**
+ * v5.14.0: ventas de un rango [from, to) por páginas. La nube devuelve como
+ * máximo 1000 filas por consulta y un mes de varios almacenes puede pasarse.
+ * Devuelve null si no se pudo cargar (sin conexión y sin copia guardada).
+ * @param {{warehouseId?: string|null, from: number, to: number}} range
+ * @returns {Promise<Sale[]|null>}
+ */
+export async function listSalesInRange({ warehouseId = null, from, to } = {}) {
+  const filters = { ...(warehouseId ? { warehouseId } : {}), from, to: to - 1 };
+  const demo = await isDemo();
+  if (demo) return listSales(filters);
+  const s = await sb();
+  if (!s) return listSales(filters);
+  const PAGE = 1000;
+  const out = [];
+  try {
+    for (let page = 0; page < 50; page++) {
+      let q = s.from("sales").select("*");
+      if (warehouseId) q = q.eq("warehouse_id", warehouseId);
+      q = q.gte("created_at", new Date(from).toISOString())
+        .lt("created_at", new Date(to).toISOString())
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(page * PAGE, page * PAGE + PAGE - 1);
+      const { data, error } = await q;
+      if (error) throw error;
+      out.push(...rows(data));
+      if (!data || data.length < PAGE) break;
+    }
+    return mergePendingSales(out, readQueue(), filters);
+  } catch (err) {
+    console.warn("listSalesInRange failed:", err);
+    return null;
   }
 }
 

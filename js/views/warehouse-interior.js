@@ -4,7 +4,8 @@
 // =====================================================
 
 import { getStore } from "../store.js";
-import { subscribeSales, subscribeStock, listProducts, listWarehouses, listAllStockAcrossWarehouses, listStockForProductInAllWarehouses, createTransferRequest, listTransferRequests, saveDailyClosure, listDailyClosures } from "../db.js";
+import { subscribeSales, subscribeStock, listProducts, listWarehouses, listAllStockAcrossWarehouses, listStockForProductInAllWarehouses, createTransferRequest, listTransferRequests, saveDailyClosure, listDailyClosures, listSalesInRange } from "../db.js";
+import { computeSellerEarnings, renderSellerEarningsCard, monthRange } from "../seller-earnings.js";
 import { computeClosureStats, closureDateKey, validateTransferRequest, buildClosureShareText } from "../sales-stats.js";
 import { formatMoney, formatDate } from "../currency.js";
 import { icon, esc, toast, showModal, closeModal, confirmDialog, copyText, openWhatsApp } from "../ui.js";
@@ -26,6 +27,12 @@ export function mountWarehouseInterior(container, navigate) {
   let otherWarehousesStock = []; // stock en otros almacenes
   let othersState = "idle"; // "idle" | "loading" | "ready" | "error"
   let allWarehouses = []; // lista de almacenes
+  // v5.14.0: lo que lleva ganado el vendedor (comisión fija por producto)
+  let sellerWh = warehouse;     // config de vendedores del almacén (se refresca abajo)
+  let prevSales = null;         // ventas del mes pasado (consulta propia, por páginas)
+  let prevLoading = false;
+  let prevFrom = null;          // mes cargado (si la app queda abierta al cambiar de mes)
+  let earnOpen = false;         // «Ver detalle por producto» abierto
 
   if (!warehouse) {
     container.innerHTML = `<div class="empty-state">Selecciona un almacén</div>`;
@@ -35,8 +42,21 @@ export function mountWarehouseInterior(container, navigate) {
   listProducts().then((p) => { products = p; render(); }).catch(() => {});
   listWarehouses().then((ws) => {
     allWarehouses = ws.filter((w) => w.id !== warehouse.id && w.active !== false);
+    // Config de vendedores al día (el admin pudo cambiarla después de entrar con el PIN)
+    const me = ws.find((w) => w.id === warehouse.id);
+    if (me) sellerWh = { ...warehouse, ...me };
     render();
   }).catch(() => {});
+
+  function loadPrevMonth() {
+    const r = monthRange(Date.now(), -1);
+    prevFrom = r.from;
+    prevLoading = true;
+    listSalesInRange({ warehouseId: warehouse.id, from: r.from, to: r.to })
+      .then((list) => { if (prevFrom === r.from) { prevSales = list; prevLoading = false; render(); } })
+      .catch(() => { prevLoading = false; render(); });
+  }
+  loadPrevMonth();
 
   const unsubSales = subscribeSales((items) => {
     sales = items.filter((s) => s.warehouseId === warehouse.id);
@@ -209,6 +229,12 @@ export function mountWarehouseInterior(container, navigate) {
     const todayKey = closureDateKey(Date.now());
     const todayClosed = recentClosures.find((c) => c.closureDate === todayKey);
 
+    // v5.14.0: si la app quedó abierta al cambiar de mes, recargar el «mes pasado»
+    if (prevFrom !== monthRange(Date.now(), -1).from && !prevLoading) loadPrevMonth();
+    const earnCur = computeSellerEarnings(sales, { warehouse: sellerWh });
+    const earnPrev = prevSales ? computeSellerEarnings(prevSales, { warehouse: sellerWh, offset: -1 }) : null;
+    const earningsHtml = renderSellerEarningsCard(earnCur, earnPrev, { open: earnOpen, prevLoading });
+
     container.innerHTML = `
       <div class="wi-layout" style="display:flex;flex-direction:column;gap:0.875rem">
         <!-- Hero del almacén (v5.7.0) -->
@@ -290,6 +316,9 @@ export function mountWarehouseInterior(container, navigate) {
         <button class="btn cta-sale btn-block wi-cta" id="register-sale-btn">
           ${icon("cart", 20)} Registrar venta
         </button>
+
+        <!-- v5.14.0: lo que lleva ganado (comisión fija por producto) -->
+        <div class="wi-ganado">${earningsHtml}</div>
 
         <!-- Cierre de caja (v5.5.0) -->
         <div class="card wi-cierre">
@@ -535,6 +564,7 @@ export function mountWarehouseInterior(container, navigate) {
     container.querySelectorAll("[data-period]").forEach((btn) => {
       btn.addEventListener("click", () => { period = btn.dataset.period; render(); });
     });
+    container.querySelector("[data-earn-details]")?.addEventListener("toggle", (e) => { earnOpen = e.currentTarget.open; });
 
     // Tabs del inventario (Stock / Otros almacenes — solo 2 tabs, transferencias solo en admin)
     container.querySelectorAll("[data-inv-tab]").forEach((btn) => {
