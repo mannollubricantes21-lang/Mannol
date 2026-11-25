@@ -39,6 +39,7 @@ export function computeClosureStats(sales, { fromMs, toMs }) {
     totalUSD: 0,
     byCurrency: { ...empty, USD: { ...empty.USD }, MN: { ...empty.MN }, EUR: { ...empty.EUR }, TRANSFERENCIA: { ...empty.TRANSFERENCIA } },
     topProducts: [],
+    byBrand: [],
   };
   const completed = (sales || []).filter((s) =>
     s.status === "COMPLETADA" &&
@@ -47,10 +48,16 @@ export function computeClosureStats(sales, { fromMs, toMs }) {
   );
 
   const productAgg = new Map();
+  const brandAgg = new Map();
   for (const s of completed) {
     stats.salesCount++;
     stats.totalUSD += s.totalAmount || 0;
-    if (s.paymentMode === "MULTI") {
+    // v5.24.0: cada moneda en SU moneda. Desde v5.16 la venta guarda lo
+    // cobrado en paidUSD / paidMN / paidEUR / paidTransfer (también en una sola
+    // moneda); antes, una venta en MN sumaba aquí el total en USD como si
+    // fueran pesos. Ventas antiguas sin esos campos: total en su moneda.
+    const hasPaid = (s.paidUSD > 0) || (s.paidMN > 0) || (s.paidEUR > 0) || (s.paidTransfer > 0);
+    if (s.paymentMode === "MULTI" || hasPaid) {
       if (s.paidUSD > 0) { stats.byCurrency.USD.count++; stats.byCurrency.USD.amount += s.paidUSD; }
       if (s.paidMN > 0) { stats.byCurrency.MN.count++; stats.byCurrency.MN.amount += s.paidMN; }
       if (s.paidEUR > 0) { stats.byCurrency.EUR.count++; stats.byCurrency.EUR.amount += s.paidEUR; }
@@ -62,6 +69,12 @@ export function computeClosureStats(sales, { fromMs, toMs }) {
     for (const item of s.items || []) {
       const qty = item.quantity || 0;
       stats.unitsSold += qty;
+      // v5.24.0: ventas por marca
+      const brand = String(item.brand || "").trim() || "Sin marca";
+      const b = brandAgg.get(brand.toLowerCase()) || { brand, units: 0, total: 0 };
+      b.units += qty;
+      b.total += item.subtotal || 0;
+      brandAgg.set(brand.toLowerCase(), b);
       const key = item.productId || item.name;
       const prev = productAgg.get(key) || { name: item.name || "—", qty: 0, total: 0 };
       prev.qty += qty;
@@ -73,8 +86,47 @@ export function computeClosureStats(sales, { fromMs, toMs }) {
   stats.topProducts = Array.from(productAgg.values())
     .sort((a, b) => b.qty - a.qty)
     .slice(0, 5);
+  stats.byBrand = Array.from(brandAgg.values())
+    .map((b) => ({ ...b, total: Math.round(b.total * 100) / 100 }))
+    .sort((a, b) => b.total - a.total || b.units - a.units);
 
   return stats;
+}
+
+// =====================================================
+// v5.24.0 — Arqueo de caja: fondo inicial + efectivo contado
+// =====================================================
+export const CASH_CURRENCIES = ["USD", "MN", "EUR"];
+const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+/**
+ * Cuánto efectivo DEBERÍA haber en caja y cuánto sobra o falta.
+ * Esperado = fondo con el que se abrió + lo cobrado en efectivo en esa
+ * moneda (las transferencias van a la tarjeta, no a la caja).
+ * @param {{stats:Object, opening?:Object, counted?:Object}} p  opening/counted: { USD, MN, EUR }
+ * @returns {{rows:Array<{currency,opening,sales,expected,counted,diff,hasCount}>, anyDiff:boolean}}
+ */
+export function computeCashCount({ stats, opening = {}, counted = {} } = {}) {
+  const rows = [];
+  for (const c of CASH_CURRENCIES) {
+    const op = r2(opening?.[c]);
+    const sales = r2(stats?.byCurrency?.[c]?.amount);
+    const raw = counted?.[c];
+    const hasCount = raw !== undefined && raw !== null && raw !== "" && Number.isFinite(Number(raw));
+    if (!op && !sales && !hasCount) continue;
+    const expected = r2(op + sales);
+    const cnt = hasCount ? r2(raw) : null;
+    rows.push({ currency: c, opening: op, sales, expected, counted: cnt, diff: hasCount ? r2(cnt - expected) : null, hasCount });
+  }
+  return { rows, anyDiff: rows.some((r) => r.hasCount && Math.abs(r.diff) >= 0.01) };
+}
+
+/** «Sobran $5.00» / «Faltan 200 MN» / «Cuadra» para una fila del arqueo. */
+export function cashDiffLabel(row, fmt) {
+  if (!row || !row.hasCount) return "";
+  const money = fmt || ((n, c) => `${(Number(n) || 0).toFixed(2)} ${c}`);
+  if (Math.abs(row.diff) < 0.01) return "Cuadra";
+  return row.diff > 0 ? `Sobran ${money(row.diff, row.currency)}` : `Faltan ${money(-row.diff, row.currency)}`;
 }
 
 // ===== Reglas de solicitudes de traspaso =====
@@ -250,7 +302,7 @@ const CLOSURE_CURR_LABEL = { USD: "USD", MN: "MN", EUR: "EUR", TRANSFERENCIA: "T
  * @param {string|null} [p.closedBy] - quién cerró la caja (null = aún no se cerró)
  * @param {(amount: number, currency: string) => string} [p.fmt] - formateador de dinero
  */
-export function buildClosureShareText({ warehouseName, warehouseCode, dateMs, stats, closedBy = null, fmt }) {
+export function buildClosureShareText({ warehouseName, warehouseCode, dateMs, stats, closedBy = null, fmt, cash = null, note = "" }) {
   const money = fmt || ((n, c) => `${(Number(n) || 0).toFixed(2)} ${c}`);
   const st = stats || { salesCount: 0, unitsSold: 0, totalUSD: 0, byCurrency: {}, topProducts: [] };
   let date = "";
@@ -273,6 +325,26 @@ export function buildClosureShareText({ warehouseName, warehouseCode, dateMs, st
       const d = st.byCurrency[c];
       lines.push(`• ${CLOSURE_CURR_LABEL[c]}: ${money(d.amount, c)} (${d.count} venta${d.count === 1 ? "" : "s"})`);
     }
+  }
+  if (st.byBrand?.length) {
+    lines.push("");
+    lines.push("*Por marca*");
+    for (const b of st.byBrand.slice(0, 6)) lines.push(`• ${b.brand}: ${b.units} u · ${money(b.total, "USD")}`);
+  }
+  if (cash && cash.rows && cash.rows.length) {
+    lines.push("");
+    lines.push("*Caja (efectivo)*");
+    for (const r of cash.rows) {
+      const parts = [];
+      if (r.opening) parts.push(`fondo ${money(r.opening, r.currency)}`);
+      parts.push(`esperado ${money(r.expected, r.currency)}`);
+      if (r.hasCount) parts.push(`contado ${money(r.counted, r.currency)} → ${cashDiffLabel(r, money)}`);
+      lines.push(`• ${CLOSURE_CURR_LABEL[r.currency]}: ${parts.join(" · ")}`);
+    }
+  }
+  if (note) {
+    lines.push("");
+    lines.push(`Nota: ${note}`);
   }
   if (st.topProducts?.length) {
     lines.push("");

@@ -5,9 +5,48 @@
 import { getStore } from "../store.js";
 import { getSettings, listWarehouses, verifyWarehousePin } from "../db.js";
 import { isSupabaseConfigured } from "../supabase.js";
-import { toast, icon } from "../ui.js";
+import { toast, icon, esc } from "../ui.js";
 import { canAttemptPin, recordPinAttempt, clearPinAttempts, getPinBlockRemainingSec } from "../pin-rate-limit.js";
 import { resolveExpectedPin, pinMatches, normalizePin, savePinMeta, loadPinMeta, clearPinMeta, verifyPinHash } from "../pin-utils.js";
+import { sellerModeOf } from "../seller-earnings.js";
+
+// v5.26.0: almacenes con dos vendedores, cada uno con su PIN → primero se
+// elige quién entra. Se recuerda por almacén mientras la pantalla esté abierta.
+let _chosenSlot = { whId: null, slot: null };
+const chosenSlotFor = (wh) => (wh && _chosenSlot.whId === wh.id ? _chosenSlot.slot : null);
+const sellerLabel = (wh, slot) => {
+  const n = String((slot === 2 ? wh?.sellerWeekendName : wh?.sellerName) || "").trim();
+  return n || `Vendedor ${slot}`;
+};
+// Hash sin conexión: uno por vendedor (el 1 usa la clave de siempre)
+const metaCode = (wh, slot) => (slot === 2 ? `${wh.code}#2` : wh.code);
+
+function renderSellerChooser(warehouse) {
+  return `
+    <div class="mobile-shell">
+      <div class="bg-diagonal"></div>
+      <main class="mobile-main" style="display:flex;flex-direction:column;gap:1rem">
+        <button class="flex items-center gap-1.5 text-sm text-muted pin-back" style="background:transparent;border:none;cursor:pointer;width:fit-content" data-nav="home">
+          ${icon("arrowLeft", 16)} Volver
+        </button>
+        <div class="card pin-card" style="padding:1.5rem;display:flex;flex-direction:column;gap:1rem">
+          <div class="text-center">
+            <div class="brand-logo brand-logo-lg mx-auto mb-3" style="background: var(--primary-tint); color: var(--primary)">${icon("users", 28)}</div>
+            <h2 class="text-lg font-bold">¿Quién va a vender?</h2>
+            <p class="text-xs text-muted mt-1">${esc(warehouse.code)} · ${esc(warehouse.name)} · cada uno entra con su PIN</p>
+          </div>
+          <div class="seller-pick">
+            ${[1, 2].map((slot) => `
+              <button type="button" class="seller-pick-btn" data-seller-slot="${slot}">
+                <span class="seller-pick-avatar">${esc(sellerLabel(warehouse, slot).slice(0, 1).toUpperCase())}</span>
+                <span class="seller-pick-name">${esc(sellerLabel(warehouse, slot))}</span>
+                <span class="seller-pick-sub">Vendedor ${slot}</span>
+              </button>`).join("")}
+          </div>
+        </div>
+      </main>
+    </div>`;
+}
 
 // v5.8 (móvil): puntos del PIN (mínimo 4, crecen hasta 8 si el PIN es más largo)
 function renderPinDots(filled) {
@@ -41,12 +80,16 @@ export function renderPinLoginView() {
     `;
   }
 
+  const twoPins = sellerModeOf(warehouse) === "pin";
+  const slot = chosenSlotFor(warehouse);
+  if (twoPins && !slot) return renderSellerChooser(warehouse);
+
   return `
     <div class="mobile-shell">
       <div class="bg-diagonal"></div>
       <main class="mobile-main" style="display:flex;flex-direction:column;gap:1rem">
-        <button class="flex items-center gap-1.5 text-sm text-muted pin-back" style="background:transparent;border:none;cursor:pointer;width:fit-content" data-nav="home">
-          ${icon("arrowLeft", 16)} Volver
+        <button class="flex items-center gap-1.5 text-sm text-muted pin-back" style="background:transparent;border:none;cursor:pointer;width:fit-content" ${twoPins ? "data-change-seller" : 'data-nav="home"'}>
+          ${icon("arrowLeft", 16)} ${twoPins ? "Cambiar vendedor" : "Volver"}
         </button>
 
         <form id="pin-form" class="card pin-card" style="padding:1.5rem;display:flex;flex-direction:column;gap:1rem" novalidate>
@@ -54,16 +97,18 @@ export function renderPinLoginView() {
             <div class="brand-logo brand-logo-lg mx-auto mb-3" style="background: var(--primary-tint); color: var(--primary)">
               ${icon("lock", 28)}
             </div>
-            <h2 class="text-lg font-bold">Acceso protegido</h2>
+            <h2 class="text-lg font-bold">${twoPins ? `Hola, ${esc(sellerLabel(warehouse, slot))}` : "Acceso protegido"}</h2>
             <p class="text-xs text-muted mt-1" style="max-width: 18rem; margin: 0.25rem auto 0">
-              Ingresa el PIN del almacén <strong>${warehouse.code} · ${warehouse.name}</strong> para registrar ventas y ver el inventario.
+              ${twoPins
+                ? `Ingresa <strong>tu PIN</strong> para vender en <strong>${esc(warehouse.code)} · ${esc(warehouse.name)}</strong>.`
+                : `Ingresa el PIN del almacén <strong>${warehouse.code} · ${warehouse.name}</strong> para registrar ventas y ver el inventario.`}
             </p>
           </div>
 
           ${isDemo ? `
             <div style="background: color-mix(in oklab, var(--primary) 5%, transparent); border: 1px dashed color-mix(in oklab, var(--primary) 30%, transparent); border-radius: var(--radius); padding: 0.5rem 0.75rem; text-align: center;">
               <p class="text-xs" style="color: var(--primary); margin: 0;">
-                ${icon("key", 12)} <strong>Modo demo</strong> — PIN de este almacén: <code style="background:var(--bg-soft);padding:0.125rem 0.375rem;border-radius:var(--radius-sm);font-weight:700">${warehouse.pin || "2025"}</code>
+                ${icon("key", 12)} <strong>Modo demo</strong> — PIN${twoPins ? ` de ${esc(sellerLabel(warehouse, slot))}` : " de este almacén"}: <code style="background:var(--bg-soft);padding:0.125rem 0.375rem;border-radius:var(--radius-sm);font-weight:700">${(twoPins && slot === 2 ? warehouse.seller2Pin : warehouse.pin) || "2025"}</code>
               </p>
             </div>
           ` : ''}
@@ -121,8 +166,37 @@ export function mountPinLoginView(container, navigate) {
 
   // Handle nav
   container.querySelectorAll("[data-nav]").forEach((btn) => {
-    btn.addEventListener("click", () => navigate(btn.dataset.nav));
+    btn.addEventListener("click", () => { _chosenSlot = { whId: null, slot: null }; navigate(btn.dataset.nav); });
   });
+
+  // v5.26.0: elegir vendedor / volver a elegir
+  const curWh = getStore().getState()._selectedWarehouse;
+  container.querySelectorAll("[data-seller-slot]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      _chosenSlot = { whId: curWh?.id, slot: Number(btn.dataset.sellerSlot) };
+      mountPinLoginView(container, navigate);
+    });
+  });
+  container.querySelector("[data-change-seller]")?.addEventListener("click", () => {
+    _chosenSlot = { whId: null, slot: null };
+    mountPinLoginView(container, navigate);
+  });
+
+  // Modo de vendedores al día (el admin pudo cambiarlo; la lista de inicio
+  // puede venir de antes): si cambió, se vuelve a pintar.
+  if (curWh && !curWh._sellerModeChecked && !(!isSupabaseConfigured)) {
+    listWarehouses().then((ws) => {
+      const fresh = (ws || []).find((w) => w.id === curWh.id);
+      const st = getStore().getState()._selectedWarehouse;
+      if (!fresh || !st || st.id !== curWh.id) return;
+      const changed = sellerModeOf(fresh) !== sellerModeOf(st)
+        || fresh.sellerName !== st.sellerName || fresh.sellerWeekendName !== st.sellerWeekendName;
+      getStore().setState?.({ _selectedWarehouse: { ...st, ...fresh, _sellerModeChecked: true } });
+      if (changed && getStore().getState()._selectedWarehouse?.id === curWh.id && container.isConnected) {
+        mountPinLoginView(container, navigate);
+      }
+    }).catch(() => {});
+  }
 
   if (!form) return () => {};
 
@@ -130,7 +204,8 @@ export function mountPinLoginView(container, navigate) {
   const selectedWh = getStore().getState()._selectedWarehouse;
   // v5.17: el PIN ya no viene en los datos del almacén. Para el auto-envío
   // al completar los dígitos se usa la longitud guardada del último login.
-  const pinMeta = loadPinMeta(selectedWh?.code);
+  const selSlot = sellerModeOf(selectedWh) === "pin" ? chosenSlotFor(selectedWh) : null;
+  const pinMeta = selectedWh ? loadPinMeta(metaCode(selectedWh, selSlot)) : null;
   // Si el almacén tiene PIN propio, se envía solo al completar los dígitos
   const autoLen = pinMeta?.len || normalizePin(selectedWh?.pin).length || 0;
 
@@ -222,14 +297,21 @@ export function mountPinLoginView(container, navigate) {
     //   · Modo demo (sin Supabase) → comparación local, como siempre.
     try {
       const isDemo = !isSupabaseConfigured;
-      const cachedMeta = loadPinMeta(warehouse.code);
+      const slot = sellerModeOf(warehouse) === "pin" ? (chosenSlotFor(warehouse) || 1) : null;
+      const cachedMeta = loadPinMeta(metaCode(warehouse, slot));
       let rpcFailMsg = ""; // v5.23.3: motivo real si la validación en el servidor falla
-      const enterWarehouse = (whData) => {
+      const enterWarehouse = (whData, sellerName) => {
         clearPinAttempts(warehouse.id);
+        const merged = { ...warehouse, ...(whData || {}) };
+        const name = slot ? (String(sellerName || "").trim() || sellerLabel(merged, slot)) : "";
+        _chosenSlot = { whId: null, slot: null };
         const empleado = {
           id: `pin-${Date.now()}`,
           email: "",
-          displayName: `Empleado · ${warehouse.code}`,
+          // v5.26.0: con dos vendedores, la venta lleva el nombre de quien entró
+          displayName: slot ? name : `Empleado · ${warehouse.code}`,
+          sellerSlot: slot,
+          sellerName: name || null,
           role: "empleado_pin",
           active: true,
           warehouseId: (whData || warehouse).id,
@@ -247,7 +329,7 @@ export function mountPinLoginView(container, navigate) {
       if (isDemo) {
         // Modo demo: los almacenes son locales y traen su PIN
         const settings = await getSettings();
-        const expectedPin = resolveExpectedPin(warehouse, settings);
+        const expectedPin = slot === 2 ? normalizePin(warehouse.seller2Pin) : resolveExpectedPin(warehouse, settings);
         if (!expectedPin) {
           errorBox.textContent = "Este almacén de prueba no tiene PIN configurado.";
           errorBox.classList.remove("hidden");
@@ -277,11 +359,11 @@ export function mountPinLoginView(container, navigate) {
       // --- Con Supabase: primero la RPC (con conexión) ---
       if (navigator.onLine !== false) {
         try {
-          const res = await verifyWarehousePin(warehouse.code, pin);
+          const res = await verifyWarehousePin(warehouse.code, pin, slot);
           if (res?.ok) {
-            // Hash para revalidar SIN conexión la próxima vez
-            savePinMeta(warehouse.code, { salt: res.pinSalt, hash: res.pinHash, len: res.pinLength });
-            enterWarehouse(res.warehouse);
+            // Hash para revalidar SIN conexión la próxima vez (uno por vendedor)
+            savePinMeta(metaCode(warehouse, slot), { salt: res.pinSalt, hash: res.pinHash, len: res.pinLength });
+            enterWarehouse(res.warehouse, res.sellerName);
             return;
           }
           if (res?.reason === "rate_limited") {
@@ -305,7 +387,9 @@ export function mountPinLoginView(container, navigate) {
             return;
           }
           if (res?.reason === "no_pin_configured") {
-            errorBox.textContent = "Este almacén no tiene PIN configurado. Defínelo en Admin → Almacenes (o el PIN global en Ajustes).";
+            errorBox.textContent = slot === 2
+              ? `${sellerLabel(warehouse, 2)} aún no tiene PIN. El administrador lo pone en Admin → Almacenes.`
+              : "Este almacén no tiene PIN configurado. Defínelo en Admin → Almacenes (o el PIN global en Ajustes).";
             errorBox.classList.remove("hidden");
             submit.disabled = false;
             submit._submitting = false;
@@ -345,7 +429,7 @@ export function mountPinLoginView(container, navigate) {
 
       // Compatibilidad mientras se ejecuta la migración v5.17: si los datos
       // del almacén aún traen el PIN (sesión admin / caché antigua), se usa.
-      const legacyPin = normalizePin(warehouse.pin) || normalizePin((await getSettings())?.pinCode);
+      const legacyPin = slot === 2 ? "" : (normalizePin(warehouse.pin) || normalizePin((await getSettings())?.pinCode));
       if (legacyPin && pinMatches(pin, legacyPin)) {
         enterWarehouse();
         return;

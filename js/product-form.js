@@ -103,7 +103,17 @@ export function findBrand(input, list = []) {
 
 // ---------------------------------------------------------------- Precios por caja
 
-const TIER_KEYS = ["minBoxes", "maxBoxes", "pricePerUnit", "vendorCommission", "gestorCommission"];
+const TIER_KEYS = ["minBoxes", "maxBoxes", "pricePerUnit", "vendorCommission", "gestorCommission", "gestorCommissionPercent"];
+
+// v5.26.0: la comisión del gestor de un tramo puede ser un PORCENTAJE del
+// precio ("3%"): se guarda en gestorCommissionPercent (y gestorCommission = 0).
+const PCT_RE = /%\s*$/;
+/** "3%" → 3 · "3 %" → 3 · "0.5" → null (no es porcentaje) */
+export function parsePercent(value) {
+  const s = String(value ?? "").trim();
+  if (!PCT_RE.test(s)) return null;
+  return parseDecimal(s.replace(PCT_RE, ""));
+}
 const ROW_FIELDS = ["minBoxes", "pricePerUnit", "vendorCommission", "gestorCommission"];
 
 /** Tramos guardados → filas editables (texto), ordenadas. El 1.º empieza en 1 caja. */
@@ -120,7 +130,9 @@ export function tiersToRows(tiers) {
         minBoxes: i === 0 ? "1" : numberToInput(t.minBoxes),
         pricePerUnit: numberToInput(t.pricePerUnit),
         vendorCommission: numberToInput(t.vendorCommission),
-        gestorCommission: numberToInput(t.gestorCommission),
+        gestorCommission: Number(t.gestorCommissionPercent) > 0
+          ? `${numberToInput(t.gestorCommissionPercent)}%`
+          : numberToInput(t.gestorCommission),
         extra,
       };
     });
@@ -172,9 +184,17 @@ export function rowsToTiers(rows = []) {
       return v;
     };
     const vendorCommission = commission("vendorCommission");
-    const gestorCommission = commission("gestorCommission");
+    const gPct = PCT_RE.test(String(row?.gestorCommission ?? "").trim()) ? parsePercent(row.gestorCommission) : undefined;
+    let gestorCommission = 0;
+    let gestorCommissionPercent = null;
+    if (gPct === undefined) gestorCommission = commission("gestorCommission");
+    else if (gPct === null || Number.isNaN(gPct)) err("gestorCommission", "Escribe el porcentaje así: 3%");
+    else if (gPct < 0 || gPct > 100) err("gestorCommission", "El porcentaje va de 0% a 100%");
+    else gestorCommissionPercent = gPct;
 
-    out.push({ ...(row?.extra || {}), minBoxes: min, maxBoxes: null, pricePerUnit: price, vendorCommission, gestorCommission });
+    const tier = { ...(row?.extra || {}), minBoxes: min, maxBoxes: null, pricePerUnit: price, vendorCommission, gestorCommission };
+    if (gestorCommissionPercent > 0) tier.gestorCommissionPercent = gestorCommissionPercent;
+    out.push(tier);
     if (Number.isInteger(min) && min > prevMin) prevMin = min;
   });
   if (errors.length) return { tiers: [], errors };
@@ -204,10 +224,12 @@ export function tierPerBox(row, unitsPerBox) {
     const n = parseDecimal(v);
     return n > 0 ? n : 0;
   };
+  const pct = parsePercent(row?.gestorCommission);
   return {
     price: round2(price * units),
     vendor: round2(num(row.vendorCommission) * units),
-    gestor: round2(num(row.gestorCommission) * units),
+    gestor: pct > 0 ? round2(price * units * pct / 100) : round2(num(row.gestorCommission) * units),
+    ...(pct > 0 ? { gestorPct: pct } : {}),
   };
 }
 

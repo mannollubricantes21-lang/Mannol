@@ -1,7 +1,9 @@
 // =====================================================
 // Comisión del vendedor — lo que lleva ganado (v5.14.0)
 // =====================================================
-// Regla del negocio: el vendedor gana un MONTO FIJO por cada producto vendido,
+// v5.26.0: por defecto el vendedor gana un monto POR VENTA (js/vendor-rule.js:
+// desde 25 USD → 1 USD, menos → 0.40 USD). Sin esa regla (apagada por el admin):
+// el vendedor gana un MONTO FIJO por cada producto vendido,
 // que el admin configura en cada producto («Comisión del vendedor (por unidad)»,
 // en USD o MN). Los gestores cobran aparte (porcentaje de la venta).
 //
@@ -28,7 +30,37 @@ const MONTHS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const round2 = (n) => Math.round((num(n) + Number.EPSILON) * 100) / 100;
 
-export const SHIFT_LABELS = { all: "Vendedor", weekday: "Lunes a viernes", weekend: "Sábado y domingo" };
+export const SHIFT_LABELS = {
+  all: "Vendedor", weekday: "Lunes a viernes", weekend: "Sábado y domingo",
+  seller1: "Vendedor 1", seller2: "Vendedor 2", // v5.26.0: cada uno con su PIN
+};
+
+/**
+ * v5.26.0 — cómo se reparten las ventas del almacén:
+ *   "one"     una persona
+ *   "weekend" dos personas: lunes a viernes / sábado y domingo (por el día)
+ *   "pin"     dos personas, cada una entra con SU PIN (por quién registró)
+ */
+export function sellerModeOf(warehouse) {
+  const m = warehouse && warehouse.sellerMode;
+  if (m === "one" || m === "weekend" || m === "pin") {
+    // Base antigua sin la columna nueva pero con el «dos turnos» marcado
+    if (m === "one" && warehouse.sellerWeekendSplit) return "weekend";
+    return m;
+  }
+  return warehouse && warehouse.sellerWeekendSplit ? "weekend" : "one";
+}
+
+/** Vendedor (1 o 2) que registró una venta, en almacenes con dos PIN. */
+export function saleSellerSlot(sale, warehouse) {
+  const slot = Number(sale && sale.sellerSlot);
+  if (slot === 1 || slot === 2) return slot;
+  // Ventas sin el dato (SQL sin ejecutar): por el nombre con que se registró
+  const n2 = String((warehouse && warehouse.sellerWeekendName) || "").trim().toLowerCase();
+  const un = String((sale && sale.userName) || "").trim().toLowerCase();
+  if (n2 && un && (un === n2 || un.endsWith(`· ${n2}`))) return 2;
+  return 1;
+}
 
 /** ¿Sábado o domingo? (hora local del equipo, igual que el resto de la app) */
 export function isWeekendDay(ms) {
@@ -36,21 +68,23 @@ export function isWeekendDay(ms) {
   return d === 0 || d === 6;
 }
 
-/** ¿El almacén tiene dos vendedores (lunes a viernes + fin de semana)? */
+/** ¿El almacén tiene dos vendedores? (por días o cada uno con su PIN) */
 export function hasShiftSplit(warehouse) {
-  return !!(warehouse && warehouse.sellerWeekendSplit);
+  return sellerModeOf(warehouse) !== "one";
 }
 
 /** Turno al que pertenece una venta: "all" (una persona), "weekday" o "weekend". */
-export function shiftKeyFor(ms, warehouse) {
-  if (!hasShiftSplit(warehouse)) return "all";
+export function shiftKeyFor(ms, warehouse, sale = null) {
+  const mode = sellerModeOf(warehouse);
+  if (mode === "one") return "all";
+  if (mode === "pin") return saleSellerSlot(sale, warehouse) === 2 ? "seller2" : "seller1";
   return isWeekendDay(ms) ? "weekend" : "weekday";
 }
 
 /** Nombre configurado para el turno (vacío si el admin no lo puso). */
 export function shiftPersonName(key, warehouse) {
   if (!warehouse) return "";
-  const n = key === "weekend" ? warehouse.sellerWeekendName : warehouse.sellerName;
+  const n = (key === "weekend" || key === "seller2") ? warehouse.sellerWeekendName : warehouse.sellerName;
   return String(n || "").trim();
 }
 
@@ -89,12 +123,19 @@ export function itemVendorCommission(item, sale) {
     }
     return out;
   }
+  // v5.26.0: comisión POR VENTA (regla del admin) — viaja en el 1.er ítem
+  if (item.vendorSaleCommission != null) {
+    out.configured = true;
+    const v = round2(num(item.vendorSaleCommission));
+    if (String(item.vendorSaleCommissionCurrency || "USD").toUpperCase() === "MN") out.mn += v;
+    else out.usd += v;
+  }
   if (item.vendorCommission == null) return out;
   out.configured = true;
   const amount = round2(num(item.vendorCommission) * out.units);
   // Sin moneda → MN (mismo criterio que sumCartCommissions al vender)
-  if (String(item.vendorCommissionCurrency || "MN").toUpperCase() === "USD") out.usd = amount;
-  else out.mn = amount;
+  if (String(item.vendorCommissionCurrency || "MN").toUpperCase() === "USD") out.usd = round2(out.usd + amount);
+  else out.mn = round2(out.mn + amount);
   return out;
 }
 
@@ -157,7 +198,8 @@ function emptyShift(key, warehouse, split) {
 export function computeSellerEarnings(sales, { warehouse = null, now = Date.now(), offset = 0 } = {}) {
   const range = monthRange(now, offset);
   const split = hasShiftSplit(warehouse);
-  const keys = split ? ["weekday", "weekend"] : ["all"];
+  const mode = sellerModeOf(warehouse);
+  const keys = mode === "pin" ? ["seller1", "seller2"] : split ? ["weekday", "weekend"] : ["all"];
   const shifts = {};
   keys.forEach((k) => { shifts[k] = emptyShift(k, warehouse, split); });
   const t0 = startOfDay(now);
@@ -167,7 +209,7 @@ export function computeSellerEarnings(sales, { warehouse = null, now = Date.now(
     const at = num(s && s.createdAt);
     if (!at || at < range.from || at >= range.to) continue;
     if (s.status !== "COMPLETADA" && s.status !== "PENDIENTE") continue;
-    const sh = shifts[shiftKeyFor(at, warehouse)];
+    const sh = shifts[shiftKeyFor(at, warehouse, s)];
     const c = saleVendorCommission(s);
     if (s.status === "PENDIENTE") {
       sh.pending.usd += c.usd; sh.pending.mn += c.mn; sh.pending.sales++;
@@ -211,7 +253,8 @@ export function computeSellerEarnings(sales, { warehouse = null, now = Date.now(
     shifts: list,
     total,
     isCurrent: offset === 0,
-    todayKey: offset === 0 ? shiftKeyFor(now, warehouse) : null,
+    mode,
+    todayKey: offset === 0 && mode === "weekend" ? shiftKeyFor(now, warehouse) : null,
   };
 }
 
@@ -250,12 +293,13 @@ function prevLine(prev, key, prevLoading) {
   return `<div class="earn-line earn-prev">Mes pasado (${esc(prev.monthName)}): ${value}</div>`;
 }
 
-function shiftBlock(sh, cur, prev, prevLoading) {
-  const isToday = cur.split && cur.todayKey === sh.key;
+function shiftBlock(sh, cur, prev, prevLoading, mySlot = null) {
+  const isMine = cur.mode === "pin" && mySlot && sh.key === `seller${mySlot}`;
+  const isToday = (cur.split && cur.todayKey === sh.key) || isMine;
   const head = cur.split
     ? `<div class="earn-shift-head">
          <span class="earn-shift-days">${esc(sh.label)}</span>
-         ${isToday ? `<span class="earn-today-pill">Hoy</span>` : ""}
+         ${isToday ? `<span class="earn-today-pill">${isMine ? "Tú" : "Hoy"}</span>` : ""}
        </div>
        ${sh.name ? `<div class="earn-shift-name">${esc(sh.name)}</div>` : ""}`
     : (sh.name ? `<div class="earn-shift-name">${esc(sh.name)}</div>` : "");
@@ -300,7 +344,7 @@ function detailsBlock(cur, open) {
  * @param {ReturnType<typeof computeSellerEarnings>|null} prev  mes anterior (null si no cargó)
  * @param {{open?: boolean, prevLoading?: boolean}} [opts]
  */
-export function renderSellerEarningsCard(cur, prev, { open = false, prevLoading = false } = {}) {
+export function renderSellerEarningsCard(cur, prev, { open = false, prevLoading = false, ruleNote = "", mySlot = null } = {}) {
   if (!cur) return "";
   const title = cur.split ? "Lo ganado este mes" : "Lo que llevas ganado";
   const unconfigured = cur.total.sales > 0 && !cur.total.usd && !cur.total.mn;
@@ -312,11 +356,11 @@ export function renderSellerEarningsCard(cur, prev, { open = false, prevLoading 
       </div>
       <div class="earn-body">
         <div class="earn-shifts">
-          ${cur.shifts.map((sh) => shiftBlock(sh, cur, prev, prevLoading)).join("")}
+          ${cur.shifts.map((sh) => shiftBlock(sh, cur, prev, prevLoading, mySlot)).join("")}
         </div>
         ${unconfigured ? `<p class="earn-hint">${icon("alertTriangle", 12)} Los productos vendidos aún no tienen comisión de vendedor configurada. Avísale al administrador.</p>` : ""}
         ${detailsBlock(cur, open)}
-        <p class="earn-note">${icon("info", 11)} Monto fijo por cada producto vendido, según lo que configura el administrador. No cuentan las ventas canceladas.${cur.split ? " Cada venta cuenta para quien trabaja ese día." : ""}</p>
+        <p class="earn-note">${icon("info", 11)} ${esc(ruleNote || "Según lo que configura el administrador.")} No cuentan las ventas canceladas.${cur.mode === "pin" ? " Cada venta cuenta para quien entró con su PIN." : cur.split ? " Cada venta cuenta para quien trabaja ese día." : ""}</p>
       </div>
     </section>`;
 }

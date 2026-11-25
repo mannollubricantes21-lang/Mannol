@@ -57,6 +57,11 @@ export const DEMO_WAREHOUSES = [
     hasPin: true,
     sellerCommissionPercent: 3,
     sellerCommissionCurrency: "USD",
+    // v5.26.0: dos vendedores, cada uno con su PIN
+    sellerMode: "pin",
+    sellerName: "Marta",
+    sellerWeekendName: "Pedro",
+    seller2Pin: "4040",
     createdAt: Date.now() - 86400000 * 15,
   },
 ];

@@ -1,5 +1,59 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.26.0 (2026-11-25) — Comisión por venta y dos vendedores con su PIN
+
+> ⚠️ Ejecuta una vez en Supabase `vendedores-v5.26.sql` (es la sección 9 de
+> `instalar.sql`). Sin él, la regla funciona con los valores por defecto,
+> pero no se puede cambiar ni activar los dos PIN.
+
+- **El vendedor cobra por VENTA, no por pomo**: desde 25 USD → 1 USD; menos
+  de 25 USD → 0.40 USD (aunque la venta lleve 3 o 4 pomos). Se cambia en
+  Admin → Comisiones vendedores («Cuánto gana el vendedor por cada venta»).
+  Se puede apagar y volver a la comisión de cada producto. Las ventas ya
+  hechas guardan lo que valía al venderse.
+- **Ventas por caja**: siguen pagando lo de cada tramo del producto. Nuevo: la
+  comisión del **gestor** de un tramo puede ser un **porcentaje** («3%»),
+  p. ej. desde 10 cajas = 3 % del precio de la caja.
+- **Dos vendedores con su PIN** (Admin → Almacenes → «Dos personas, cada una
+  con su PIN»): al entrar se elige quién vende («¿Quién va a vender?») y cada
+  uno pone su PIN. La venta guarda quién la hizo; cada vendedor ve solo lo
+  que lleva ganado, y en Comisiones vendedores salen por separado.
+  Se mantiene la opción de dos personas por días (L-V / fin de semana).
+
+## v5.25.0 (2026-11-25) — Apariencia por almacén
+
+> Sin SQL nuevo. Se guarda en cada teléfono, por almacén.
+
+- **Botón 🎨 en la cabecera del almacén** (y «Apariencia de …» en el menú):
+  - **Color**: MANNOL (verde), Dorado, Azul, Rojo, Violeta, Naranja.
+  - **Fondo**: como la app, oscuro o claro.
+  - **Tamaño de letra**: pequeña, normal, grande, muy grande (escala toda la app).
+  - **Catálogo de ventas**: lista compacta o **tarjetas** estilo tienda.
+  - Vista previa al momento; Cancelar deshace, Restablecer vuelve a lo normal.
+- **Tarjetas del catálogo**: foto, «Más vendido», «Quedan N» / «Agotado»,
+  nombre, marca · viscosidad · litros, precio grande y botón «+ Agregar»
+  (cambia a − 1 + al añadir). 2 columnas en el teléfono, 3–4 en PC.
+- Al salir del almacén se recupera la apariencia normal de la app.
+
+## v5.24.0 (2026-11-25) — Caja del día: fondo inicial, arqueo y marcas
+
+> ⚠️ Ejecuta una vez en Supabase el SQL de caja (sección 8 de `instalar.sql`,
+> también suelto como `caja-v5.24.sql`). Sin él la caja se cierra igual,
+> pero el fondo y el conteo no se guardan en la nube.
+
+- **Pestaña Caja en 3 pasos**: 1) **fondo** con el que empieza el día (USD /
+  MN / EUR, «Abrir caja»); 2) **ventas de hoy** por moneda y **por marca**;
+  3) **contar el efectivo**: «Debería haber» (fondo + lo cobrado en efectivo
+  de esa moneda; las transferencias no cuentan) frente a «Hay», con
+  **Sobran / Faltan / Cuadra** al momento, y una **nota** para explicar la
+  diferencia (p. ej. una venta que no se registró o no se subió).
+- Aviso si hay ventas en este equipo sin subir antes de cerrar.
+- El resumen por WhatsApp incluye marcas, fondo, conteo y nota.
+- Admin → Cierres de caja: columnas **Fondo** y **Arqueo** (sobrante/faltante
+  y nota), cajas «Abiertas» sin contar como cierre, y CSV con esos datos.
+- Corregido: en el cierre, las ventas cobradas en MN o EUR en una sola moneda
+  sumaban el total en USD como si fuera esa moneda.
+
 ## v5.23.4 (2026-11-25) — Iniciar sesión ya no se queda en «Entrando…»
 
 - `subscribeAuth` consultaba la sesión y el perfil DENTRO del aviso

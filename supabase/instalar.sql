@@ -3253,3 +3253,198 @@ alter function public.verify_warehouse_pin(text, text) set search_path = public,
 alter function public.recompute_pin_hash() set search_path = public, extensions;
 alter function public.create_admin_user(text, text, text, text, text, uuid[]) set search_path = public, extensions;
 alter function public.change_user_password(uuid, text) set search_path = public, extensions;
+
+
+-- ############################################################
+-- ## 8 · Cierre de caja: fondo inicial, arqueo y ventas por marca (v5.24)
+-- ############################################################
+alter table public.daily_closures
+  add column if not exists opening_float jsonb,          -- fondo con el que abre el día {USD, MN, EUR}
+  add column if not exists opened_at timestamptz,
+  add column if not exists opened_by_name text,
+  add column if not exists counted_cash jsonb,           -- efectivo contado al cerrar {USD, MN, EUR}
+  add column if not exists cash_difference jsonb,        -- contado − esperado (+ sobra / − falta)
+  add column if not exists cash_note text,               -- explicación (ej. venta que no se subió)
+  add column if not exists by_brand jsonb not null default '[]'::jsonb,
+  add column if not exists closed boolean not null default true;  -- false = caja abierta (solo fondo)
+
+
+-- ############################################################
+-- ## 9 · v5.26 · Comisión por venta + dos vendedores con PIN propio
+-- ############################################################
+-- Re-ejecutable. Hace tres cosas:
+--   a) Regla de comisión del vendedor POR VENTA (Admin → Comisiones vendedores).
+--   b) Almacenes con dos vendedores que entran cada uno con SU PIN.
+--   c) Cada venta guarda qué vendedor la hizo (seller_slot).
+
+-- a) Regla: venta desde 25 USD → 1 USD; menos → 0.40 USD (editable en la app)
+alter table public.settings
+  add column if not exists vendor_sale_rule jsonb not null
+    default '{"enabled": true, "threshold": 25, "above": 1, "below": 0.4}'::jsonb;
+grant select (vendor_sale_rule) on table public.settings to anon;
+
+-- b) Modo de vendedores del almacén:
+--    one = una persona · weekend = L-V y fin de semana · pin = dos, cada uno con su PIN
+alter table public.warehouses
+  add column if not exists seller_mode text not null default 'one',
+  add column if not exists seller2_pin text,
+  add column if not exists seller2_pin_salt text,
+  add column if not exists seller2_pin_hash text;
+do $$
+begin
+  alter table public.warehouses
+    add constraint warehouses_seller_mode_chk check (seller_mode in ('one', 'weekend', 'pin'));
+exception when duplicate_object then null;
+end $$;
+update public.warehouses set seller_mode = 'weekend'
+  where seller_weekend_split and seller_mode = 'one';
+comment on column public.warehouses.seller_mode is
+  'v5.26: one = una persona; weekend = dos por días (seller_name L-V, seller_weekend_name S-D); pin = dos con PIN propio (vendedor 1: seller_name + pin; vendedor 2: seller_weekend_name + seller2_pin).';
+-- Las sesiones PIN leen el modo (nunca el PIN)
+grant select (seller_mode) on table public.warehouses to anon;
+
+-- c) Qué vendedor registró la venta (1 o 2) en almacenes con dos PIN
+alter table public.sales add column if not exists seller_slot smallint;
+
+-- Hash del PIN del vendedor 2 (igual que el del almacén)
+create or replace function public.recompute_seller2_pin_hash()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_pin text := nullif(btrim(coalesce(new.seller2_pin, '')), '');
+  v_salt text := nullif(new.seller2_pin_salt, '');
+begin
+  if v_pin is null then
+    new.seller2_pin_salt := null;
+    new.seller2_pin_hash := null;
+  else
+    if v_salt is null then
+      v_salt := encode(gen_random_bytes(8), 'hex');
+    end if;
+    new.seller2_pin_salt := v_salt;
+    new.seller2_pin_hash := encode(digest(v_pin || v_salt, 'sha256'), 'hex');
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_warehouses_seller2_pin_hash on public.warehouses;
+create trigger trg_warehouses_seller2_pin_hash
+  before insert or update of seller2_pin, seller2_pin_salt on public.warehouses
+  for each row execute function public.recompute_seller2_pin_hash();
+
+update public.warehouses set seller2_pin = seller2_pin
+  where seller2_pin is not null and seller2_pin_hash is null;
+
+-- Validar el PIN: ahora sabe de qué vendedor es (p_seller = 1 o 2)
+drop function if exists public.verify_warehouse_pin(text, text);
+create or replace function public.verify_warehouse_pin(p_code text, p_pin text, p_seller int default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  wh public.warehouses%rowtype;
+  v_pin text;
+  v_source text;
+  v_salt text;
+  v_hash text;
+  v_ok boolean := false;
+  v_fails int := 0;
+  v_retry_sec int := 0;
+  v_slot int := null;
+  v_seller_name text := null;
+begin
+  if p_code is null or p_pin is null or btrim(p_pin) = '' then
+    return jsonb_build_object('ok', false, 'reason', 'wrong_pin');
+  end if;
+
+  select * into wh from public.warehouses where lower(code) = lower(btrim(p_code)) limit 1;
+  if wh.id is null then
+    return jsonb_build_object('ok', false, 'reason', 'warehouse_not_found');
+  end if;
+
+  select count(*) into v_fails from public.pin_attempts
+    where warehouse_id = wh.id and ok = false and attempted_at > now() - interval '10 minutes';
+  if v_fails >= 5 then
+    select greatest(600 - extract(epoch from (now() - max(attempted_at)))::int, 1) into v_retry_sec
+      from public.pin_attempts
+      where warehouse_id = wh.id and ok = false and attempted_at > now() - interval '10 minutes';
+    return jsonb_build_object('ok', false, 'reason', 'rate_limited', 'retryAfterSec', greatest(v_retry_sec, 1));
+  end if;
+
+  if wh.seller_mode = 'pin' then
+    v_slot := case when p_seller = 2 then 2 else 1 end;
+    v_seller_name := nullif(btrim(coalesce(case when v_slot = 2 then wh.seller_weekend_name else wh.seller_name end, '')), '');
+  end if;
+
+  if v_slot = 2 then
+    -- Vendedor 2: solo su PIN (sin PIN global de respaldo)
+    v_pin := nullif(btrim(coalesce(wh.seller2_pin, '')), '');
+    v_source := 'seller2';
+    v_salt := wh.seller2_pin_salt;
+    v_hash := wh.seller2_pin_hash;
+  else
+    v_pin := nullif(btrim(coalesce(wh.pin, '')), '');
+    v_source := 'warehouse';
+    v_salt := wh.pin_salt;
+    v_hash := wh.pin_hash;
+    if v_pin is null then
+      select nullif(btrim(coalesce(pin_code, '')), ''), pin_salt, pin_hash
+        into v_pin, v_salt, v_hash
+        from public.settings where id = 'global';
+      v_source := 'global';
+    end if;
+  end if;
+  if v_pin is null then
+    return jsonb_build_object('ok', false, 'reason', 'no_pin_configured', 'seller', v_slot);
+  end if;
+
+  if v_hash is not null and v_salt is not null then
+    v_ok := (v_hash = encode(digest(btrim(p_pin) || v_salt, 'sha256'), 'hex'));
+  else
+    v_ok := (btrim(p_pin) = v_pin);
+  end if;
+
+  insert into public.pin_attempts (warehouse_id, warehouse_code, ok, device)
+    values (wh.id, wh.code, v_ok, null);
+
+  if not v_ok then
+    return jsonb_build_object('ok', false, 'reason', 'wrong_pin');
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'pinSource', v_source,
+    'pinLength', length(v_pin),
+    'pinSalt', v_salt,
+    'pinHash', v_hash,
+    'seller', v_slot,
+    'sellerName', v_seller_name,
+    'warehouse', jsonb_build_object(
+      'id', wh.id,
+      'name', wh.name,
+      'code', wh.code,
+      'address', wh.address,
+      'phone', wh.phone,
+      'active', wh.active,
+      'seller_commission_percent', wh.seller_commission_percent,
+      'seller_commission_currency', wh.seller_commission_currency,
+      'seller_weekend_split', wh.seller_weekend_split,
+      'seller_mode', wh.seller_mode,
+      'seller_name', wh.seller_name,
+      'seller_weekend_name', wh.seller_weekend_name,
+      'created_at', wh.created_at
+    )
+  );
+end;
+$$;
+
+grant execute on function public.verify_warehouse_pin(text, text, int) to anon, authenticated;
+
+-- Que la API vea la función nueva al momento
+notify pgrst, 'reload schema';

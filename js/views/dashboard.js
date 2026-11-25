@@ -3,7 +3,9 @@
 // Includes all views: dashboard, sales, stock, managers, commissions, transfers, admin, catalog, users, settings, history
 // =====================================================
 
-import { getStore } from "../store.js";
+import { getStore, applyTheme } from "../store.js";
+import { getAppearance, saveAppearance, applyAppearance } from "../appearance.js";
+import { openAppearanceDialog } from "./appearance-dialog.js";
 import { APP_LABEL } from "../version.js";
 import { subscribeSales, listWarehouses, listManagers, listCards, listCategories, listSalesInRange } from "../db.js";
 import { computeClosureStats, buildClosureShareText } from "../sales-stats.js"; // v5.18.0: «Cierre de hoy»
@@ -181,9 +183,16 @@ export function mountDashboardView(container, navigate) {
       if (window.__openGlobalSearch) window.__openGlobalSearch();
     });
     container.querySelector("#theme-btn").addEventListener("click", () => {
-      const current = store.getState().theme;
+      const current = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : store.getState().theme;
       const next = current === 'dark' ? 'light' : 'dark';
       store.setTheme(next);
+      // v5.25.0: si el almacén fija su fondo, el botón lo cambia y lo recuerda
+      const wh = store.getState().currentWarehouse;
+      if (wh) {
+        const ap = getAppearance(wh.id);
+        if (ap.background !== "app") saveAppearance(wh.id, { ...ap, background: next });
+        applyAppearance(getAppearance(wh.id), applyTheme, next);
+      }
       renderShell();
     });
 
@@ -296,6 +305,7 @@ export function mountDashboardView(container, navigate) {
           ` : ''}
         </div>
         <div class="drawer-footer">
+          ${warehouse ? `<button class="drawer-item" id="appearance-btn" style="margin-bottom:0.25rem">${icon("palette", 16)}<span style="flex:1;text-align:left">Apariencia de ${esc(warehouse.name)}</span></button>` : ""}
           ${canFullscreen() ? `<button class="drawer-item" id="fullscreen-btn" style="margin-bottom:0.25rem">${icon("smartphone", 16)}<span style="flex:1;text-align:left">${document.fullscreenElement ? "Salir de pantalla completa" : "Pantalla completa (kiosko)"}</span></button>` : ""}
           <button class="btn btn-ghost btn-block" id="logout-btn" aria-label="Cerrar sesión" style="justify-content:flex-start;color:var(--danger)">${icon("logout", 14)} Cerrar sesión</button>
           <p class="text-xs text-muted text-center mt-2" style="margin-top:0.5rem">${esc(APP_LABEL)} · Acceso por PIN de almacén</p>
@@ -312,6 +322,10 @@ export function mountDashboardView(container, navigate) {
       </aside>
     `;
 
+    dc.querySelector("#appearance-btn")?.addEventListener("click", () => {
+      closeDrawer();
+      openAppearanceDialog(store.getState().currentWarehouse, () => renderShell());
+    });
     dc.querySelector("#fullscreen-btn")?.addEventListener("click", () => {
       toggleFullscreen();
       closeDrawer();

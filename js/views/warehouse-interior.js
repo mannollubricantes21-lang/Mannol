@@ -7,7 +7,9 @@ import { getStore } from "../store.js";
 import { hasPersistedSupabaseSession } from "../supabase.js";
 import { subscribeSales, subscribeStock, listProducts, listWarehouses, listAllStockAcrossWarehouses, listStockForProductInAllWarehouses, createTransferRequest, listTransferRequests, saveDailyClosure, listDailyClosures, listSalesInRange } from "../db.js";
 import { computeSellerEarnings, renderSellerEarningsCard, monthRange } from "../seller-earnings.js";
-import { computeClosureStats, closureDateKey, validateTransferRequest, buildClosureShareText, suggestRestock, buildRestockText } from "../sales-stats.js";
+import { vendorRuleLabel } from "../vendor-rule.js";
+import { computeClosureStats, closureDateKey, validateTransferRequest, buildClosureShareText, suggestRestock, buildRestockText, computeCashCount, cashDiffLabel, CASH_CURRENCIES } from "../sales-stats.js";
+import { getPendingCount } from "../offline-sync.js";
 import { formatMoney, formatDate } from "../currency.js";
 import { sortOutOfStockLast } from "../catalog-facets.js";
 import { icon, esc, toast, showModal, closeModal, confirmDialog, copyText, openWhatsApp, warehouseColor } from "../ui.js";
@@ -29,6 +31,14 @@ export function exitWarehouse(store, warehouse, navigate) {
     }
     navigate("home");
   });
+}
+
+// v5.24.0: «Sobran / Faltan / Cuadra» con color
+function diffHtml(row) {
+  if (!row || !row.hasCount) return "";
+  const txt = cashDiffLabel(row, formatMoney);
+  const color = Math.abs(row.diff) < 0.01 ? "var(--primary)" : row.diff > 0 ? "var(--info, #2777a8)" : "var(--danger)";
+  return `<strong style="color:${color}">${esc(txt)}</strong>`;
 }
 
 export function mountWarehouseInterior(container, navigate) {
@@ -55,6 +65,14 @@ export function mountWarehouseInterior(container, navigate) {
   let prevFrom = null;          // mes cargado (si la app queda abierta al cambiar de mes)
   let earnOpen = false;         // «Ver detalle por producto» abierto
   let restockOpen = false;      // v5.21.0: «Pedido sugerido» desplegado
+  // v5.24.0: caja del día (fondo inicial + arqueo). Lo escrito se conserva
+  // entre repintados; el fondo también se guarda en este equipo por si no hay red.
+  let cashCount = { USD: "", MN: "", EUR: "" };
+  let cashNote = "";
+  let cashLoadedFor = null;     // id del cierre del que se cargó lo contado
+  let editFloat = false;
+  const floatKey = (k) => `mannol-fondo-${warehouse?.id}-${k}`;
+  const readLocalFloat = (k) => { try { return JSON.parse(localStorage.getItem(floatKey(k)) || "null"); } catch { return null; } };
   // v5.22.0: sección visible en el teléfono (Hoy / Inventario / Caja)
   let section = "hoy";
   try { section = sessionStorage.getItem("mannol-wi-section") || "hoy"; } catch {}
@@ -253,13 +271,36 @@ export function mountWarehouseInterior(container, navigate) {
     const todayFrom = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate()).getTime();
     const todayStats = computeClosureStats(sales, { fromMs: todayFrom, toMs: todayFrom + 86400000 });
     const todayKey = closureDateKey(Date.now());
-    const todayClosed = recentClosures.find((c) => c.closureDate === todayKey);
+    // v5.24.0: un registro del día puede ser solo la APERTURA (closed = false)
+    const todayRow = recentClosures.find((c) => c.closureDate === todayKey) || null;
+    const todayClosed = todayRow && todayRow.closed !== false ? todayRow : null;
+    const openingFloat = (todayRow && todayRow.openingFloat) || readLocalFloat(todayKey) || null;
+    if (todayRow && todayRow.id !== cashLoadedFor) {
+      cashLoadedFor = todayRow.id;
+      if (todayRow.countedCash) cashCount = { USD: "", MN: "", EUR: "", ...Object.fromEntries(Object.entries(todayRow.countedCash).map(([k, v]) => [k, String(v)])) };
+      if (todayRow.cashNote) cashNote = todayRow.cashNote;
+    }
+    const cash = computeCashCount({ stats: todayStats, opening: openingFloat || {}, counted: cashCount });
+    const cashRows = ["USD", "MN", ...CASH_CURRENCIES.filter((c) => c === "EUR" && cash.rows.some((r) => r.currency === "EUR"))]
+      .map((c) => cash.rows.find((r) => r.currency === c) || { currency: c, opening: 0, sales: 0, expected: 0, counted: null, diff: null, hasCount: false });
+    const pendingHere = (() => { try { return getPendingCount(warehouse.id); } catch { return 0; } })();
+    const floatText = openingFloat
+      ? CASH_CURRENCIES.filter((c) => Number(openingFloat[c]) > 0).map((c) => formatMoney(Number(openingFloat[c]), c)).join(" · ") || "sin fondo"
+      : "";
 
     // v5.14.0: si la app quedó abierta al cambiar de mes, recargar el «mes pasado»
     if (prevFrom !== monthRange(Date.now(), -1).from && !prevLoading) loadPrevMonth();
-    const earnCur = computeSellerEarnings(sales, { warehouse: sellerWh });
-    const earnPrev = prevSales ? computeSellerEarnings(prevSales, { warehouse: sellerWh, offset: -1 }) : null;
-    const earningsHtml = renderSellerEarningsCard(earnCur, earnPrev, { open: earnOpen, prevLoading });
+    let earnCur = computeSellerEarnings(sales, { warehouse: sellerWh });
+    let earnPrev = prevSales ? computeSellerEarnings(prevSales, { warehouse: sellerWh, offset: -1 }) : null;
+    // v5.26.0: dos vendedores con PIN propio → cada uno ve solo lo suyo
+    const mySlot = Number(user?.sellerSlot) || null;
+    if (earnCur.mode === "pin" && mySlot && user?.role === "empleado_pin") {
+      const mine = (r) => r && ({ ...r, split: false, shifts: r.shifts.filter((x) => x.key === `seller${mySlot}`) });
+      earnCur = mine(earnCur);
+      earnPrev = mine(earnPrev);
+    }
+    const ruleNote = `${vendorRuleLabel(store.getState().settings?.vendorSaleRule)}. Por caja: lo del producto.`;
+    const earningsHtml = renderSellerEarningsCard(earnCur, earnPrev, { open: earnOpen, prevLoading, ruleNote, mySlot });
 
     // v5.21.0: pedido sugerido (ventas de 30 días: este mes + el pasado)
     const salesById = new Map();
@@ -277,7 +318,10 @@ export function mountWarehouseInterior(container, navigate) {
               <span class="wh-chip" style="--wh:${warehouseColor(warehouse)}">${icon("store", 11)} ${esc(warehouse.code)}</span>
               <h2 class="text-lg font-bold" style="margin:0">${esc(warehouse.name)}</h2>
             </div>
-            <button class="btn btn-ghost btn-sm" data-nav-back style="flex-shrink:0">${icon("arrowLeft", 14)} Volver</button>
+            <div style="display:flex;gap:0.25rem;flex-shrink:0">
+              <button class="btn btn-ghost btn-sm btn-icon" data-appearance aria-label="Apariencia de este almacén" title="Apariencia">${icon("palette", 16)}</button>
+              <button class="btn btn-ghost btn-sm" data-nav-back>${icon("arrowLeft", 14)} Volver</button>
+            </div>
           </div>
           ${warehouse.address || warehouse.phone ? `
             <div class="wh-meta">
@@ -291,7 +335,7 @@ export function mountWarehouseInterior(container, navigate) {
         <div class="wi-tabs" role="tablist" aria-label="Secciones del almacén">
           <button type="button" role="tab" class="wi-tab ${section === "hoy" ? "on" : ""}" aria-selected="${section === "hoy"}" data-sec-tab="hoy">${icon("activity", 15)} Hoy</button>
           <button type="button" role="tab" class="wi-tab ${section === "inv" ? "on" : ""}" aria-selected="${section === "inv"}" data-sec-tab="inv">${icon("boxes", 15)} Inventario${lowStock + outOfStock > 0 ? `<span class="wi-tab-n">${lowStock + outOfStock}</span>` : ""}</button>
-          <button type="button" role="tab" class="wi-tab ${section === "caja" ? "on" : ""}" aria-selected="${section === "caja"}" data-sec-tab="caja">${icon("receipt", 15)} Caja${!todayClosed && todayStats.salesCount > 0 ? `<span class="wi-tab-dot" title="Pendiente de cerrar"></span>` : ""}</button>
+          <button type="button" role="tab" class="wi-tab ${section === "caja" ? "on" : ""}" aria-selected="${section === "caja"}" data-sec-tab="caja">${icon("receipt", 15)} Caja${!todayClosed && (todayStats.salesCount > 0 || openingFloat) ? `<span class="wi-tab-dot" title="Caja pendiente de cerrar"></span>` : ""}</button>
         </div>
 
         <!-- Resumen con período integrado (v5.7.0) -->
@@ -358,36 +402,75 @@ export function mountWarehouseInterior(container, navigate) {
         <!-- v5.14.0: lo que lleva ganado (comisión fija por producto) -->
         <div class="wi-ganado" data-sec="hoy caja">${earningsHtml}</div>
 
-        <!-- Cierre de caja (v5.5.0) -->
+        <!-- Caja del día (v5.5.0 → v5.24.0: fondo inicial + arqueo + marcas) -->
         <div class="card wi-cierre" data-sec="caja">
           <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
-            <h3 class="card-title flex items-center gap-1">${icon("receipt", 14)} Cierre de caja</h3>
+            <h3 class="card-title flex items-center gap-1">${icon("receipt", 14)} Caja de hoy</h3>
             ${todayClosed
-              ? `<span class="badge badge-accent" style="font-size:0.625rem">Cerrado · ${esc(todayClosed.createdByName || '')}</span>`
-              : `<span class="badge ${todayStats.salesCount > 0 ? 'badge-warning' : ''}" style="font-size:0.625rem">${todayStats.salesCount > 0 ? 'Pendiente de cerrar' : 'Sin ventas hoy'}</span>`}
+              ? `<span class="badge badge-accent" style="font-size:0.625rem">Cerrada · ${esc(todayClosed.createdByName || '')}</span>`
+              : openingFloat
+                ? `<span class="badge badge-warning" style="font-size:0.625rem">Abierta · falta cerrar</span>`
+                : `<span class="badge" style="font-size:0.625rem">Sin abrir</span>`}
           </div>
-          <div class="card-content" style="padding:0.625rem 0.75rem">
-            <div class="stat-row">
-              <div class="stat-cell">
-                <div class="text-lg font-bold">${todayStats.salesCount}</div>
-                <div class="text-xs text-muted">Ventas hoy</div>
-              </div>
-              <div class="stat-cell">
-                <div class="text-lg font-bold" style="color:var(--accent-usd)">${formatMoney(todayStats.totalUSD, "USD")}</div>
-                <div class="text-xs text-muted">Total (USD)</div>
-              </div>
-              <div class="stat-cell">
-                <div class="text-lg font-bold">${todayStats.unitsSold}</div>
-                <div class="text-xs text-muted">Unidades</div>
-              </div>
+          <div class="card-content cash-card" style="padding:0.625rem 0.75rem;display:flex;flex-direction:column;gap:0.75rem">
+
+            <!-- 1 · Fondo inicial -->
+            <div class="cash-block">
+              <div class="cash-title"><span class="sale-step-n">1</span> Fondo con el que empieza el día</div>
+              ${openingFloat && !editFloat ? `
+                <div class="cash-float">
+                  <strong>${esc(floatText)}</strong>
+                  <span class="text-xs text-muted">${todayRow?.openedByName ? `por ${esc(todayRow.openedByName)}` : ""}${todayRow?.openedAt ? ` · ${new Date(todayRow.openedAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}` : ""}</span>
+                  ${!todayClosed ? `<button class="btn btn-ghost btn-sm" data-cash-edit-float>Cambiar</button>` : ""}
+                </div>
+              ` : todayClosed ? `<p class="text-xs text-muted" style="margin:0">No se anotó fondo.</p>` : `
+                <div class="cash-inputs">
+                  ${CASH_CURRENCIES.map((c) => `
+                    <label class="cash-in"><span>${c}</span>
+                      <input class="input" type="number" min="0" step="0.01" inputmode="decimal" data-float="${c}" value="${openingFloat && Number(openingFloat[c]) > 0 ? Number(openingFloat[c]) : ""}" placeholder="0" aria-label="Fondo inicial en ${c}" />
+                    </label>`).join("")}
+                </div>
+                <button class="btn btn-primary btn-sm btn-block" id="cash-open-btn">${icon("check", 14)} ${openingFloat ? "Guardar fondo" : "Abrir caja con este fondo"}</button>
+              `}
             </div>
-            ${Object.entries(todayStats.byCurrency).filter(([_, v]) => v.count > 0).map(([curr, d]) => `
-              <div style="display:flex;justify-content:space-between;padding:0.25rem 0.5rem;margin-top:0.375rem;background:var(--bg-soft);border-radius:var(--radius-sm);border:1px solid var(--border)" class="text-xs">
-                <span class="text-muted">${esc(curr)} · ${d.count} venta(s)</span>
-                <strong>${formatMoney(d.amount, curr)}</strong>
+
+            <!-- 2 · Ventas del día -->
+            <div class="cash-block">
+              <div class="cash-title"><span class="sale-step-n">2</span> Ventas de hoy</div>
+              <div class="stat-row">
+                <div class="stat-cell"><div class="text-lg font-bold">${todayStats.salesCount}</div><div class="text-xs text-muted">Ventas</div></div>
+                <div class="stat-cell"><div class="text-lg font-bold" style="color:var(--accent-usd)">${formatMoney(todayStats.totalUSD, "USD")}</div><div class="text-xs text-muted">Total (USD)</div></div>
+                <div class="stat-cell"><div class="text-lg font-bold">${todayStats.unitsSold}</div><div class="text-xs text-muted">Unidades</div></div>
               </div>
-            `).join("")}
-            <button class="btn ${!todayClosed && todayStats.salesCount > 0 ? 'btn-primary' : 'btn-outline'} btn-sm btn-block" id="close-cash-btn" style="margin-top:0.5rem">
+              ${Object.entries(todayStats.byCurrency).filter(([_, v]) => v.count > 0).map(([curr, d]) => `
+                <div class="cash-line"><span class="text-muted">${curr === "TRANSFERENCIA" ? "Transferencia (a tarjeta)" : esc(curr)} · ${d.count} venta(s)</span><strong>${formatMoney(d.amount, curr === "TRANSFERENCIA" ? "USD" : curr)}</strong></div>
+              `).join("")}
+              ${todayStats.byBrand && todayStats.byBrand.length ? `
+                <div class="text-xs font-semibold text-muted" style="margin:0.5rem 0 0.25rem">Por marca</div>
+                <div class="cash-brands">
+                  ${todayStats.byBrand.map((b) => `<span class="cash-brand"><strong>${esc(b.brand)}</strong> ${b.units} u · ${formatMoney(b.total, "USD")}</span>`).join("")}
+                </div>` : ""}
+            </div>
+
+            <!-- 3 · Contar el efectivo -->
+            <div class="cash-block">
+              <div class="cash-title"><span class="sale-step-n">3</span> Contar el efectivo</div>
+              ${pendingHere > 0 ? `<div class="cash-warn">${icon("alertTriangle", 14)} Hay <strong>${pendingHere}</strong> venta(s) en este equipo sin subir. Se suben solas con internet; súbelas antes de cerrar para que cuadre.</div>` : ""}
+              <div class="cash-table">
+                <div class="cash-row cash-head"><span>Moneda</span><span>Debería haber</span><span>Hay</span><span></span></div>
+                ${cashRows.map((r) => `
+                  <div class="cash-row">
+                    <span class="font-semibold">${r.currency}</span>
+                    <span title="Fondo ${formatMoney(r.opening, r.currency)} + ventas ${formatMoney(r.sales, r.currency)}">${formatMoney(r.expected, r.currency)}</span>
+                    <input class="input" type="number" min="0" step="0.01" inputmode="decimal" data-count="${r.currency}" value="${esc(cashCount[r.currency] ?? "")}" placeholder="0" aria-label="Efectivo contado en ${r.currency}" />
+                    <span class="cash-diff" data-diff="${r.currency}">${diffHtml(r)}</span>
+                  </div>`).join("")}
+              </div>
+              <label class="label label-xs" for="cash-note" style="margin-top:0.5rem">Nota (si sobra o falta, explica por qué)</label>
+              <textarea class="textarea" id="cash-note" maxlength="300" style="min-height:3rem" placeholder="Ej.: sobran $5 de una venta que no se registró · falta cambio de 200 MN">${esc(cashNote)}</textarea>
+            </div>
+
+            <button class="btn ${!todayClosed && (todayStats.salesCount > 0 || openingFloat) ? 'btn-primary' : 'btn-outline'} btn-block" id="close-cash-btn">
               ${icon("check", 14)} ${todayClosed ? 'Actualizar cierre de hoy' : 'Cerrar caja de hoy'}
             </button>
             ${todayStats.salesCount > 0 || todayClosed ? `
@@ -397,21 +480,25 @@ export function mountWarehouseInterior(container, navigate) {
                 <button class="btn btn-outline btn-sm" id="share-closure-copy" aria-label="Copiar el resumen del cierre" title="Copiar el resumen">${icon("copy", 14)} Copiar</button>
               </div>
             ` : ''}
-            ${recentClosures.length > 0 ? `
+            ${recentClosures.filter((c) => c.closed !== false).length > 0 ? `
               <button class="btn btn-ghost btn-sm btn-block" data-toggle-closures>
-                Últimos cierres (${recentClosures.length}) ${closuresOpen ? '▲' : '▼'}
+                Últimos cierres (${recentClosures.filter((c) => c.closed !== false).length}) ${closuresOpen ? '▲' : '▼'}
               </button>
               ${closuresOpen ? `
                 <div style="display:flex;flex-direction:column;gap:0.25rem">
-                  ${recentClosures.map((c) => `
+                  ${recentClosures.filter((c) => c.closed !== false).map((c) => {
+                    const d = c.cashDifference || {};
+                    const diffs = Object.entries(d).filter(([_, v]) => Math.abs(Number(v) || 0) >= 0.01)
+                      .map(([cur, v]) => `<span style="color:${v > 0 ? "var(--primary)" : "var(--danger)"}">${v > 0 ? "+" : "−"}${formatMoney(Math.abs(v), cur)}</span>`).join(" ");
+                    return `
                     <div style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius-sm)">
                       <div>
                         <div class="text-xs font-medium">${esc(c.closureDate)}${c.closureDate === todayKey ? ' · hoy' : ''}</div>
-                        <div class="text-xs text-muted">${c.salesCount} ventas · ${c.unitsSold} u · por ${esc(c.createdByName || '—')}</div>
+                        <div class="text-xs text-muted">${c.salesCount} ventas · ${c.unitsSold} u · por ${esc(c.createdByName || '—')}${diffs ? ` · ${diffs}` : (c.countedCash ? " · cuadró" : "")}</div>
                       </div>
                       <strong class="text-sm" style="color:var(--accent-usd)">${formatMoney(c.totalUSD, "USD")}</strong>
-                    </div>
-                  `).join("")}
+                    </div>`;
+                  }).join("")}
                 </div>
               ` : ''}
             ` : ''}
@@ -664,32 +751,84 @@ export function mountWarehouseInterior(container, navigate) {
       });
     });
 
-    // v5.5.0: cierre de caja
+    // v5.24.0: caja del día — fondo, conteo y cierre
+    const saveClosure = async (extra) => {
+      const user = store.getState().currentUser;
+      const res = await saveDailyClosure({
+        warehouseId: warehouse.id,
+        warehouseCode: warehouse.code,
+        warehouseName: warehouse.name,
+        dateKey: todayKey,
+        stats: todayStats,
+        user,
+        ...extra,
+      });
+      if (res && res.missingColumns) {
+        toast("Guardado sin el fondo/arqueo: el administrador debe ejecutar el SQL de caja v5.24 en Supabase", "warning", 7000);
+      }
+      recentClosures = await listDailyClosures({ warehouseId: warehouse.id, limit: 7 }).catch(() => recentClosures);
+      return res;
+    };
+    container.querySelector("[data-cash-edit-float]")?.addEventListener("click", () => { editFloat = true; render(); });
+    container.querySelector("#cash-open-btn")?.addEventListener("click", async () => {
+      const float = {};
+      container.querySelectorAll("[data-float]").forEach((inp) => {
+        const v = parseFloat(inp.value);
+        if (v > 0) float[inp.dataset.float] = Math.round(v * 100) / 100;
+      });
+      try { localStorage.setItem(floatKey(todayKey), JSON.stringify(float)); } catch {}
+      const user = store.getState().currentUser;
+      try {
+        await saveClosure({ openingFloat: float, openedAt: Date.now(), openedByName: user?.displayName || null, closed: false });
+        toast(Object.keys(float).length ? "Caja abierta con su fondo" : "Caja abierta sin fondo", "success");
+      } catch (err) {
+        toast("Fondo guardado en este equipo (sin conexión con la nube)", "info", 4000);
+      }
+      editFloat = false;
+      render();
+    });
+    container.querySelectorAll("[data-count]").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        cashCount[inp.dataset.count] = inp.value;
+        // repinta solo la diferencia (no se pierde el foco)
+        const live = computeCashCount({ stats: todayStats, opening: openingFloat || {}, counted: cashCount });
+        CASH_CURRENCIES.forEach((c) => {
+          const el = container.querySelector(`[data-diff="${c}"]`);
+          if (!el) return;
+          const row = live.rows.find((r) => r.currency === c) || { currency: c, hasCount: false };
+          el.innerHTML = diffHtml(row);
+        });
+      });
+    });
+    container.querySelector("#cash-note")?.addEventListener("input", (e) => { cashNote = e.target.value; });
+
     const closeCashBtn = container.querySelector("#close-cash-btn");
     if (closeCashBtn) {
       closeCashBtn.addEventListener("click", () => {
-        const user = store.getState().currentUser;
-        confirmDialog(
-          todayClosed
-            ? "Ya hay un cierre de hoy. ¿Actualizarlo con las ventas actuales?"
-            : `¿Cerrar la caja de hoy? ${todayStats.salesCount} venta(s) · ${formatMoney(todayStats.totalUSD, "USD")}`,
-          async () => {
-            try {
-              const res = await saveDailyClosure({
-                warehouseId: warehouse.id,
-                warehouseCode: warehouse.code,
-                warehouseName: warehouse.name,
-                dateKey: todayKey,
-                stats: todayStats,
-                user,
-              });
-              toast(res.updated ? "Cierre de hoy actualizado" : "Cierre de caja guardado", "success");
-              listDailyClosures({ warehouseId: warehouse.id, limit: 7 }).then((c) => { recentClosures = c; closuresOpen = true; render(); }).catch(() => {});
-            } catch (err) {
-              toast("Error al guardar el cierre: " + (err.message || "desconocido"), "error");
-            }
+        const live = computeCashCount({ stats: todayStats, opening: openingFloat || {}, counted: cashCount });
+        const counted = {}; const diff = {};
+        live.rows.filter((r) => r.hasCount).forEach((r) => { counted[r.currency] = r.counted; diff[r.currency] = r.diff; });
+        const resumen = live.rows.filter((r) => r.hasCount).map((r) => `${r.currency}: ${cashDiffLabel(r, formatMoney)}`).join(" · ");
+        const msg = (todayClosed ? "¿Actualizar el cierre de hoy?" : "¿Cerrar la caja de hoy?") +
+          ` ${todayStats.salesCount} venta(s) · ${formatMoney(todayStats.totalUSD, "USD")}` +
+          (resumen ? `<br><strong>${esc(resumen)}</strong>` : "<br>No contaste el efectivo (puedes cerrar igual).") +
+          (live.anyDiff && !cashNote.trim() ? "<br><span style=\"color:var(--warning)\">Hay diferencia: conviene anotar el motivo.</span>" : "");
+        confirmDialog(msg, async () => {
+          try {
+            const res = await saveClosure({
+              openingFloat: openingFloat || null,
+              countedCash: Object.keys(counted).length ? counted : null,
+              cashDifference: Object.keys(diff).length ? diff : null,
+              cashNote: cashNote.trim() || null,
+              closed: true,
+            });
+            toast(res && res.updated ? "Cierre de hoy actualizado" : "Caja cerrada", "success");
+            closuresOpen = true;
+            render();
+          } catch (err) {
+            toast("Error al guardar el cierre: " + (err.message || "desconocido"), "error");
           }
-        );
+        });
       });
     }
     // v5.10.0: compartir el cierre del día (WhatsApp o portapapeles)
@@ -700,6 +839,8 @@ export function mountWarehouseInterior(container, navigate) {
       stats: todayStats,
       closedBy: todayClosed ? (todayClosed.createdByName || "—") : null,
       fmt: formatMoney,
+      cash: computeCashCount({ stats: todayStats, opening: openingFloat || {}, counted: cashCount }),
+      note: cashNote.trim(),
     });
     container.querySelector("#share-closure-wa")?.addEventListener("click", () => openWhatsApp(closureText()));
     container.querySelector("#share-closure-copy")?.addEventListener("click", async () => {
@@ -770,6 +911,10 @@ export function mountWarehouseInterior(container, navigate) {
     // v5.20.0: «Volver» no hacía nada — navigate("home") rebotaba de nuevo
     // al dashboard porque la sesión PIN seguía activa. Ahora sale del almacén
     // (pide confirmación) y vuelve a la lista de almacenes.
+    // v5.25.0: apariencia del almacén
+    container.querySelector("[data-appearance]")?.addEventListener("click", () => {
+      import("./appearance-dialog.js").then((m) => m.openAppearanceDialog(warehouse, () => render()));
+    });
     const backBtn = container.querySelector("[data-nav-back]");
     if (backBtn) backBtn.addEventListener("click", () => exitWarehouse(store, warehouse, navigate));
 

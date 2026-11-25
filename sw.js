@@ -17,7 +17,7 @@
 //    red no responde en 4 s se abre la copia guardada.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v51";
+const CACHE_VERSION = "mannol-pos-supabase-v54";
 const DATA_CACHE = "mannol-pos-data-v1"; // respuestas de Supabase (se conserva entre versiones)
 const NAV_TIMEOUT_MS = 4000;
 const API_TIMEOUT_MS = 6000;
@@ -61,6 +61,9 @@ const STATIC_ASSETS = [
   "./js/pin-utils.js",
   "./js/payment-utils.js", // v5.16.0: conversión y validación de pagos
   "./js/ticket.js",        // v5.21.0: ticket compartible y «Vender de nuevo»
+  "./js/appearance.js",    // v5.25.0: apariencia por almacén
+  "./js/vendor-rule.js",   // v5.26.0: comisión del vendedor por venta
+  "./js/views/appearance-dialog.js",
   "./js/viscosity.js",
   "./js/catalog-facets.js", // v5.12.0: tipos y marcas del catálogo
   "./js/product-form.js",   // v5.15.0: formulario de producto (lógica)

@@ -3,6 +3,7 @@
 // Flujo: Gestor → Productos → Nota → Pago → Registrar
 // =====================================================
 
+import { applyVendorRuleToItems } from "../vendor-rule.js";
 import { getStore } from "../store.js";
 import { subscribeProducts, subscribeStock, subscribeCategories, subscribeBrands, listCards, listManagers, listSales, isUuid, getWholesaleTier, getSuggestedPricePerBox, getSuggestedVendorCommissionPerBox, getSuggestedGestorCommissionPerBox, isWholesaleProduct, listWarehouses, resolveEffectiveWarehouse, sumCartCommissions } from "../db.js";
 import { formatMoney, generateSaleId, generateSaleCode, CURRENCIES, CURRENCY_LABELS, CARD_BRANDS, getRate } from "../currency.js";
@@ -793,7 +794,7 @@ export function mountSalesView(container, navigate) {
     if (wholesaleProduct) {
       const suggestedPrice = getSuggestedPricePerBox(wholesaleProduct, wholesaleBoxes);
       const suggestedVendor = getSuggestedVendorCommissionPerBox(wholesaleProduct, wholesaleBoxes);
-      const suggestedGestor = getSuggestedGestorCommissionPerBox(wholesaleProduct, wholesaleBoxes);
+      const suggestedGestor = getSuggestedGestorCommissionPerBox(wholesaleProduct, wholesaleBoxes, wholesalePricePerBox || null);
       // Auto-actualizar si el valor guardado coincide con el tier anterior (o es 0)
       if (wholesalePricePerBox === 0 || wholesalePricePerBox === (suggestedPrice)) {
         wholesalePricePerBox = suggestedPrice || 0;
@@ -873,6 +874,7 @@ export function mountSalesView(container, navigate) {
             <div>
               <label class="label label-xs">Comisión gestor /caja (USD)</label>
               <input class="input" type="number" step="0.01" id="wholesale-gestor-commission" value="${wholesaleGestorCommissionPerBox}" />
+              ${Number(tier?.gestorCommissionPercent) > 0 ? `<div class="text-xs text-muted mt-1">${tier.gestorCommissionPercent}% del precio de la caja</div>` : ""}
             </div>
           </div>
 
@@ -954,6 +956,8 @@ export function mountSalesView(container, navigate) {
     if (wsPrice) {
       wsPrice.addEventListener("change", (e) => {
         wholesalePricePerBox = parseFloat(e.target.value) || 0;
+        // v5.26.0: gestor en % → se recalcula con el precio nuevo
+        if (Number(getWholesaleTier(wholesaleProduct, wholesaleBoxes)?.gestorCommissionPercent) > 0) wholesaleGestorCommissionPerBox = 0;
         render();
         setTimeout(() => {
           const newPrice = container.querySelector("#wholesale-price");
@@ -1292,6 +1296,10 @@ export function mountSalesView(container, navigate) {
             </div>
           </div>`;
       } else {
+        // v5.25.0: vista elegida en «Apariencia» del almacén
+        const asCards = document.documentElement.getAttribute("data-catalog-view") === "cards";
+        list.classList.toggle("as-cards", asCards);
+        const favSet = new Set(topSellerIds.slice(0, 8));
         const rowHtml = (p) => {
           const qty = getStockQty(p.id);
           const inCart = cart.find((i) => i.productId === p.id)?.quantity || 0;
@@ -1299,6 +1307,26 @@ export function mountSalesView(container, navigate) {
           const minStock = p.minStock || 5;
           const isLow = !isOut && qty <= minStock;
           return `
+          ${asCards ? `
+          <div class="catalog-item catalog-tile ${isOut ? "is-out" : ""} ${inCart > 0 ? "in-cart" : ""}" data-product-id="${esc(p.id)}">
+            <div class="ct-pic cr-pic">
+              ${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="" loading="lazy" />` : icon("droplet", 30)}
+              ${favSet.has(p.id) ? `<span class="ct-flag ct-fav">Más vendido</span>` : ""}
+              ${isOut ? `<span class="ct-flag ct-stock ct-out">Agotado</span>` : isLow ? `<span class="ct-flag ct-stock">Quedan ${qty}</span>` : ""}
+            </div>
+            <div class="ct-body cr-body">
+              <div class="ct-name">${esc(p.name)}</div>
+              <div class="ct-sub">${esc([p.brand, p.viscosity, p.volumeLiters ? `${p.volumeLiters} L` : ""].filter(Boolean).join(" · ") || `Stock ${qty}`)}</div>
+            </div>
+            <div class="ct-price">${formatMoney(p.salePrice, "USD")}</div>
+            ${inCart > 0 ? `
+              <div class="ct-stepper">
+                <button class="btn btn-outline btn-icon" data-qty-dec="${esc(p.id)}" aria-label="Quitar una unidad de ${esc(p.name)}">${icon("minus", 14)}</button>
+                <span class="cr-qty" data-qty-display="${esc(p.id)}">${inCart}</span>
+                <button class="btn btn-primary btn-icon" data-qty-inc="${esc(p.id)}" ${inCart >= qty ? "disabled" : ""} aria-label="Añadir una unidad de ${esc(p.name)}">${icon("plus", 16)}</button>
+              </div>` : `
+              <button class="ct-add" data-qty-inc="${esc(p.id)}" ${isOut ? "disabled" : ""} aria-label="Agregar ${esc(p.name)}">${isOut ? "Agotado" : "+ Agregar"}</button>`}
+          </div>` : `
           <div class="catalog-item catalog-row ${isOut ? "is-out" : ""} ${inCart > 0 ? "in-cart" : ""}" data-product-id="${esc(p.id)}">
             <div class="cr-pic" aria-hidden="true">${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="" loading="lazy" />` : icon("boxes", 18)}</div>
             <div class="cr-body">
@@ -1312,6 +1340,7 @@ export function mountSalesView(container, navigate) {
               <button class="btn btn-primary btn-icon" data-qty-inc="${esc(p.id)}" ${isOut || inCart >= qty ? 'disabled' : ''} aria-label="Añadir una unidad de ${esc(p.name)}${qty ? `, quedan ${qty}` : ""}">${icon("plus", 16)}</button>
             </div>
           </div>
+          `}
         `;
         };
         // v5.18.0: favoritos del almacén primero — los productos que MÁS se
@@ -1387,8 +1416,8 @@ export function mountSalesView(container, navigate) {
         });
       });
       // v5.22.0: tocar la foto o el nombre también añade una unidad
-      document.querySelectorAll("#catalog-list .catalog-row:not(.is-out) .cr-pic, #catalog-list .catalog-row:not(.is-out) .cr-body").forEach((el) => {
-        el.addEventListener("click", () => el.closest(".catalog-row")?.querySelector("[data-qty-inc]:not([disabled])")?.click());
+      document.querySelectorAll("#catalog-list .catalog-item:not(.is-out) .cr-pic, #catalog-list .catalog-item:not(.is-out) .cr-body").forEach((el) => {
+        el.addEventListener("click", () => el.closest(".catalog-item")?.querySelector("[data-qty-inc]:not([disabled])")?.click());
       });
     }
 
@@ -1700,6 +1729,10 @@ export function mountSalesView(container, navigate) {
         vendorCommissionMN,
       } = sumCartCommissions(cart));
       saleItems = cart.map((i) => ({ ...i }));
+      // v5.26.0: el vendedor cobra POR VENTA (regla de Admin → Comisiones vendedores)
+      const ruled = applyVendorRuleToItems(saleItems, total, store.getState().settings?.vendorSaleRule);
+      saleItems = ruled.items;
+      if (ruled.vendorUSD !== null) { vendorCommissionUSD = ruled.vendorUSD; vendorCommissionMN = 0; }
       stockAdjustments = cart.map((i) => ({ productId: i.productId, quantity: i.quantity }));
     }
 
@@ -1746,6 +1779,8 @@ export function mountSalesView(container, navigate) {
       warehouseCode: finalWh.code,
       userId: user.id,
       userName: user.displayName,
+      // v5.26.0: almacén con dos vendedores (cada uno con su PIN): quién vendió
+      sellerSlot: user.sellerSlot === 1 || user.sellerSlot === 2 ? user.sellerSlot : null,
       managerId: selectedManager?.id || null,
       managerName: selectedManager?.name || null,
       managerCode: selectedManager?.code || selectedManagerCode || null,

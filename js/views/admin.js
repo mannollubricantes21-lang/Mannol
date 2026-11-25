@@ -16,7 +16,7 @@ import {
   listStock, listSales, adjustStock,
   getRateConfig, saveRateConfig, syncRatesFromElToque,
   listStockMovements,
-  getSettings, saveSettings, saveMixSurchargeSettings,
+  getSettings, saveSettings, saveMixSurchargeSettings, saveVendorRuleSettings,
   // Nuevas funciones v5.3.0
   listCardsWithBalances, getCardBalance, addCardMovement,
   listAllStockAcrossWarehouses, listStockForProductInAllWarehouses,
@@ -37,7 +37,8 @@ import { CURRENCIES, CATEGORY_COLORS, STOCK_REASONS, STOCK_REASON_LABELS } from 
 import { lineChart, barChart, sparkline, COLORS } from "../charts.js";
 import { exportToCSV, exportMultipleCSVs } from "../csv-export.js";
 import { normalizeMixSurcharges } from "../payment-utils.js";
-import { computeSellerEarnings, saleVendorCommission, productsWithoutVendorCommission, monthRange, moneyPair } from "../seller-earnings.js";
+import { normalizeVendorRule, vendorRuleLabel } from "../vendor-rule.js";
+import { computeSellerEarnings, sellerModeOf, saleVendorCommission, productsWithoutVendorCommission, monthRange, moneyPair } from "../seller-earnings.js";
 import { closureDateKey, aggregateClosuresReport, reportPeriodRange } from "../sales-stats.js";
 import { getGitHubConfig, saveGitHubConfig, testGitHubConnection, isGitHubConfigured } from "../github-storage.js";
 import { showProductDialog } from "./product-dialog.js";
@@ -2747,6 +2748,10 @@ export function mountAdminView(container, navigateOrUser) {
   function showWarehouseDialog(warehouse, onSaved) {
     const isNew = !warehouse;
     const w = warehouse || {};
+    // v5.26.0: one | weekend | pin (dos vendedores, cada uno con su PIN)
+    const wMode = sellerModeOf(w);
+    const nameLabel = (m) => m === "weekend" ? "Lunes a viernes" : m === "pin" ? "Vendedor 1" : "Nombre del vendedor";
+    const name2Label = (m) => m === "pin" ? "Vendedor 2" : "Sábado y domingo";
 
     // Cargar productos y stock actual (si es edición) en paralelo
     Promise.all([
@@ -2771,17 +2776,21 @@ export function mountAdminView(container, navigateOrUser) {
               <div>
                 <label class="label label-xs" for="w-seller-mode">¿Quién vende en este almacén?</label>
                 <select class="select" id="w-seller-mode">
-                  <option value="one" ${w.sellerWeekendSplit ? '' : 'selected'}>Una persona</option>
-                  <option value="split" ${w.sellerWeekendSplit ? 'selected' : ''}>Dos personas: una de lunes a viernes y otra sábado y domingo</option>
+                  <option value="one" ${wMode === 'one' ? 'selected' : ''}>Una persona</option>
+                  <option value="pin" ${wMode === 'pin' ? 'selected' : ''}>Dos personas, cada una con su PIN</option>
+                  <option value="split" ${wMode === 'weekend' ? 'selected' : ''}>Dos personas: una de lunes a viernes y otra sábado y domingo</option>
                 </select>
               </div>
               <div class="grid grid-cols-2 gap-2">
-                <div><label class="label label-xs" for="w-seller-name" id="w-seller-name-label">${w.sellerWeekendSplit ? 'Lunes a viernes' : 'Nombre del vendedor'} <span class="text-muted">(opcional)</span></label><input class="input" id="w-seller-name" value="${esc(w.sellerName || '')}" placeholder="Ej: Ana" maxlength="40" autocomplete="off" /></div>
-                <div id="w-seller-weekend-wrap"${w.sellerWeekendSplit ? '' : ' hidden'}><label class="label label-xs" for="w-seller-weekend">Sábado y domingo <span class="text-muted">(opcional)</span></label><input class="input" id="w-seller-weekend" value="${esc(w.sellerWeekendName || '')}" placeholder="Ej: Luis" maxlength="40" autocomplete="off" /></div>
+                <div><label class="label label-xs" for="w-seller-name" id="w-seller-name-label">${nameLabel(wMode)} <span class="text-muted" data-opt>${wMode === 'pin' ? '' : '(opcional)'}</span></label><input class="input" id="w-seller-name" value="${esc(w.sellerName || '')}" placeholder="Ej: Ana" maxlength="40" autocomplete="off" /></div>
+                <div id="w-seller-weekend-wrap"${wMode === 'one' ? ' hidden' : ''}><label class="label label-xs" for="w-seller-weekend" id="w-seller-weekend-label">${name2Label(wMode)} <span class="text-muted" data-opt>${wMode === 'pin' ? '' : '(opcional)'}</span></label><input class="input" id="w-seller-weekend" value="${esc(w.sellerWeekendName || '')}" placeholder="Ej: Luis" maxlength="40" autocomplete="off" /></div>
               </div>
-              <p class="text-xs text-muted" style="margin:0">El vendedor gana el monto fijo de cada producto (Productos → «Comisión del vendedor»). Con dos personas, cada venta cuenta para quien trabaja ese día. Lo ven en su pantalla y en Comisiones vendedores.</p>
+              <p class="text-xs text-muted" style="margin:0" id="w-seller-help"></p>
             </div>
-            <div><label class="label label-xs">PIN (vacío = acceso libre, mínimo 4 dígitos)</label><input class="input" id="w-pin" value="${esc(w.pin || '')}" placeholder="2025" minlength="4" maxlength="8" pattern="[0-9]{4,8}" inputmode="numeric" /></div>
+            <div class="grid grid-cols-2 gap-2">
+              <div><label class="label label-xs" for="w-pin" id="w-pin-label">${wMode === 'pin' ? 'PIN del vendedor 1' : 'PIN (vacío = acceso libre, mínimo 4 dígitos)'}</label><input class="input" id="w-pin" value="${esc(w.pin || '')}" placeholder="2025" minlength="4" maxlength="8" pattern="[0-9]{4,8}" inputmode="numeric" autocomplete="off" /></div>
+              <div id="w-pin2-wrap"${wMode === 'pin' ? '' : ' hidden'}><label class="label label-xs" for="w-pin2">PIN del vendedor 2</label><input class="input" id="w-pin2" value="${esc(w.seller2Pin || '')}" placeholder="4 a 8 dígitos" minlength="4" maxlength="8" pattern="[0-9]{4,8}" inputmode="numeric" autocomplete="off" /></div>
+            </div>
 
             <!-- Stock inicial por producto -->
             <div style="margin-top:0.5rem;padding-top:0.625rem;border-top:1px solid var(--border)">
@@ -2825,11 +2834,22 @@ export function mountAdminView(container, navigateOrUser) {
 
       document.querySelector("#w-cancel").addEventListener("click", close);
       const sellerMode = document.querySelector("#w-seller-mode");
-      sellerMode?.addEventListener("change", () => {
-        const split = sellerMode.value === "split";
-        document.querySelector("#w-seller-weekend-wrap").hidden = !split;
-        document.querySelector("#w-seller-name-label").firstChild.textContent = split ? "Lunes a viernes " : "Nombre del vendedor ";
-      });
+      const syncSellerMode = () => {
+        const m = sellerMode.value === "split" ? "weekend" : sellerMode.value;
+        document.querySelector("#w-seller-weekend-wrap").hidden = m === "one";
+        document.querySelector("#w-pin2-wrap").hidden = m !== "pin";
+        document.querySelector("#w-seller-name-label").firstChild.textContent = nameLabel(m) + " ";
+        document.querySelector("#w-seller-weekend-label").firstChild.textContent = name2Label(m) + " ";
+        document.querySelectorAll(".wh-sellers-box [data-opt]").forEach((el) => { el.textContent = m === "pin" ? "" : "(opcional)"; });
+        document.querySelector("#w-pin-label").textContent = m === "pin" ? "PIN del vendedor 1" : "PIN (vacío = acceso libre, mínimo 4 dígitos)";
+        document.querySelector("#w-seller-help").textContent = m === "pin"
+          ? "Al entrar al almacén se elige quién vende y cada uno pone su PIN. Cada venta cuenta para quien la registró, y cada uno ve solo lo que lleva ganado."
+          : m === "weekend"
+            ? "Cada venta cuenta para quien trabaja ese día. Lo ven en su pantalla y en Comisiones vendedores."
+            : "Lo que gana lo ve en su pantalla y en Comisiones vendedores.";
+      };
+      sellerMode?.addEventListener("change", syncSellerMode);
+      syncSellerMode();
 
       // Toggle expandir/contraer sección de stock
       const expandBtn = document.querySelector("#w-expand-stock");
@@ -2845,6 +2865,8 @@ export function mountAdminView(container, navigateOrUser) {
 
       document.querySelector("#w-save").addEventListener("click", async () => {
         const pin = document.querySelector("#w-pin").value.trim();
+        const modeVal = document.querySelector("#w-seller-mode").value;
+        const pin2 = modeVal === "pin" ? document.querySelector("#w-pin2").value.trim() : "";
         const data = {
           ...(w.id ? { id: w.id } : {}),
           name: document.querySelector("#w-name").value.trim(),
@@ -2852,11 +2874,13 @@ export function mountAdminView(container, navigateOrUser) {
           address: document.querySelector("#w-address").value.trim() || null,
           phone: document.querySelector("#w-phone").value.trim() || null,
           // v5.14.0: quién vende (el % antiguo del almacén ya no se edita aquí)
-          sellerWeekendSplit: document.querySelector("#w-seller-mode").value === "split",
+          sellerWeekendSplit: modeVal === "split",
+          sellerMode: modeVal === "split" ? "weekend" : modeVal, // v5.26.0
           sellerName: document.querySelector("#w-seller-name").value.trim() || null,
-          sellerWeekendName: (document.querySelector("#w-seller-mode").value === "split"
+          sellerWeekendName: (modeVal !== "one"
             ? document.querySelector("#w-seller-weekend").value.trim() : "") || null,
           pin: pin || null,
+          seller2Pin: pin2 || null,
           active: true,
           _createdBy: getStore().getState().currentUser,
         };
@@ -2864,6 +2888,12 @@ export function mountAdminView(container, navigateOrUser) {
         if (data.pin && !/^\d{4,8}$/.test(data.pin)) {
           toast("El PIN debe tener entre 4 y 8 dígitos numéricos", "error");
           return;
+        }
+        if (modeVal === "pin") {
+          if (!data.sellerName || !data.sellerWeekendName) { toast("Pon el nombre de los dos vendedores", "error"); return; }
+          if (!data.pin || !data.seller2Pin) { toast("Cada vendedor necesita su PIN", "error"); return; }
+          if (!/^\d{4,8}$/.test(data.seller2Pin)) { toast("El PIN del vendedor 2 debe tener entre 4 y 8 dígitos", "error"); return; }
+          if (data.pin === data.seller2Pin) { toast("Los dos vendedores no pueden tener el mismo PIN", "error"); return; }
         }
 
         // Recoger el stock inicial de los productos (solo los que tienen cantidad > 0 o que cambiaron)
@@ -3377,7 +3407,9 @@ export function mountAdminView(container, navigateOrUser) {
       const filterWh = container.querySelector("#cl-filter-wh")?.value || "";
 
       const byWh = {};
-      for (const c of closures) {
+      // v5.24.0: las cajas solo ABIERTAS (fondo anotado, sin cerrar) no cuentan como cierre
+      const closedOnly = closures.filter((c) => c.closed !== false);
+      for (const c of closedOnly) {
         const key = c.warehouseId || "—";
         byWh[key] = byWh[key] || { name: c.warehouseName || whMap.get(key)?.name || "—", count: 0, totalUSD: 0 };
         byWh[key].count++;
@@ -3412,7 +3444,7 @@ export function mountAdminView(container, navigateOrUser) {
             <div class="card-content" style="padding:0.625rem 0.75rem">
               ${(() => {
                 const range = reportPeriodRange(closuresReportPeriod);
-                const report = aggregateClosuresReport(closures, range);
+                const report = aggregateClosuresReport(closedOnly, range);
 
                 if (report.totals.closures === 0) {
                   return `<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">${icon("receipt", 20)}</div><p class="empty-state-title">Sin cierres en el período</p><p class="empty-state-desc">${range.label}: ningún almacén registró cierre de caja.</p></div>`;
@@ -3502,7 +3534,7 @@ export function mountAdminView(container, navigateOrUser) {
                 </div>
               ` : `
                 <table class="table">
-                  <thead><tr><th>Fecha</th><th>Almacén</th><th class="text-center">Ventas</th><th class="text-center">Unid.</th><th class="text-right">Total (USD)</th><th>Detalle por moneda</th><th>Cerrado por</th></tr></thead>
+                  <thead><tr><th>Fecha</th><th>Almacén</th><th class="text-center">Ventas</th><th class="text-center">Unid.</th><th class="text-right">Total (USD)</th><th>Detalle por moneda</th><th>Fondo</th><th>Arqueo</th><th>Cerrado por</th></tr></thead>
                   <tbody>
                     ${closures
                       .filter((c) => !filterWh || c.warehouseId === filterWh)
@@ -3520,6 +3552,16 @@ export function mountAdminView(container, navigateOrUser) {
                             <td class="text-center text-xs">${c.unitsSold}</td>
                             <td class="text-right font-bold">${formatMoney(c.totalUSD, "USD")}</td>
                             <td class="text-xs text-muted">${esc(det)}</td>
+                            <td class="text-xs">${c.openingFloat ? esc(Object.entries(c.openingFloat).filter(([_, v]) => Number(v) > 0).map(([k, v]) => formatMoney(Number(v), k)).join(" · ") || "—") : "—"}</td>
+                            <td class="text-xs">${(() => {
+                              // v5.24.0: sobrante / faltante al contar el efectivo
+                              if (c.closed === false) return '<span class="badge badge-warning" style="font-size:0.5625rem">Abierta</span>';
+                              const d = c.cashDifference;
+                              if (!c.countedCash) return '<span class="text-muted">sin contar</span>';
+                              const parts = Object.entries(d || {}).filter(([_, v]) => Math.abs(Number(v) || 0) >= 0.01)
+                                .map(([k, v]) => `<span style="color:${v > 0 ? "var(--primary)" : "var(--danger)"};font-weight:700">${v > 0 ? "Sobran " : "Faltan "}${formatMoney(Math.abs(v), k)}</span>`);
+                              return (parts.join("<br>") || '<span style="color:var(--primary);font-weight:700">Cuadra</span>') + (c.cashNote ? `<div class="text-muted" style="font-size:0.6875rem">“${esc(c.cashNote)}”</div>` : "");
+                            })()}</td>
                             <td class="text-xs text-muted">${esc(c.createdByName || '—')}</td>
                           </tr>
                         `;
@@ -3546,6 +3588,14 @@ export function mountAdminView(container, navigateOrUser) {
             mn: c.byCurrency?.MN?.amount || 0,
             eur: c.byCurrency?.EUR?.amount || 0,
             transferencia: c.byCurrency?.TRANSFERENCIA?.amount || 0,
+            fondo_usd: c.openingFloat?.USD || 0,
+            fondo_mn: c.openingFloat?.MN || 0,
+            contado_usd: c.countedCash?.USD ?? "",
+            contado_mn: c.countedCash?.MN ?? "",
+            diferencia_usd: c.cashDifference?.USD ?? "",
+            diferencia_mn: c.cashDifference?.MN ?? "",
+            nota: c.cashNote || "",
+            estado: c.closed === false ? "abierta" : "cerrada",
             cerrado_por: c.createdByName || "",
           }));
         exportToCSV("cierres-de-caja", rows);
@@ -5147,6 +5197,53 @@ export function mountAdminView(container, navigateOrUser) {
     let failed = [];        // almacenes cuyas ventas no se pudieron cargar
     let unconfigured = [];  // productos activos sin comisión de vendedor
     let range = monthRange(now.getTime(), 0);
+    let vRule = normalizeVendorRule(getStore().getState().settings?.vendorSaleRule);
+    getSettings().then((st) => { vRule = normalizeVendorRule(st.vendorSaleRule); if (!loading) render(); }).catch(() => {});
+
+    function ruleCardHtml() {
+      const r = vRule;
+      return `
+        <div class="card" id="vrule-card">
+          <div class="card-header"><h3 class="card-title">${icon("wallet", 16)} Cuánto gana el vendedor por cada venta</h3></div>
+          <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
+            <label class="flex items-center gap-2 text-sm" style="cursor:pointer">
+              <input type="checkbox" id="vr-enabled" ${r.enabled ? "checked" : ""} />
+              <span>Pagar <strong>por venta</strong> (no por cada pomo)</span>
+            </label>
+            <div class="vrule-grid" ${r.enabled ? "" : 'style="opacity:.5"'}>
+              <div><label class="label label-xs" for="vr-threshold">Venta desde (USD)</label><input class="input" id="vr-threshold" inputmode="decimal" value="${r.threshold}" ${r.enabled ? "" : "disabled"} /></div>
+              <div><label class="label label-xs" for="vr-above">Gana (USD)</label><input class="input" id="vr-above" inputmode="decimal" value="${r.above}" ${r.enabled ? "" : "disabled"} /></div>
+              <div><label class="label label-xs" for="vr-below">Si es menos, gana (USD)</label><input class="input" id="vr-below" inputmode="decimal" value="${r.below}" ${r.enabled ? "" : "disabled"} /></div>
+            </div>
+            <p class="text-xs text-muted" style="margin:0" id="vr-label">${esc(vendorRuleLabel(r))}. Vale para ventas al detalle, aunque lleve 3 o 4 pomos. Las ventas <strong>por caja</strong> pagan lo que pongas en cada producto (Productos → Venta por caja). ${r.enabled ? "" : "Apagado: el vendedor gana el monto de cada producto."}</p>
+            <div><button class="btn btn-primary btn-sm" id="vr-save">${icon("save", 14)} Guardar regla</button></div>
+          </div>
+        </div>`;
+    }
+
+    function wireRuleCard() {
+      const card = content.querySelector("#vrule-card");
+      if (!card) return;
+      const read = () => normalizeVendorRule({
+        enabled: card.querySelector("#vr-enabled").checked,
+        threshold: card.querySelector("#vr-threshold").value,
+        above: card.querySelector("#vr-above").value,
+        below: card.querySelector("#vr-below").value,
+      });
+      card.querySelector("#vr-enabled").addEventListener("change", () => { vRule = read(); render(); });
+      card.querySelector("#vr-save").addEventListener("click", async () => {
+        const r = read();
+        try {
+          await saveVendorRuleSettings(r);
+          vRule = r;
+          getStore().setSettings({ vendorSaleRule: r });
+          toast("Regla guardada: cuenta para las ventas nuevas", "success");
+          render();
+        } catch (err) {
+          toast(err.message || "No se pudo guardar", "error", 8000);
+        }
+      });
+    }
 
     async function load() {
       loading = true;
@@ -5176,6 +5273,7 @@ export function mountAdminView(container, navigateOrUser) {
 
     function sellerCell(w, sh) {
       if (sh.key === "all") return sh.name ? `<strong>${esc(sh.name)}</strong>` : `<span class="text-muted">Una persona</span>`;
+      if (sh.key === "seller1" || sh.key === "seller2") return `<div class="text-xs text-muted">${esc(sh.label)} · con su PIN</div><strong>${esc(sh.name || "—")}</strong>`;
       return `<div class="text-xs text-muted">${esc(sh.label)}</div>${sh.name ? `<strong>${esc(sh.name)}</strong>` : ""}`;
     }
 
@@ -5190,14 +5288,15 @@ export function mountAdminView(container, navigateOrUser) {
           <div class="flex items-center justify-between flex-wrap gap-2">
             <div>
               <h2 class="text-lg font-bold">Comisiones de vendedores</h2>
-              <p class="text-xs text-muted">Monto fijo por cada producto vendido (el que configuras en cada producto). Es lo mismo que cada vendedor ve en su pantalla.</p>
+              <p class="text-xs text-muted">${esc(vendorRuleLabel(vRule))}. Es lo mismo que cada vendedor ve en su pantalla.</p>
             </div>
             <div class="flex gap-2 items-center">
               <input class="input" type="month" id="wc-period" value="${period}" style="width:10rem" aria-label="Mes" />
               <button class="btn btn-outline btn-sm" id="wc-csv" ${loading || rows.length === 0 ? "disabled" : ""} title="Exportar a CSV">${icon("download", 14)} CSV</button>
             </div>
           </div>
-          ${!loading && unconfigured.length ? `
+          ${ruleCardHtml()}
+          ${!loading && unconfigured.length && !vRule.enabled ? `
             <div class="card wc-warn">
               <div class="card-content" style="display:flex;gap:0.75rem;align-items:center;justify-content:space-between;flex-wrap:wrap">
                 <div style="min-width:0;flex:1 1 16rem">
@@ -5235,9 +5334,10 @@ export function mountAdminView(container, navigateOrUser) {
               `}
             </div>
           </div>
-          <p class="text-xs text-muted" style="margin:0">Solo cuentan las ventas completadas (las pendientes de confirmar salen aparte; las canceladas no cuentan). Cada venta usa la comisión que tenía el producto cuando se vendió. Para indicar quién vende —una persona, o dos: lunes a viernes y fin de semana— edita el almacén en <strong>Almacenes</strong>.</p>
+          <p class="text-xs text-muted" style="margin:0">Solo cuentan las ventas completadas (las pendientes de confirmar salen aparte; las canceladas no cuentan). Cada venta guarda la comisión que valía cuando se vendió (cambiar la regla no cambia las ventas ya hechas). Para indicar quién vende —una persona, dos con su PIN cada uno, o dos por días— edita el almacén en <strong>Almacenes</strong>.</p>
         </div>
       `;
+      wireRuleCard();
       content.querySelector("#wc-period")?.addEventListener("change", (e) => {
         if (!e.target.value) return;
         period = e.target.value;
@@ -5628,7 +5728,12 @@ export function mountAdminView(container, navigateOrUser) {
 
 // v5.14.0: columna «Vendedores» de la tabla de almacenes
 function sellersSummaryHtml(w) {
-  if (w && w.sellerWeekendSplit) {
+  if (sellerModeOf(w) === "pin") {
+    return `<div class="text-muted">1: <strong style="color:var(--text)">${esc(w.sellerName || "—")}</strong></div>`
+      + `<div class="text-muted">2: <strong style="color:var(--text)">${esc(w.sellerWeekendName || "—")}</strong></div>`
+      + `<div class="text-xs text-muted">cada uno con su PIN</div>`;
+  }
+  if (sellerModeOf(w) === "weekend") {
     return `<div class="text-muted">L–V: <strong style="color:var(--text)">${esc(w.sellerName || "—")}</strong></div>`
       + `<div class="text-muted">S–D: <strong style="color:var(--text)">${esc(w.sellerWeekendName || "—")}</strong></div>`;
   }

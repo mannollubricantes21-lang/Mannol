@@ -315,6 +315,8 @@ const DEFAULT_SETTINGS = {
   // v5.21.0: pago mixto — recargo por USD cuando el resto se cobra en MN
   mixSurchargeOptions: [10, 20],    // botones que ve el vendedor (además de «Tasa»)
   mixSurchargeDefault: 10,          // el que viene marcado
+  // v5.26.0: comisión del vendedor POR VENTA (js/vendor-rule.js)
+  vendorSaleRule: { enabled: true, threshold: 25, above: 1, below: 0.4 },
 };
 
 // Helper: get Supabase instance (cached)
@@ -549,13 +551,14 @@ export async function getSettings() {
     // v5.17: columnas seguras — pin_code ya no se lee (ni siquiera para admin;
     // el admin usa getSettingsAdmin). Con anon, select * fallaría por permisos.
     const BASE_COLS = "id, el_toque_enabled, el_toque_markup, business_name, last_rate_sync, weekend_warehouse_id, weekend_redirect_enabled";
+    const MIX_COLS = `${BASE_COLS}, mix_surcharge_options, mix_surcharge_default`;
+    const colErr = (e) => e && (String(e.code) === "42703" || /does not exist|permission denied/i.test(e.message || ""));
     let { data, error } = await s.from("settings")
-      .select(`${BASE_COLS}, mix_surcharge_options, mix_surcharge_default`)
+      .select(`${MIX_COLS}, vendor_sale_rule`)
       .eq("id", "global").maybeSingle();
-    // v5.21.0: si aún no se ejecutó la migración (columnas nuevas), lista base
-    if (error && (String(error.code) === "42703" || /does not exist|permission denied/i.test(error.message || ""))) {
-      ({ data, error } = await s.from("settings").select(BASE_COLS).eq("id", "global").maybeSingle());
-    }
+    // v5.26.0 / v5.21.0: si aún no se ejecutó el SQL (columnas nuevas), listas más cortas
+    if (colErr(error)) ({ data, error } = await s.from("settings").select(MIX_COLS).eq("id", "global").maybeSingle());
+    if (colErr(error)) ({ data, error } = await s.from("settings").select(BASE_COLS).eq("id", "global").maybeSingle());
     if (error) throw error;
     if (data) {
       const r = row(data);
@@ -656,6 +659,20 @@ export async function saveMixSurchargeSettings(options, def) {
   if (error) {
     if (String(error.code) === "PGRST204" || String(error.code) === "42703" || /column/i.test(error.message || "")) {
       throw new Error("Falta ejecutar supabase/instalar.sql en Supabase para guardar los recargos.");
+    }
+    throw new Error(error.message || "No se pudo guardar");
+  }
+}
+
+/** v5.26.0: guarda la regla de comisión del vendedor por venta (solo admin). */
+export async function saveVendorRuleSettings(rule) {
+  const s = await sb();
+  if (!s) return; // modo demo: solo en memoria (store)
+  _settingsCache = { ts: 0, data: null };
+  const { error } = await s.from("settings").upsert({ id: "global", vendor_sale_rule: rule }, { onConflict: "id" });
+  if (error) {
+    if (String(error.code) === "PGRST204" || String(error.code) === "42703" || /column/i.test(error.message || "")) {
+      throw new Error("Falta ejecutar en Supabase el SQL de la v5.26 (vendedores-v5.26.sql) para guardar la regla.");
     }
     throw new Error(error.message || "No se pudo guardar");
   }
@@ -790,6 +807,10 @@ const WH_CACHE_TTL = 30000;
 export const WAREHOUSE_SAFE_COLUMNS =
   "id, name, code, address, phone, active, seller_commission_percent, seller_commission_currency, seller_weekend_split, seller_name, seller_weekend_name, created_at";
 
+// v5.26.0: + seller_mode (dos vendedores con PIN propio). Solo la usa
+// listWarehouses, que cae a la lista anterior si el SQL aún no se ejecutó.
+export const WAREHOUSE_SAFE_COLUMNS_V526 = `${WAREHOUSE_SAFE_COLUMNS}, seller_mode`;
+
 // Lista sin las columnas de vendedores (v5.14): para bases de datos donde esa
 // migración aún no se ejecutó (la lista completa daría error 42703).
 export const WAREHOUSE_SAFE_COLUMNS_LEGACY =
@@ -814,7 +835,12 @@ export async function listWarehouses() {
     // v5.17: columnas seguras (anon no tiene permiso para `select *`)
     let list;
     try {
-      list = await fetchList(WAREHOUSE_SAFE_COLUMNS);
+      try {
+        list = await fetchList(WAREHOUSE_SAFE_COLUMNS_V526);
+      } catch (err) {
+        if (!isMissingV526ColumnsError(err)) throw err;
+        list = await fetchList(WAREHOUSE_SAFE_COLUMNS); // SQL v5.26 pendiente
+      }
     } catch (err) {
       if (isMissingSellerColumnsError(err)) {
         // La BD aún no tiene las columnas de vendedores (migration-v5.14 pendiente)
@@ -867,7 +893,7 @@ export async function listWarehousesAdmin() {
  * @param {string} pin
  * @returns {Promise<{ok:boolean, reason?:string, retryAfterSec?:number, pinSource?:string, pinLength?:number, pinSalt?:string, pinHash?:string, warehouse?:Object}>}
  */
-export async function verifyWarehousePin(code, pin) {
+export async function verifyWarehousePin(code, pin, seller = null) {
   const s = await sb();
   if (!s) {
     const e = new Error("SIN_CLIENTE");
@@ -876,7 +902,11 @@ export async function verifyWarehousePin(code, pin) {
   }
   // v5.23.3: era s.rpc(...) → no existe en el envoltorio (es s.client.rpc):
   // la validación SIEMPRE fallaba con «No se pudo validar el PIN».
-  const { data, error } = await s.client.rpc("verify_warehouse_pin", { p_code: code, p_pin: pin });
+  // v5.26.0: p_seller solo si hay dos vendedores con PIN (así funciona también
+  // con la función antigua de dos parámetros)
+  const args = { p_code: code, p_pin: pin };
+  if (seller === 1 || seller === 2) args.p_seller = seller;
+  const { data, error } = await s.client.rpc("verify_warehouse_pin", args);
   if (error) throw error;
   return data || { ok: false, reason: "wrong_pin" };
 }
@@ -907,11 +937,21 @@ export function subscribeWarehouses(cb) {
 // auditoría del stock inicial) → «_created_by» no existe → PGRST204, y el
 // almacén NO se guardaba aunque la pantalla dijera «Almacén guardado».
 export const WAREHOUSE_SELLER_COLUMNS = ["seller_weekend_split", "seller_name", "seller_weekend_name"];
+// v5.26.0: dos vendedores con PIN propio (sección 9 de instalar.sql)
+export const WAREHOUSE_V526_COLUMNS = ["seller_mode", "seller2_pin"];
 export const WAREHOUSE_COLUMNS = new Set([
   "id", "name", "code", "address", "phone", "active", "pin",
   "seller_commission_percent", "seller_commission_currency", "created_at",
   ...WAREHOUSE_SELLER_COLUMNS, // migration-v5.14-vendedores.sql
+  ...WAREHOUSE_V526_COLUMNS,
 ]);
+
+/** ¿Falta alguna columna de la v5.26 (SQL de dos vendedores sin ejecutar)? */
+export function isMissingV526ColumnsError(err) {
+  if (!err || (err.code !== "PGRST204" && err.code !== "42703")) return false;
+  const text = `${err.message || ""} ${err.details || ""} ${err.hint || ""}`;
+  return WAREHOUSE_V526_COLUMNS.some((c) => text.includes(c));
+}
 
 export function sanitizeWarehouseRow(r) {
   const out = {};
@@ -952,11 +992,20 @@ export async function saveWarehouse(w) {
     return data.id;
   };
   try {
-    return await attempt(full);
+    try {
+      return await attempt(full);
+    } catch (err) {
+      if (!(isMissingV526ColumnsError(err) && WAREHOUSE_V526_COLUMNS.some((c) => c in full))) throw err;
+      // SQL v5.26 pendiente: se guarda lo demás y se avisa
+      WAREHOUSE_V526_COLUMNS.forEach((c) => { delete full[c]; });
+      const id = await attempt(full);
+      lastWarehouseSaveSkippedSellers = true;
+      return id;
+    }
   } catch (err) {
     if (isMissingSellerColumnsError(err) && WAREHOUSE_SELLER_COLUMNS.some((c) => c in full)) {
       const r = { ...full };
-      WAREHOUSE_SELLER_COLUMNS.forEach((c) => { delete r[c]; });
+      [...WAREHOUSE_SELLER_COLUMNS, ...WAREHOUSE_V526_COLUMNS].forEach((c) => { delete r[c]; });
       const id = await attempt(r); // si también falla, el error sube a la pantalla
       lastWarehouseSaveSkippedSellers = true;
       return id;
@@ -4023,6 +4072,16 @@ export async function saveDailyClosure(c) {
     createdByName: c.user?.displayName || null,
     createdAt: Date.now(),
   };
+  // v5.24.0: fondo inicial, arqueo y ventas por marca (columnas opcionales)
+  const extra = {};
+  if (c.openingFloat !== undefined) extra.opening_float = c.openingFloat;
+  if (c.openedAt !== undefined) extra.opened_at = c.openedAt ? msToIso(c.openedAt) : null;
+  if (c.openedByName !== undefined) extra.opened_by_name = c.openedByName;
+  if (c.countedCash !== undefined) extra.counted_cash = c.countedCash;
+  if (c.cashDifference !== undefined) extra.cash_difference = c.cashDifference;
+  if (c.cashNote !== undefined) extra.cash_note = c.cashNote;
+  if (c.stats?.byBrand !== undefined) extra.by_brand = c.stats.byBrand;
+  extra.closed = c.closed !== false;
 
   const demo = await isDemo();
   if (demo) {
@@ -4030,8 +4089,9 @@ export async function saveDailyClosure(c) {
     const items = readDemoStore(DEMO_CLOSURES_KEY) || [];
     const idx = items.findIndex((x) => x.warehouseId === payload.warehouseId && x.closureDate === payload.closureDate);
     let updated = false;
-    if (idx >= 0) { items[idx] = { ...items[idx], ...payload, id: items[idx].id }; updated = true; }
-    else items.unshift({ ...payload, id: `demo-closure-${Date.now()}` });
+    const demoExtra = snakeToCamel(extra);
+    if (idx >= 0) { items[idx] = { ...items[idx], ...payload, ...demoExtra, id: items[idx].id }; updated = true; }
+    else items.unshift({ ...payload, ...demoExtra, id: `demo-closure-${Date.now()}` });
     writeDemoStore(DEMO_CLOSURES_KEY, items);
     return { id: items[0].id, updated };
   }
@@ -4046,14 +4106,20 @@ export async function saveDailyClosure(c) {
     // v5.20.0: camelToSnake convertía totalUSD en "total_u_s_d" (no existe)
     delete rowPayload.total_u_s_d;
     rowPayload.total_usd = payload.totalUSD;
-    if (existing?.id) {
-      const { error } = await s.from("daily_closures").update(rowPayload).eq("id", existing.id);
-      if (error) throw error;
-      return { id: existing.id, updated: true };
+    const full = { ...rowPayload, ...extra };
+    const isColErr = (e) => e && (String(e.code) === "PGRST204" || String(e.code) === "42703" || /column/i.test(e.message || ""));
+    const write = async (row) => existing?.id
+      ? s.from("daily_closures").update(row).eq("id", existing.id)
+      : s.from("daily_closures").insert(row).select().single();
+    let { data: inserted, error } = await write(full);
+    let missingColumns = false;
+    // Base sin las columnas de v5.24 → se guarda igual el resumen (sin arqueo)
+    if (isColErr(error)) {
+      missingColumns = true;
+      ({ data: inserted, error } = await write(rowPayload));
     }
-    const { data: inserted, error } = await s.from("daily_closures").insert(rowPayload).select().single();
     if (error) throw error;
-    return { id: inserted.id, updated: false };
+    return { id: existing?.id || inserted?.id, updated: !!existing?.id, missingColumns };
   } catch (err) {
     console.error("saveDailyClosure failed:", err);
     throw err;
@@ -4192,10 +4258,16 @@ export function getSuggestedVendorCommissionPerBox(product, boxes) {
 /**
  * Calcula la comisión sugerida del gestor por caja.
  */
-export function getSuggestedGestorCommissionPerBox(product, boxes) {
+export function getSuggestedGestorCommissionPerBox(product, boxes, pricePerBox = null) {
   if (!product?.unitsPerBox) return null;
   const tier = getWholesaleTier(product, boxes);
   if (!tier) return null;
+  // v5.26.0: porcentaje del precio de la caja (ej. 3% desde 10 cajas)
+  const pct = Number(tier.gestorCommissionPercent) || 0;
+  if (pct > 0) {
+    const box = Number(pricePerBox) > 0 ? Number(pricePerBox) : (tier.pricePerUnit || 0) * product.unitsPerBox;
+    return Math.round(box * pct) / 100;
+  }
   return (tier.gestorCommission || 0) * product.unitsPerBox;
 }
 

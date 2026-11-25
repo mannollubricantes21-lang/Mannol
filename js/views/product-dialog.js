@@ -119,7 +119,7 @@ export function showProductDialog(product, categories = [], onSaved = () => {}, 
           : `<label class="pf-mini"><span>Desde (cajas)</span><input class="input" data-k="minBoxes" inputmode="numeric" autocomplete="off" placeholder="Ej: 6" value="${esc(row.minBoxes)}" /></label>`}
         <label class="pf-mini"><span>Precio por pomo</span><input class="input" data-k="pricePerUnit" inputmode="decimal" autocomplete="off" placeholder="0.00 USD" value="${esc(row.pricePerUnit)}" /></label>
         <label class="pf-mini"><span>Vendedor por pomo</span><input class="input" data-k="vendorCommission" inputmode="decimal" autocomplete="off" placeholder="0.00 USD" value="${esc(row.vendorCommission)}" /></label>
-        <label class="pf-mini"><span>Gestor por pomo</span><input class="input" data-k="gestorCommission" inputmode="decimal" autocomplete="off" placeholder="0.00 USD" value="${esc(row.gestorCommission)}" /></label>
+        <label class="pf-mini"><span>Gestor por pomo <em class="text-muted" style="font-style:normal">o %</em></span><input class="input" data-k="gestorCommission" inputmode="text" autocomplete="off" placeholder="0.00 USD o 3%" value="${esc(row.gestorCommission)}" /></label>
       </div>
       <p class="pf-tier-sum" data-tier-sum></p>
       <p class="pf-msg" data-tier-msg hidden></p>
@@ -436,7 +436,7 @@ export function showProductDialog(product, categories = [], onSaved = () => {}, 
       el.querySelector("[data-tier-range]").textContent = range || "¿Desde cuántas cajas?";
       const per = tierPerBox(rows[i], unitsInput.value);
       el.querySelector("[data-tier-sum]").innerHTML = per
-        ? `Caja de ${units}: <strong>${money2(per.price)} USD</strong> · vendedor ${money2(per.vendor)} · gestor ${money2(per.gestor)}`
+        ? `Caja de ${units}: <strong>${money2(per.price)} USD</strong> · vendedor ${money2(per.vendor)} · gestor ${money2(per.gestor)}${per.gestorPct ? ` (${per.gestorPct}% del precio)` : ""}`
         : "";
     });
     if (whSummary) whSummary.textContent = wholesaleSummary(whToggle.checked, unitsInput.value, rows);
