@@ -159,9 +159,28 @@ async function loadConfig() {
 
   _loadPromise = (async () => {
     try {
-      // 1) Try localStorage first (set by the in-app Setup Wizard).
-      //    This takes precedence over the file because if the user has
-      //    gone through the wizard, that's their most recent intent.
+      // v5.20.0: el ARCHIVO js/supabase-config.js manda (está publicado en
+      // el repo y es igual para todos los equipos). Antes ganaba la config
+      // guardada por el asistente en ESTE equipo: un dispositivo que alguna
+      // vez se configuró con otros datos quedaba apuntando a otra base y no
+      // podía iniciar sesión.
+      let fileFailed = false;
+      try {
+        const mod = await import("./supabase-config.js");
+        const fileCfg = mod.supabaseConfig || DEFAULT_CONFIG;
+        if (_isValidConfig(fileCfg)) {
+          _config = fileCfg;
+          _configured = true;
+          try {
+            localStorage.setItem(LAST_GOOD_CONFIG_KEY, JSON.stringify({ url: fileCfg.url, anonKey: fileCfg.anonKey }));
+          } catch {}
+          return;
+        }
+      } catch {
+        fileFailed = true; // no existe o no se pudo leer sin conexión
+      }
+
+      // 2) Config del asistente (setup.html) guardada en este equipo
       const stored = getStoredSupabaseConfig();
       if (stored && _isValidConfig(stored)) {
         _config = stored;
@@ -169,24 +188,8 @@ async function loadConfig() {
         return;
       }
 
-      // 2) Fall back to js/supabase-config.js (manual file)
-      try {
-        const mod = await import("./supabase-config.js");
-        const fileCfg = mod.supabaseConfig || DEFAULT_CONFIG;
-        if (_isValidConfig(fileCfg) || mod.isSupabaseConfigured === true) {
-          _config = fileCfg;
-          _configured = true;
-          try {
-            if (_isValidConfig(fileCfg)) {
-              localStorage.setItem(LAST_GOOD_CONFIG_KEY, JSON.stringify({ url: fileCfg.url, anonKey: fileCfg.anonKey }));
-            }
-          } catch {}
-          return;
-        }
-      } catch {
-        // File doesn't exist (or no se pudo leer sin conexión) — ver respaldo.
-        // v5.13.0: si ya funcionó antes en este equipo, usar la última
-        // configuración válida en vez de caer en "modo demo" sin conexión.
+      // Respaldo sin conexión: la última configuración que funcionó aquí
+      if (fileFailed) {
         try {
           const last = JSON.parse(localStorage.getItem(LAST_GOOD_CONFIG_KEY) || "null");
           if (last && _isValidConfig(last)) {

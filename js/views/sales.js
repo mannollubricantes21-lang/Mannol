@@ -8,11 +8,11 @@ import { subscribeProducts, subscribeStock, subscribeCategories, subscribeBrands
 import { formatMoney, generateSaleId, generateSaleCode, CURRENCIES, CURRENCY_LABELS, CARD_BRANDS, getRate } from "../currency.js";
 import { enqueueSale, generateClientRef, requestSync, getPendingCount, getPendingSales, discardQueuedSale } from "../offline-sync.js";
 import { isSupabaseConfiguredAsync } from "../supabase.js";
-import { toast, icon, showModal, closeModal, esc, confirmDialog } from "../ui.js";
+import { toast, actionToast, icon, showModal, closeModal, esc, confirmDialog } from "../ui.js";
 import { computeTopSellers, findProductByCode } from "../sales-stats.js";
 import { openScanner, canUseCamera } from "../barcode-scanner.js";
-import { buildCatalogFacets, filterCatalog, NO_CATEGORY } from "../catalog-facets.js";
-import { roundCents, rateUSD, usdToNative, summarizeMultiPayment, billPresetsFor, normalizePaymentPreference } from "../payment-utils.js";
+import { buildCatalogFacets, filterCatalog, NO_CATEGORY, sortOutOfStockLast } from "../catalog-facets.js";
+import { roundCents, rateUSD, usdToNative, summarizeMultiPayment, billPresetsFor, normalizePaymentPreference, applyMnSurcharge, mixRestInMN } from "../payment-utils.js";
 import { getDataAgeMs, formatDataAge } from "../data-freshness.js"; // v5.17: «stock de hace X min»
 
 const CURRENCY_META = {
@@ -109,8 +109,53 @@ export function mountSalesView(container, navigate) {
       localStorage.setItem(payPrefKey, JSON.stringify({ mode: paymentMode, currency: selectedCurrency }));
     } catch {}
   }
+  // v5.20.0: pago mixto — el resto en MN se cobra a la tasa del día MÁS un
+  // recargo por cada USD (+10 / +20 MN). Se recuerda por almacén.
+  const MIX_SURCHARGES = [0, 10, 20];
+  const mixKey = draftWh ? `mannol-mix-surcharge-${draftWh.id}` : null;
+  let mnSurcharge = 10;
+  try {
+    const v = mixKey ? localStorage.getItem(mixKey) : null;
+    if (v != null && MIX_SURCHARGES.includes(Number(v))) mnSurcharge = Number(v);
+  } catch {}
+  let mnTouched = false; // el vendedor escribió el monto en MN a mano
+  function setMnSurcharge(v) {
+    mnSurcharge = MIX_SURCHARGES.includes(Number(v)) ? Number(v) : 0;
+    try { if (mixKey) localStorage.setItem(mixKey, String(mnSurcharge)); } catch {}
+  }
+  /** Tasas para el pago mixto: el MN lleva el recargo por USD. */
+  function multiRates() {
+    return applyMnSurcharge(payRates(), mnSurcharge);
+  }
+  /** MN por 1 USD (con recargo) o null sin tasa. */
+  function mixUsdInMN() {
+    const r = rateUSD("MN", multiRates());
+    return r ? 1 / r : null;
+  }
+  /**
+   * Calcula solo el resto en MN a partir de lo que se cobra en USD / EUR /
+   * transferencia. Si el vendedor escribió el MN a mano, no se toca.
+   */
+  function autoFillMN() {
+    if (paymentMode !== "MULTI" || mnTouched) return;
+    multiPayments.MN = mixRestInMN(multiPayments, roundCents(cartTotal()), multiRates());
+  }
+  function paintMnAuto() {
+    const inp = container.querySelector('[data-multi-currency="MN"]');
+    if (inp && document.activeElement !== inp) inp.value = multiPayments.MN > 0 ? String(multiPayments.MN) : "";
+    const hint = container.querySelector("#mn-rate-hint");
+    if (hint) hint.innerHTML = mnRateHintHtml();
+  }
+  function mnRateHintHtml() {
+    const base = rateUSD("MN", payRates());
+    if (!base) return "Sin tasa de MN";
+    const baseMN = Math.round(1 / base);
+    return mnSurcharge > 0
+      ? `1 USD = <strong>${baseMN + mnSurcharge} MN</strong> (${baseMN} + ${mnSurcharge})`
+      : `1 USD = <strong>${baseMN} MN</strong>`;
+  }
   function multiSummary() {
-    return summarizeMultiPayment(multiPayments, roundCents(cartTotal()), payRates());
+    return summarizeMultiPayment(multiPayments, roundCents(cartTotal()), multiRates());
   }
   function multiStatusHtml() {
     const s = multiSummary();
@@ -305,10 +350,13 @@ export function mountSalesView(container, navigate) {
     }
 
     saveDraft();
+    autoFillMN(); // v5.20.0: el resto en MN sigue al total y a lo cobrado en USD
     container.innerHTML = `
       <div class="sale-form-panel" style="display:flex;flex-direction:column;gap:1rem">
         <div class="flex items-center justify-between">
           <div>
+            <!-- v5.20.0: botón para volver sin tener que tocar «Inicio» -->
+            <button type="button" class="btn btn-ghost btn-sm" id="sales-back-btn" aria-label="Volver" style="margin:0 0 0.25rem -0.5rem;padding-left:0.25rem">${icon("arrowLeft", 16)} Volver</button>
             <h1 class="text-xl font-bold flex items-center gap-2">${icon("cart", 20)} Venta en ${esc(wh.name)} (${esc(wh.code)})</h1>
             <p class="text-xs text-muted">Solo productos, gestor y pago.</p>
           </div>
@@ -416,6 +464,13 @@ export function mountSalesView(container, navigate) {
                 `).join("")}
               </div>
             ` : `
+              <!-- v5.20.0: recargo por USD cuando el resto se cobra en MN -->
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem">
+                <span class="text-xs text-muted">Resto en MN con recargo por USD:</span>
+                <div class="seg-group" role="group" aria-label="Recargo por USD al cobrar en MN">
+                  ${MIX_SURCHARGES.map((v) => `<button type="button" class="seg ${mnSurcharge === v ? 'seg-on' : ''}" data-mix-surcharge="${v}" aria-pressed="${mnSurcharge === v}">${v === 0 ? 'Tasa' : '+' + v}</button>`).join("")}
+                </div>
+              </div>
               <div class="grid grid-cols-2 gap-2">
                 ${CURRENCIES.map((curr) => `
                   <div style="padding:0.75rem;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--bg-elevated)">
@@ -427,6 +482,7 @@ export function mountSalesView(container, navigate) {
                       <input class="input" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-multi-currency="${curr}" value="${multiPayments[curr] || ''}" aria-label="Monto en ${curr}" />
                       <button type="button" class="btn btn-outline btn-sm" data-multi-rest="${curr}" style="min-height:2.75rem" aria-label="Completar con ${curr}">Resto</button>
                     </div>
+                    ${curr === "MN" ? `<div class="text-xs text-muted" id="mn-rate-hint" style="margin-top:0.25rem">${mnRateHintHtml()}</div>` : ""}
                   </div>
                 `).join("")}
               </div>
@@ -1031,17 +1087,29 @@ export function mountSalesView(container, navigate) {
         const curr = e.target.dataset.multiCurrency;
         multiPayments[curr] = parseFloat(e.target.value) || 0;
         e.target.classList.remove("field-error"); // v5.18.0: al editar se limpia la marca
+        // v5.20.0: escribir USD/EUR/transf. calcula solo el resto en MN.
+        // Si el MN se escribe a mano, manda el vendedor (vacío = automático otra vez).
+        if (curr === "MN") mnTouched = multiPayments.MN > 0;
+        else { autoFillMN(); paintMnAuto(); }
         refreshMultiStatus();
+      });
+    });
+    container.querySelectorAll("[data-mix-surcharge]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        setMnSurcharge(btn.dataset.mixSurcharge);
+        mnTouched = false; // con el nuevo recargo se recalcula el resto en MN
+        render();
       });
     });
     container.querySelectorAll("[data-multi-rest]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const curr = btn.dataset.multiRest;
         const others = { ...multiPayments, [curr]: 0 };
-        const sum = summarizeMultiPayment(others, roundCents(cartTotal()), payRates());
+        const sum = summarizeMultiPayment(others, roundCents(cartTotal()), multiRates());
         if (sum.missingUSD <= 0) { toast("Ya está completo: no falta nada por cobrar", "info", 2500); return; }
-        const native = usdToNative(sum.missingUSD, curr, payRates());
+        let native = usdToNative(sum.missingUSD, curr, multiRates());
         if (native == null) { toast(`No hay tasa de cambio para ${curr}`, "error"); return; }
+        if (curr === "MN") { native = Math.ceil(native - 1e-9); mnTouched = true; }
         multiPayments[curr] = native;
         const input = container.querySelector(`[data-multi-currency="${curr}"]`);
         if (input) input.value = String(native);
@@ -1062,6 +1130,11 @@ export function mountSalesView(container, navigate) {
     if (transferInput) {
       transferInput.addEventListener("input", (e) => { transferAmount = parseFloat(e.target.value) || 0; });
     }
+
+    container.querySelector("#sales-back-btn")?.addEventListener("click", () => {
+      // El carrito a medias queda guardado (borrador) y se recupera al volver
+      window.dispatchEvent(new CustomEvent("mannol:nav", { detail: { view: "dashboard" } }));
+    });
 
     // Register sale
     const registerBtn = container.querySelector("#register-sale-btn");
@@ -1209,7 +1282,8 @@ export function mountSalesView(container, navigate) {
               .slice(0, 8)
           : [];
         const favIds = new Set(favs.map((p) => p.id));
-        const rest = filtered.filter((p) => !favIds.has(p.id));
+        // v5.20.0: los agotados al final de la lista
+        const rest = sortOutOfStockLast(filtered.filter((p) => !favIds.has(p.id)), (p) => getStockQty(p.id));
         list.innerHTML = `
           ${favs.length ? `
             <div class="catalog-fav-header">${icon("flame", 13)} Favoritos de este almacén</div>
@@ -1366,12 +1440,13 @@ export function mountSalesView(container, navigate) {
   function quickMatches() {
     const q = quickSearch.toLowerCase().trim();
     if (!q) return [];
-    return products
+    const found = products
       .filter((p) =>
         (p.name || "").toLowerCase().includes(q) ||
         (p.brand || "").toLowerCase().includes(q) ||
-        (p.sku || "").toLowerCase().includes(q))
-      .slice(0, 6);
+        (p.sku || "").toLowerCase().includes(q));
+    // v5.20.0: primero lo que se puede vender; los agotados al final
+    return sortOutOfStockLast(found, (p) => getStockQty(p.id)).slice(0, 6);
   }
 
   // v5.10.0: devuelve true si añadió; también frena productos agotados que aún
@@ -1411,110 +1486,21 @@ export function mountSalesView(container, navigate) {
     return true;
   }
 
-  // ===== v5.4.0: ticket compartible =====
-  function buildTicketText(sale) {
-    const lines = [];
-    lines.push("MANNOL POS");
-    lines.push(`Venta ${sale.code} · ${sale.warehouseName || ""}`.trimEnd());
-    lines.push(new Date(sale.createdAt).toLocaleString("es-ES"));
-    lines.push(`Vendedor: ${sale.userName || "—"}`);
-    lines.push("--------------------------------");
-    for (const i of sale.items || []) {
-      const qtyLabel = i.isWholesale ? `${i.boxes} caja(s)` : `${i.quantity} u`;
-      lines.push(`${qtyLabel} · ${i.name} = ${formatMoney(i.subtotal, "USD")}`);
-    }
-    lines.push("--------------------------------");
-    const pay = sale.paymentMode === "MULTI"
-      ? (sale.payments || []).map((p) => `${p.currency}: ${formatMoney(p.amount, p.currency)}`).join(" + ")
-      : `${sale.currency || "USD"}: ${formatMoney(sale.totalAmount, sale.currency || "USD")}`;
-    lines.push(`Pago: ${pay}`);
-    lines.push(`TOTAL: ${formatMoney(sale.totalAmount, "USD")}`);
-    if (sale.note) lines.push(`Nota: ${sale.note}`);
-    lines.push("¡Gracias por su compra!");
-    return lines.join("\n");
-  }
-
-  function showTicketModal(sale, undoSnapshot = null) {
-    const text = buildTicketText(sale);
-    // v5.17: «Deshacer» mientras la venta SIGA en la cola de este equipo y
-    // no esté subiéndose. Si ya se subió, no se ofrece (habría que anularla
-    // desde Historial con su motivo).
-    // v5.18.0: la ventana es corta y SE VE — «Deshacer · 10 s» con cuenta
-    // atrás; el botón se deshabilita en cuanto la venta empieza a subirse.
-    const UNDO_WINDOW_MS = 10000;
-    const undoDeadline = Date.now() + UNDO_WINDOW_MS;
-    let undoTicker = null;
-    function stopUndoTicker() {
-      if (undoTicker) { clearInterval(undoTicker); undoTicker = null; }
-    }
-    function undoStillQueued() {
-      const p = getPendingSales().find((s) => s.clientRef === sale.clientRef);
-      return !!p && !p.uploading && !p.blockedReason;
-    }
-    const pending = getPendingSales().find((s) => s.clientRef === sale.clientRef);
-    const canUndo = !!undoSnapshot && !!pending && !pending.uploading && !pending.blockedReason;
-    const close = showModal({
-      title: `${icon("check", 16)} Venta ${sale.code} registrada`,
-      body: `
-        <div style="display:flex;flex-direction:column;gap:0.75rem">
-          ${navigator.onLine === false ? `<div class="pending-sync-note ticket-pending">${icon("clock", 14)} <span><strong>Pendiente de subir:</strong> guardada en este equipo. Se sube sola a <strong>${esc(sale.warehouseName || sale.warehouseCode || "")}</strong> cuando vuelva internet.</span></div>` : ""}
-          <pre style="margin:0;padding:0.875rem;background:var(--bg-soft);border:1px dashed var(--border);border-radius:var(--radius);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.75rem;white-space:pre-wrap;overflow-x:auto">${esc(text)}</pre>
-          <p class="text-xs text-muted" style="margin:0">Cópialo al portapapeles si necesitas pasárselo al cliente.</p>
-        </div>
-      `,
-      footer: `
-        ${canUndo ? `<button class="btn btn-ghost text-danger" id="ticket-undo">${icon("arrowLeft", 14)} Deshacer · ${Math.ceil(UNDO_WINDOW_MS / 1000)} s</button>` : ""}
-        <button class="btn btn-outline" id="ticket-copy">${icon("receipt", 14)} Copiar</button>
-        <button class="btn btn-primary" id="ticket-close">${icon("plus", 14)} Nueva venta</button>
-      `,
-      onClose: stopUndoTicker,
-    });
-    if (canUndo) {
-      const undoBtn = document.querySelector("#ticket-undo");
-      const paintUndoBtn = () => {
-        if (!undoBtn) return false;
-        const ok = undoStillQueued();
-        const left = Math.ceil((undoDeadline - Date.now()) / 1000);
-        undoBtn.disabled = !ok;
-        undoBtn.innerHTML = ok && left > 0
-          ? `${icon("arrowLeft", 14)} Deshacer · ${left} s`
-          : `${icon("arrowLeft", 14)} Deshacer`;
-        undoBtn.title = ok
-          ? "La venta sigue en este equipo: se retira y vuelves a editarla"
-          : "La venta ya se está subiendo o se subió: anúlala desde Historial si hace falta";
-        return ok;
-      };
-      paintUndoBtn();
-      undoTicker = setInterval(() => {
-        if (!paintUndoBtn()) stopUndoTicker();
-      }, 250);
-    }
-    document.querySelector("#ticket-close").addEventListener("click", close);
-    document.querySelector("#ticket-undo")?.addEventListener("click", () => {
-        const still = getPendingSales().find((s) => s.clientRef === sale.clientRef);
-        if (!still || still.uploading) {
-          toast("La venta ya se está subiendo o se subió: anúlala desde Historial si hace falta", "warning", 5000);
-          close();
+  function showUndoToast(sale, undoSnapshot, message, type) {
+    actionToast(message, {
+      type,
+      actionLabel: "Deshacer",
+      duration: 8000,
+      onAction: () => {
+        const still = getPendingSales().find((x) => x.clientRef === sale.clientRef);
+        if (!still || still.uploading || !discardQueuedSale(sale.id)) {
+          toast("La venta ya se subió: anúlala desde Historial si hace falta", "warning", 5000);
           return;
         }
-        if (!discardQueuedSale(sale.id)) {
-          toast("No se pudo deshacer: la venta ya no está en espera", "warning");
-          close();
-          return;
-        }
-        // Restaurar la venta tal como estaba (carrito, nota, gestor, pago…)
         undoSnapshot.restore();
-        close();
         render();
         toast(`Venta ${sale.code} deshecha: sigue editándola`, "info", 3500);
-      });
-    document.querySelector("#ticket-copy").addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(text);
-        toast("Ticket copiado al portapapeles", "success");
-      } catch {
-        toast("No se pudo copiar automáticamente", "warning");
-      }
+      },
     });
   }
 
@@ -1578,7 +1564,7 @@ export function mountSalesView(container, navigate) {
       }
       paymentLines = [{ currency: selectedCurrency, amount: native, amountUSD: total, exchangeRate: rateUSD(selectedCurrency, rates) }];
     } else {
-      const sum = summarizeMultiPayment(multiPayments, total, rates);
+      const sum = summarizeMultiPayment(multiPayments, total, multiRates());
       // v5.18.0: además del aviso, marcar en rojo el campo concreto
       if (sum.missingRates.length) {
         sum.missingRates.forEach((c) => flagField(`[data-multi-currency="${c}"]`, false));
@@ -1594,7 +1580,8 @@ export function mountSalesView(container, navigate) {
         toast(`Sobra ${formatMoney(sum.overUSD, "USD")}: ajusta los montos`, "error");
         return;
       }
-      paymentLines = sum.lines;
+      // v5.20.0: queda constancia del recargo aplicado al MN
+      paymentLines = sum.lines.map((l) => (l.currency === "MN" && mnSurcharge > 0 ? { ...l, surchargeMNPerUSD: mnSurcharge } : l));
     }
     for (const l of paymentLines) {
       if (l.currency === "USD") paidUSD = l.amount;
@@ -1753,12 +1740,9 @@ export function mountSalesView(container, navigate) {
     // abre ya con ella preseleccionada.
     savePayPreference();
     const online = navigator.onLine !== false;
-    toast(
-      online
-        ? `Venta ${sale.code} registrada${saleType === "WHOLESALE" ? " (mayorista)" : ""}${weekendRedirect ? " · " + finalWh.name : ""}`
-        : `Venta ${sale.code} guardada sin conexión · se subirá sola al volver internet`,
-      online ? "success" : "info",
-    );
+    const doneMsg = online
+      ? `Venta ${sale.code} registrada${saleType === "WHOLESALE" ? " (mayorista)" : ""}${weekendRedirect ? " · " + finalWh.name : ""}`
+      : `Venta ${sale.code} guardada sin conexión · se subirá sola al volver internet`;
     // v5.17: copia del estado para «Deshacer» en el ticket (mientras la
     // venta siga en la cola de este equipo, se restaura todo y se retira).
     const cartBefore = cart.map((i) => ({ ...i }));
@@ -1781,6 +1765,7 @@ export function mountSalesView(container, navigate) {
         selectedManagerCode = managerCodeBefore;
         selectedManager = managerBefore;
         multiPayments = { ...multiBefore };
+        mnTouched = (multiBefore.MN || 0) > 0;
         transferAmount = transferAmountBefore;
         selectedCardId = selectedCardIdBefore;
         paidWith = paidWithBefore;
@@ -1793,13 +1778,16 @@ export function mountSalesView(container, navigate) {
         saveDraft();
       },
     };
-    showTicketModal(sale, undoSnapshot);
+    // v5.20.0: sin ventana de «Compartir / Copiar / Cerrar» — solo un aviso
+    // que no bloquea, con «Deshacer» unos segundos. Se sigue vendiendo al momento.
+    showUndoToast(sale, undoSnapshot, doneMsg, online ? "success" : "info");
     // Limpiar
     cart = [];
     note = "";
     selectedManagerCode = "";
     selectedManager = null;
     multiPayments = { USD: 0, MN: 0, EUR: 0, TRANSFERENCIA: 0 };
+    mnTouched = false;
     transferAmount = 0;
     selectedCardId = "";
     paidWith = 0;

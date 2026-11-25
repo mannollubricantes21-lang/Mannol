@@ -51,6 +51,7 @@ function setUrlView(view) {
 
 // ===== Main render =====
 let currentCleanup = null;
+let currentViewName = null; // v5.20.0: para que «atrás» cambie de sección sin re-montar
 
 function renderView(container, view, navigate) {
   if (currentCleanup) {
@@ -78,6 +79,7 @@ function renderView(container, view, navigate) {
   if (!user && view === "dashboard") {
     view = "home";
   }
+  currentViewName = view;
 
   try {
     switch (view) {
@@ -194,8 +196,15 @@ function init() {
   });
 
   // Handle browser back/forward
+  // v5.20.0: dentro del panel, «atrás» (botón del teléfono o del navegador)
+  // vuelve a la sección anterior sin volver a montar todo el panel.
   window.addEventListener("popstate", () => {
     const view = getViewFromUrl() || "home";
+    if (view === "dashboard" && currentViewName === "dashboard") {
+      const tab = new URLSearchParams(window.location.search).get("tab") || "dashboard";
+      window.dispatchEvent(new CustomEvent("mannol:tab", { detail: { view: tab } }));
+      return;
+    }
     renderView(container, view, navigate);
   });
 

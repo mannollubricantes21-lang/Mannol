@@ -36,8 +36,14 @@ const NAV_ITEMS = [
   { id: "dashboard", label: "Inicio", icon: "home" },
   { id: "sales", label: "Ventas", icon: "cart", hideForRoles: ["admin"] },
   { id: "stock", label: "Inventario", icon: "boxes" },
-  { id: "more", label: "Más", icon: "more" },
+  // v5.20.0: antes «Más» abría el mismo menú que ☰ (arriba). Ahora es un
+  // acceso directo útil: Historial (o «Estado» para el acceso por PIN).
+  { id: "history", label: "Historial", icon: "receipt", hideForRoles: ["empleado_pin"] },
+  { id: "team-status", label: "Estado", icon: "activity", onlyForRoles: ["empleado_pin"] },
 ];
+const navItemsFor = (role) => NAV_ITEMS.filter((item) =>
+  (!item.hideForRoles || !item.hideForRoles.includes(role)) &&
+  (!item.onlyForRoles || item.onlyForRoles.includes(role)));
 
 const DRAWER_ITEMS = [
   { id: "dashboard", label: "Inicio", icon: "home", roles: ["admin", "gestor", "vendedor", "warehouse", "empleado_pin"] },
@@ -136,15 +142,13 @@ export function mountDashboardView(container, navigate) {
           <div style="position:relative">
             ${user.role !== "admin" ? `<button class="fab" id="fab-sell" aria-label="Registrar nueva venta" title="Registrar venta">${icon("cart", 24)}</button>` : ''}
             <div class="bottom-nav-bar">
-              ${NAV_ITEMS
-                .filter((item) => !item.hideForRoles || !item.hideForRoles.includes(user.role))
+              ${navItemsFor(user.role)
                 .slice(0, 2)
                 .map((item) => `
                 <button class="nav-btn ${activeView === item.id ? 'active' : ''}" data-nav="${item.id}" aria-label="${item.label}" aria-current="${activeView === item.id ? 'page' : 'false'}">${icon(item.icon, 20)}<span class="nav-btn-label">${item.label}</span></button>
               `).join('')}
               <div class="flex items-center justify-center"></div>
-              ${NAV_ITEMS
-                .filter((item) => !item.hideForRoles || !item.hideForRoles.includes(user.role))
+              ${navItemsFor(user.role)
                 .slice(2)
                 .map((item) => `
                 <button class="nav-btn ${activeView === item.id ? 'active' : ''}" data-nav="${item.id}" aria-label="${item.label}" aria-current="${activeView === item.id ? 'page' : 'false'}">${icon(item.icon, 20)}<span class="nav-btn-label">${item.label}</span></button>
@@ -161,11 +165,11 @@ export function mountDashboardView(container, navigate) {
       btn.addEventListener("click", () => {
         const v = btn.dataset.nav;
         if (v === "more") openDrawer();
-        else { activeView = v; renderActiveView(); updateNavActive(); }
+        else goTo(v);
       });
     });
 
-    container.querySelector("#fab-sell")?.addEventListener("click", () => { activeView = "sales"; renderActiveView(); updateNavActive(); });
+    container.querySelector("#fab-sell")?.addEventListener("click", () => goTo("sales"));
     container.querySelector("#open-drawer-btn").addEventListener("click", openDrawer);
     container.querySelector("#refresh-btn").addEventListener("click", () => {
       const btn = container.querySelector("#refresh-btn");
@@ -193,6 +197,32 @@ export function mountDashboardView(container, navigate) {
     }
 
     renderDrawer(); // en PC queda fijo a la izquierda
+  }
+
+  // v5.20.0: cambiar de sección dejando rastro en el historial, para que el
+  // botón «atrás» del teléfono vuelva a Inicio en vez de salir de la app.
+  // Inicio ⇄ sección: una entrada; sección → sección: se reemplaza.
+  function goTo(view) {
+    if (!view) return;
+    const pushed = !!window.history.state?.mannolTab;
+    if (view === "dashboard" && pushed) {
+      window.history.back(); // el popstate (mannol:tab) pinta Inicio
+      return;
+    }
+    if (view !== activeView) {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set("view", "dashboard");
+        if (view === "dashboard") url.searchParams.delete("tab");
+        else url.searchParams.set("tab", view);
+        const state = view === "dashboard" ? {} : { mannolTab: view };
+        if (view !== "dashboard" && !pushed && activeView === "dashboard") window.history.pushState(state, "", url.toString());
+        else window.history.replaceState(state, "", url.toString());
+      } catch {}
+    }
+    activeView = view;
+    renderActiveView();
+    updateNavActive();
   }
 
   function updateNavActive() {
@@ -294,10 +324,8 @@ export function mountDashboardView(container, navigate) {
     });
     dc.querySelectorAll("[data-drawer-nav]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        activeView = btn.dataset.drawerNav;
         closeDrawer();
-        renderActiveView();
-        updateNavActive();
+        goTo(btn.dataset.drawerNav);
       });
     });
   }
@@ -682,11 +710,22 @@ export function mountDashboardView(container, navigate) {
     const item = DRAWER_ITEMS.find((i) => i.id === view);
     if (!item || !item.roles.includes(role)) return;
     e.preventDefault();
-    activeView = view;
-    renderActiveView();
-    updateNavActive();
+    goTo(view);
   }
   document.addEventListener("keydown", onKeydown);
+
+  // v5.20.0: «atrás» del teléfono / navegador (app.js avisa con mannol:tab)
+  // y el botón «Volver» de las secciones (mannol:nav).
+  const onTabPop = (e) => {
+    const v = e.detail?.view || "dashboard";
+    if (v === activeView) return;
+    activeView = v;
+    renderActiveView();
+    updateNavActive();
+  };
+  const onNavRequest = (e) => goTo(e.detail?.view || "dashboard");
+  window.addEventListener("mannol:tab", onTabPop);
+  window.addEventListener("mannol:nav", onNavRequest);
 
   // PC ↔ móvil (redimensionar ventana / girar tablet): fijar o soltar el menú
   const desktopMq = typeof matchMedia === "function" ? matchMedia(DESKTOP_MQ) : null;
@@ -697,6 +736,8 @@ export function mountDashboardView(container, navigate) {
     if (cleanup) { try { cleanup(); } catch {} }
     if (bannerCleanup) { try { bannerCleanup(); } catch {} }
     document.removeEventListener("keydown", onKeydown);
+    window.removeEventListener("mannol:tab", onTabPop);
+    window.removeEventListener("mannol:nav", onNavRequest);
     desktopMq?.removeEventListener?.("change", onDesktopChange);
   };
 }

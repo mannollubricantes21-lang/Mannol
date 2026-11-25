@@ -5,7 +5,7 @@
 // (user-login.js, dashboard.js) don't change.
 // =====================================================
 
-import { getSupabase, hasPersistedSupabaseSession } from "./supabase.js";
+import { getSupabase, hasPersistedSupabaseSession, isSupabaseConfiguredAsync } from "./supabase.js";
 import { getStore } from "./store.js";
 
 // v5.13.0: sin conexión el token vencido no se puede renovar y getSession()
@@ -40,6 +40,17 @@ export async function validatePin(pin) {
 // Login with email + password
 export async function loginWithEmail(email, password) {
   const s = await sb();
+  // v5.20.0: con la nube configurada, que no haya cliente NO es «modo demo»:
+  // la librería no cargó (sin internet la 1ª vez, o navegador antiguo). Antes
+  // se probaban las credenciales de demostración y salía «Credenciales
+  // incorrectas» aunque el usuario y la contraseña estuvieran bien.
+  if (!s && (await isSupabaseConfiguredAsync())) {
+    throw new Error(
+      navigator.onLine === false
+        ? "Sin conexión. Para iniciar sesión por primera vez en este equipo necesitas internet."
+        : "No se pudo conectar con el servidor. Revisa internet y actualiza el navegador (Chrome/Safari) a la última versión; luego recarga la página."
+    );
+  }
   if (!s) {
     // MODO DEMO: credenciales predefinidas
     const demoUsers = [
@@ -56,8 +67,10 @@ export async function loginWithEmail(email, password) {
   }
 
   // Supabase Auth
+  // v5.20.0: se puede entrar con el NOMBRE DE USUARIO (no solo el email).
+  const loginEmail = await resolveLoginEmail(s, email);
   const { data, error } = await s.auth.signInWithPassword({
-    email: email.toLowerCase().trim(),
+    email: loginEmail,
     password,
   });
   if (error) {
@@ -72,7 +85,14 @@ export async function loginWithEmail(email, password) {
 
   // Fetch user profile from public.users
   const { getUserByEmail } = await import("./db.js");
-  const profile = await getUserByEmail(email.toLowerCase().trim());
+  let profile = null;
+  try {
+    profile = await getUserByEmail(loginEmail, { throwOnError: true });
+  } catch (err) {
+    // v5.20.0: un fallo de red/permisos ya no se confunde con «no tienes perfil»
+    await s.auth.signOut().catch(() => {});
+    throw new Error("Se validó la contraseña pero no se pudo leer tu perfil (" + (err?.message || "error de red") + "). Inténtalo de nuevo.");
+  }
   if (!profile) {
     await s.auth.signOut();
     throw new Error("Tu cuenta no tiene perfil en el sistema. Contacta al administrador.");
@@ -82,6 +102,22 @@ export async function loginWithEmail(email, password) {
     throw new Error("Tu cuenta está inactiva. Contacta al administrador.");
   }
   return profile;
+}
+
+/**
+ * v5.20.0: "usuario" o "email" → email para Supabase Auth.
+ * Con "@" se usa tal cual. Sin "@" se busca el email del usuario con la RPC
+ * email_for_username (migration-v5.20.sql); si la RPC no existe aún,
+ * se prueba usuario@mannol.cu (el dominio de las cuentas creadas por defecto).
+ */
+async function resolveLoginEmail(s, input) {
+  const v = String(input || "").trim().toLowerCase();
+  if (v.includes("@")) return v;
+  try {
+    const { data, error } = await s.client.rpc("email_for_username", { p_username: v });
+    if (!error && typeof data === "string" && data.includes("@")) return data.toLowerCase();
+  } catch {}
+  return `${v}@mannol.cu`;
 }
 
 // Logout

@@ -1,5 +1,35 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.20.0 (2026-11-25) — Correcciones de uso diario
+
+> ⚠️ **Ejecutar una vez** `supabase/migration-v5.20.sql` en Supabase → SQL Editor
+> (permisos de traspasos/cierre para el acceso por PIN + login con usuario).
+
+- **Catálogo de ventas**: los productos agotados van al final (catálogo,
+  búsqueda rápida e inventario del almacén).
+- **Pago mixto**: al escribir lo que paga en USD (o EUR / transferencia) se
+  calcula solo el resto en MN, a la tasa del día **+10 o +20 MN por cada USD**
+  (selector «Tasa / +10 / +20», se recuerda por almacén). Si se escribe el MN a
+  mano, manda el vendedor; vaciarlo vuelve al cálculo automático.
+- **Sin ventana tras registrar la venta**: se quitó el cartel «Copiar / Nueva
+  venta». Queda un aviso que no bloquea, con «Deshacer» durante 8 s.
+- **Traspasos**: «Solicitar traspaso» fallaba siempre desde el PIN (el id de la
+  sesión PIN no es UUID y la tabla solo aceptaba usuarios con cuenta). Además
+  «Pedir desde otro almacén» llamaba a una función inexistente.
+- **Cierre de caja**: el total en USD no se guardaba (`total_u_s_d`).
+- **Volver** (barra del almacén): ahora sale del almacén y vuelve a la lista.
+- **Barra de abajo**: «Más» (repetía el menú ☰) pasa a ser **Historial**
+  (o **Estado** en el acceso por PIN).
+- Se quitó el botón grande «Registrar venta» del centro: el 🛒 de abajo
+  siempre está.
+- **Ventas**: botón «Volver» arriba, y el botón atrás del teléfono vuelve a
+  Inicio en vez de salir de la app.
+- **Iniciar sesión en otros equipos**: se puede entrar con usuario o email;
+  el email no distingue mayúsculas; la configuración publicada
+  (`js/supabase-config.js`) manda sobre una configuración vieja guardada en el
+  equipo; si la librería no carga, mensaje claro en vez de «Credenciales
+  incorrectas (modo demo)»; se ocultan las credenciales demo.
+
 ## v5.19.0 (2026-11-25) — Escribir ya no se corta: el formulario no se redibuja solo
 
 La vista de ventas se redibujaba COMPLETA cada vez que llegaban datos nuevos

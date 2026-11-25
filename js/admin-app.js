@@ -263,7 +263,7 @@ function renderAdminLogin(container, errorMessage) {
                 <form id="admin-login-form" style="display:flex;flex-direction:column;gap:0.75rem">
                   <div>
                     <label class="label" for="admin-email">Email</label>
-                    <input class="input" type="email" id="admin-email" placeholder="admin@mannol.cu" autoComplete="username" required autofocus />
+                    <input class="input" type="email" id="admin-email" placeholder="admin@mannol.cu" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus />
                   </div>
                   <div>
                     <label class="label" for="admin-password">Contraseña</label>

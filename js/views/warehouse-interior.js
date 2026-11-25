@@ -4,11 +4,32 @@
 // =====================================================
 
 import { getStore } from "../store.js";
+import { hasPersistedSupabaseSession } from "../supabase.js";
 import { subscribeSales, subscribeStock, listProducts, listWarehouses, listAllStockAcrossWarehouses, listStockForProductInAllWarehouses, createTransferRequest, listTransferRequests, saveDailyClosure, listDailyClosures, listSalesInRange } from "../db.js";
 import { computeSellerEarnings, renderSellerEarningsCard, monthRange } from "../seller-earnings.js";
 import { computeClosureStats, closureDateKey, validateTransferRequest, buildClosureShareText } from "../sales-stats.js";
 import { formatMoney, formatDate } from "../currency.js";
+import { sortOutOfStockLast } from "../catalog-facets.js";
 import { icon, esc, toast, showModal, closeModal, confirmDialog, copyText, openWhatsApp } from "../ui.js";
+
+/**
+ * v5.20.0: salir del almacén (fin de la sesión PIN) y volver al inicio.
+ * Las ventas pendientes de subir NO se pierden: la cola es del equipo.
+ */
+export function exitWarehouse(store, warehouse, navigate) {
+  confirmDialog(`¿Salir de ${esc(warehouse?.name || "este almacén")}? Para volver a entrar se pedirá el PIN.`, () => {
+    const hadAccount = hasPersistedSupabaseSession();
+    store.logout();
+    store.setWarehouse(null);
+    try { localStorage.setItem("mannol-last-view", "home"); } catch {}
+    if (hadAccount) {
+      // El dueño (admin) entró por PIN: recargar recupera su sesión normal
+      window.location.href = window.location.pathname;
+      return;
+    }
+    navigate("home");
+  });
+}
 
 export function mountWarehouseInterior(container, navigate) {
   const store = getStore();
@@ -196,7 +217,7 @@ export function mountWarehouseInterior(container, navigate) {
     stock.forEach((s) => (stockMap[s.productId] = s));
     const user = store.getState().currentUser;
     const isAdmin = user?.role === "admin";
-    const filteredProducts = products.filter((p) => {
+    const filteredProducts = sortOutOfStockLast(products.filter((p) => {
       if (search) {
         const q = search.toLowerCase();
         if (!p.name.toLowerCase().includes(q) && !(p.brand || "").toLowerCase().includes(q) && !(p.sku || "").toLowerCase().includes(q)) return false;
@@ -209,7 +230,7 @@ export function mountWarehouseInterior(container, navigate) {
         if (stockFilter === "out" && qty !== 0) return false;
       }
       return true;
-    });
+    }), (p) => stockMap[p.id]?.quantity ?? 0); // v5.20.0: agotados al final
     const lowStock = stock.filter((s) => s.quantity <= (s.minStock || 5) && s.quantity > 0).length;
     const outOfStock = stock.filter((s) => s.quantity === 0).length;
 
@@ -306,16 +327,14 @@ export function mountWarehouseInterior(container, navigate) {
               <div class="empty-state text-xs" style="padding:0.875rem 0 0.25rem">
                 <div class="empty-state-icon">${icon("cart", 20)}</div>
                 <p style="margin:0.25rem 0 0">Sin ventas en este período.</p>
-                <p class="text-muted" style="font-size:0.6875rem;margin:0.125rem 0 0">Toca <strong>Registrar venta</strong> para empezar el día.</p>
+                <p class="text-muted" style="font-size:0.6875rem;margin:0.125rem 0 0">Toca el carrito ${icon("cart", 11)} de abajo para registrar una venta.</p>
               </div>
             ` : ''}
           </div>
         </div>
 
-        <!-- Botón registrar venta (v5.7.0) -->
-        <button class="btn cta-sale btn-block wi-cta" id="register-sale-btn">
-          ${icon("cart", 20)} Registrar venta
-        </button>
+        <!-- v5.20.0: se quitó el botón grande «Registrar venta» del centro —
+             el botón 🛒 de la barra de abajo está siempre disponible. -->
 
         <!-- v5.14.0: lo que lleva ganado (comisión fija por producto) -->
         <div class="wi-ganado">${earningsHtml}</div>
@@ -682,18 +701,11 @@ export function mountWarehouseInterior(container, navigate) {
       btn.addEventListener("click", () => loadOtherStock());
     });
 
-    const registerBtn = container.querySelector("#register-sale-btn");
-    if (registerBtn) {
-      registerBtn.addEventListener("click", () => {
-        const url = new URL(window.location.href);
-        url.searchParams.set("view", "dashboard");
-        url.searchParams.set("tab", "sales");
-        window.location.href = url.toString();
-      });
-    }
-
+    // v5.20.0: «Volver» no hacía nada — navigate("home") rebotaba de nuevo
+    // al dashboard porque la sesión PIN seguía activa. Ahora sale del almacén
+    // (pide confirmación) y vuelve a la lista de almacenes.
     const backBtn = container.querySelector("[data-nav-back]");
-    if (backBtn) backBtn.addEventListener("click", () => navigate("home"));
+    if (backBtn) backBtn.addEventListener("click", () => exitWarehouse(store, warehouse, navigate));
 
     const searchInput = container.querySelector("#stock-search");
     if (searchInput) {
@@ -724,9 +736,11 @@ export function mountWarehouseInterior(container, navigate) {
     });
 
     document.querySelector("#modal-close-btn").addEventListener("click", close);
-    document.querySelector("#modal-transfer-btn").addEventListener("click", () => {
+    document.querySelector("#modal-transfer-btn").addEventListener("click", async () => {
       close();
-      showCreateTransferModal(product);
+      // v5.20.0: antes llamaba a showCreateTransferModal (no existía → error)
+      if (otherWarehousesStock.length === 0 && othersState !== "loading") await loadOtherStock();
+      showRequestDialog(product);
     });
 
     // Cargar disponibilidad

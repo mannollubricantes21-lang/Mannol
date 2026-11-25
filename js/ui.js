@@ -36,6 +36,35 @@ export function toast(message, type = "info", duration = 3000) {
   }, duration);
 }
 
+/**
+ * v5.20.0: aviso con un botón de acción (ej. «Deshacer»). No bloquea la
+ * pantalla: desaparece solo tras `duration` ms. Devuelve una función para
+ * cerrarlo antes.
+ */
+export function actionToast(message, { type = "success", actionLabel = "Deshacer", onAction, duration = 8000 } = {}) {
+  const container = document.getElementById("toast-container");
+  if (!container) return () => {};
+  const el = document.createElement("div");
+  el.className = `toast toast-${type} toast-action`;
+  el.style.pointerEvents = "auto";
+  el.innerHTML = `${getToastIcon(type)}<span style="flex:1">${escapeHtml(message)}</span>` +
+    `<button type="button" class="btn btn-ghost btn-sm" style="margin-left:0.5rem;font-weight:700;pointer-events:auto">${escapeHtml(actionLabel)}</button>`;
+  let done = false;
+  const dismiss = () => {
+    if (done) return;
+    done = true;
+    el.style.animation = "slideIn 0.2s ease reverse";
+    setTimeout(() => el.remove(), 200);
+  };
+  el.querySelector("button").addEventListener("click", () => {
+    dismiss();
+    try { onAction?.(); } catch (err) { console.error("[toast] acción falló:", err); }
+  });
+  container.appendChild(el);
+  setTimeout(dismiss, duration);
+  return dismiss;
+}
+
 function getToastIcon(type) {
   const icons = {
     success: "✅",

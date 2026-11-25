@@ -118,3 +118,38 @@ export function normalizePaymentPreference(raw) {
   const currency = PAY_CURRENCIES.has(v.currency) ? v.currency : null;
   return currency ? { mode, currency } : null;
 }
+
+// =====================================================
+// v5.20.0 — Pago mixto con recargo por USD en MN (puro, testeado)
+// =====================================================
+
+/**
+ * Devuelve una copia de `rates` donde el MN se cobra a la tasa del día MÁS
+ * `surchargeMN` pesos por cada USD (ej.: tasa 320 + 10 → 1 USD = 330 MN).
+ * Sin tasa de MN o sin recargo, devuelve `rates` tal cual.
+ */
+export function applyMnSurcharge(rates, surchargeMN) {
+  const base = rateUSD("MN", rates);
+  const extra = Number(surchargeMN) || 0;
+  if (base == null || extra <= 0) return rates;
+  const usdInMN = 1 / base + extra;
+  return { ...rates, MN: { ...(rates?.MN || {}), rateUSD: 1 / usdInMN } };
+}
+
+/**
+ * Resto a cobrar en MN (redondeado hacia arriba a pesos enteros) según lo que
+ * ya se paga en las otras monedas. 0 si no se cobró nada en otras monedas,
+ * si ya está completo o si no hay tasa.
+ * @param {Record<string, number>} multi  montos en su moneda (se ignora el MN)
+ * @param {number} totalUSD
+ * @param {Object} rates  tasas (ya con el recargo aplicado)
+ */
+export function mixRestInMN(multi, totalUSD, rates) {
+  const others = { ...(multi || {}), MN: 0 };
+  const anyOther = Object.keys(others).some((c) => c !== "MN" && (Number(others[c]) || 0) > 0);
+  if (!anyOther) return 0;
+  const sum = summarizeMultiPayment(others, totalUSD, rates);
+  if (sum.missingRates.length || sum.missingUSD <= 0) return 0;
+  const native = usdToNative(sum.missingUSD, "MN", rates);
+  return native == null ? 0 : Math.ceil(native - 1e-9);
+}

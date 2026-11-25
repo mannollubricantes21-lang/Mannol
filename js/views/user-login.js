@@ -6,6 +6,7 @@ import { loginWithEmail } from "../auth.js";
 import { listWarehouses } from "../db.js";
 import { getStore } from "../store.js";
 import { toast, icon, esc } from "../ui.js";
+import { isSupabaseConfiguredAsync } from "../supabase.js";
 
 export function renderUserLoginView() {
   return `
@@ -31,7 +32,7 @@ export function renderUserLoginView() {
             <form id="login-form" style="display:flex;flex-direction:column;gap:0.75rem">
               <div>
                 <label class="label" for="email">Usuario / Email</label>
-                <input class="input" type="text" id="email" placeholder="admin" autoComplete="username" required autofocus />
+                <input class="input" type="text" id="email" placeholder="usuario o email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="email" required autofocus />
               </div>
               <div>
                 <label class="label" for="password">Contraseña</label>
@@ -92,6 +93,12 @@ export function mountUserLoginView(container, navigate) {
   container.querySelectorAll("[data-nav]").forEach((btn) => {
     btn.addEventListener("click", () => navigate(btn.dataset.nav));
   });
+
+  // v5.20.0: con la nube configurada NO se muestran las credenciales de
+  // demostración (confundían: con ellas no se puede entrar a la base real)
+  isSupabaseConfiguredAsync().then((configured) => {
+    if (configured) container.querySelector("#demo-creds")?.remove();
+  }).catch(() => {});
 
   // Demo creds toggle
   const toggleBtn = container.querySelector("#toggle-demo-creds");

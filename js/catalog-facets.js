@@ -229,6 +229,20 @@ export function filterCatalog(products = [], categories = [], { categoryId = "",
   });
 }
 
+/**
+ * v5.20.0: los productos AGOTADOS van al final (orden estable: dentro de
+ * cada grupo se respeta el orden que ya traía la lista).
+ * @param {Array} products
+ * @param {(p:Object) => number} getQty  stock del producto
+ * @returns {Array} copia ordenada
+ */
+export function sortOutOfStockLast(products = [], getQty = () => 0) {
+  const inStock = [];
+  const out = [];
+  for (const p of products) ((Number(getQty(p)) || 0) > 0 ? inStock : out).push(p);
+  return inStock.concat(out);
+}
+
 // ---------- Sugerencias (Admin → Organizar productos) ----------
 
 // El orden importa: "Filtro de aceite" es un filtro (no un lubricante) y

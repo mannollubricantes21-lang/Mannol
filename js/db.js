@@ -1050,15 +1050,19 @@ export async function listUsers() {
  * @param {string} email
  * @returns {Promise<User|null>}
  */
-export async function getUserByEmail(email) {
+export async function getUserByEmail(email, { throwOnError = false } = {}) {
   const s = await sb();
   if (!s) return null;
   try {
-    const { data, error } = await s.from("users").select("*").eq("email", email.toLowerCase()).maybeSingle();
+    // v5.20.0: sin distinguir mayúsculas (perfiles creados a mano con
+    // "Admin@…" no se encontraban y el login decía «no tiene perfil»).
+    const clean = String(email || "").trim().toLowerCase().replace(/[%_\\]/g, "\\$&");
+    const { data, error } = await s.from("users").select("*").ilike("email", clean).limit(1);
     if (error) throw error;
-    return data ? row(data) : null;
+    return data && data[0] ? row(data[0]) : null;
   } catch (err) {
     console.error("getUserByEmail failed:", err);
+    if (throwOnError) throw err;
     return null;
   }
 }
@@ -3764,7 +3768,9 @@ export async function createTransferRequest(data, user) {
     quantity: Number(data.quantity),
     note: data.note || null,
     status: "PENDIENTE",
-    requestedBy: user?.id || null,
+    // v5.20.0: las sesiones PIN tienen id "pin-…" (no es UUID) → antes la
+    // base rechazaba la solicitud con «invalid input syntax for type uuid».
+    requestedBy: nullIfNotUuid(user?.id),
     requestedByName: user?.displayName || null,
     createdAt: Date.now(),
   };
@@ -3799,6 +3805,11 @@ export async function createTransferRequest(data, user) {
     if (String(err.code) === "23505" || /duplicate/i.test(err.message || "")) {
       throw new Error("Ya existe una solicitud pendiente de este producto desde ese almacén");
     }
+    // v5.20.0: permisos (RLS) — el acceso por PIN es rol anon
+    if (String(err.code) === "42501" || /row-level security|permission denied/i.test(err.message || "")) {
+      throw new Error("La base de datos no permite solicitudes desde el acceso por PIN. El administrador debe ejecutar supabase/migration-v5.20.sql");
+    }
+    if (!navigator.onLine) throw new Error("Sin conexión: la solicitud necesita internet");
     throw err;
   }
 }
@@ -3961,7 +3972,7 @@ export async function saveDailyClosure(c) {
     totalUSD: c.stats.totalUSD,
     byCurrency: c.stats.byCurrency,
     topProducts: c.stats.topProducts,
-    createdBy: c.user?.id || null,
+    createdBy: nullIfNotUuid(c.user?.id), // v5.20.0: sesiones PIN → null
     createdByName: c.user?.displayName || null,
     createdAt: Date.now(),
   };
@@ -3985,6 +3996,9 @@ export async function saveDailyClosure(c) {
       .select("id").eq("warehouse_id", payload.warehouseId)
       .eq("closure_date", payload.closureDate).maybeSingle();
     const rowPayload = toRow(payload);
+    // v5.20.0: camelToSnake convertía totalUSD en "total_u_s_d" (no existe)
+    delete rowPayload.total_u_s_d;
+    rowPayload.total_usd = payload.totalUSD;
     if (existing?.id) {
       const { error } = await s.from("daily_closures").update(rowPayload).eq("id", existing.id);
       if (error) throw error;
@@ -4022,7 +4036,8 @@ export async function listDailyClosures(filters = {}) {
     q = q.order("closure_date", { ascending: false }).limit(filters.limit || 30);
     const { data, error } = await q;
     if (error) throw error;
-    return rows(data || []);
+    // v5.20.0: total_usd → totalUsd; las vistas leen totalUSD
+    return rows(data || []).map((c) => ({ ...c, totalUSD: c.totalUSD ?? c.totalUsd ?? 0 }));
   } catch (err) {
     console.error("listDailyClosures failed:", err);
     return [];

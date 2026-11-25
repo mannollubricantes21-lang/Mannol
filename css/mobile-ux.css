@@ -1562,7 +1562,7 @@ body:has(.sync-banner-offline, .home-hint-offline, [data-action="retry-warehouse
     grid-template-areas:
       "hero    hero"
       "resumen cierre"
-      "cta     cierre"
+      "resumen cierre"
       "inv     ganado"
       "inv     recientes";
     /* la última fila absorbe la altura sobrante del inventario (sin hueco entre
@@ -1574,7 +1574,6 @@ body:has(.sync-banner-offline, .home-hint-offline, [data-action="retry-warehouse
   .wi-layout > * { grid-column: 1 / -1; }
   .wi-layout > .wi-hero { grid-area: hero; }
   .wi-layout > .wi-resumen { grid-area: resumen; }
-  .wi-layout > .wi-cta { grid-area: cta; }
   .wi-layout > .wi-cierre { grid-area: cierre; }
   .wi-layout > .wi-inv { grid-area: inv; }
   .wi-layout > .wi-recientes { grid-area: recientes; }
