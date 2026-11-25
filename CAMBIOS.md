@@ -1,5 +1,73 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.23.0 (2026-11-25) — Base de datos en un solo archivo + venta más clara
+
+> ⚠️ Ejecuta **una vez** `supabase/instalar.sql` entero (Supabase → SQL Editor).
+> Sirve para tu base actual: solo añade lo que falta y no borra datos.
+
+- **`supabase/` pasa de 19 archivos a 3**: `instalar.sql` (todo; base nueva o
+  existente; se puede repetir), `limpieza.sql` (opcional) y `README.md`. Se
+  quitan también los datos de prueba (`seed.sql`): ya no hacen falta. Se borran `schema.sql`, `policies.sql`, `seed.sql`
+  y los 15 `migration-*.sql`.
+- Probado en PostgreSQL 16 con una copia del entorno de Supabase: base nueva,
+  base a medio actualizar y ejecutarlo varias veces seguidas.
+- Errores que tenían los SQL anteriores (corregidos dentro de `instalar.sql`):
+  `schema.sql` fallaba en una base nueva (`settings` antes que `warehouses`);
+  la v3 no creaba `card_movements` (tipo de `sale_id` distinto al de `sales.id`);
+  la de marcas usaba `is_admin()` antes de crearla; y los permisos por columna
+  de tarjetas caían si faltaba `initial_balance`.
+- Documentación: `INSTALACION_SUPABASE.md` y `MANUAL_SETUP.md` (desactualizados)
+  se sustituyen por `supabase/README.md`. El asistente de configuración y el
+  admin apuntan a `instalar.sql`.
+- **Catálogo de ventas en filas compactas**: miniatura, nombre, precio y stock en
+  una fila; botón + grande; − y la cantidad aparecen al añadir. Caben el doble.
+- **Venta en pasos**: «1 Productos» (con unidades y total) y «2 Cobro». El gestor
+  y la nota quedan plegados en «Gestor y nota (opcional)» y muestran lo elegido.
+
+## v5.22.1 (2026-11-25) — La app ya no se cae en navegadores sin notificaciones
+
+- `push-notify.js` leía `Notification.permission` al cargar: en navegadores sin
+  esa función (visores integrados, WebView de Android) la app no arrancaba y
+  mostraba «No se pudo cargar la app». Ahora se comprueba antes.
+
+## v5.22.0 (2026-11-25) — Diseño más claro, sin quitar nada
+
+- **Almacén en 3 pestañas** en el teléfono: **Hoy** (resumen, lo ganado, pedido
+  sugerido, ventas recientes) · **Inventario** (stock, otros almacenes,
+  solicitudes, pedido sugerido; con el número de productos bajos) · **Caja**
+  (cierre de caja; un punto avisa si falta cerrar). En PC se ve todo a la vez.
+- **Resumen como tarjeta oscura** protagonista: cifras más grandes y colores
+  por moneda.
+- **Color propio por almacén** (inicio y cabecera del almacén), con su código.
+- **Catálogo de ventas en cuadrícula**: tarjetas con foto, botones − / + grandes
+  (44 px), «Agotado» / «Quedan N» sobre la foto; tocar la foto añade una unidad.
+- **Venta registrada**: confirmación grande ✓ de un segundo (no bloquea) además
+  del aviso con «Deshacer».
+- La moneda elegida se marca con su propio color; total a cobrar más grande.
+
+## v5.21.0 (2026-11-25) — Mejoras: recargos, traspasos al instante, historial y pedido sugerido
+
+> ⚠️ **Ejecutar una vez** `supabase/migration-v5.21.sql` (después de la v5.20).
+
+- **Recargos del pago mixto desde el admin** (Admin → Tasas → «Pago mixto»):
+  qué botones ve el vendedor (+10, +20, +15…) y cuál viene marcado. Sin la
+  migración la app sigue funcionando con +10/+20.
+- **Solicitudes de traspaso**: tarjeta «Solicitudes por aprobar» en el
+  Dashboard del admin y botón **Aprobar** en el aviso que aparece al llegar una
+  nueva. Dos toques en el mismo botón (sin ventanas). La tabla se añade al
+  tiempo real y, de respaldo, se revisa cada 45 s.
+- **Historial**: en el detalle de una venta, **WhatsApp**, **Copiar ticket** y
+  **Vender de nuevo** (carga los productos en el carrito con el precio de hoy).
+  En pagos mixtos se ve la tasa usada en MN («1 USD = 330 MN · +10»). El acceso
+  por PIN ya puede ver el Historial (sin anular ventas) y la barra de abajo
+  muestra Historial para todos.
+- Corregido: en el detalle, una venta en EUR/MN mostraba el total en USD con
+  el símbolo de la otra moneda.
+- **Pedido sugerido** en el almacén: lo agotado, bajo mínimo o que se acaba en
+  menos de una semana, con la cantidad para ~2 semanas según las ventas de los
+  últimos 30 días. Se puede pedir a otro almacén con un toque (cantidad ya
+  puesta) o enviar la lista por WhatsApp.
+
 ## v5.20.0 (2026-11-25) — Correcciones de uso diario
 
 > ⚠️ **Ejecutar una vez** `supabase/migration-v5.20.sql` en Supabase → SQL Editor

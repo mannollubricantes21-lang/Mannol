@@ -7,7 +7,7 @@
 // Steps:
 //   1. Bienvenida
 //   2. Crear proyecto en Supabase
-//   3. Ejecutar scripts SQL (schema + policies + seed)
+//   3. Ejecutar el script SQL (supabase/instalar.sql)
 //   4. Crear el primer admin
 //   5. Pegar credenciales (URL + anon key) + test de conexión
 //   6. Habilitar Realtime
@@ -57,15 +57,13 @@ const STEPS = [
 
 // ===== SQL file URLs (relative to setup.html) =====
 const SQL_FILES = [
-  { name: "schema.sql",   url: "./supabase/schema.sql",   num: 1, desc: "Crea 14 tablas + índices + 3 RPCs + campos mayorista" },
-  { name: "policies.sql", url: "./supabase/policies.sql", num: 2, desc: "Activa RLS + buckets Storage + grants + funciones seguridad" },
-  { name: "seed.sql",      url: "./supabase/seed.sql",     num: 3, desc: "Datos demo: 4 almacenes, 12 productos, 4 gestores, tarjetas" },
+  { name: "instalar.sql",   url: "./supabase/instalar.sql",   num: 1, desc: "Toda la base: tablas, funciones, permisos y cambios de cada versión (se puede repetir)" },
 ];
 
 // ===== State =====
 let currentStepIdx = 0;
-let loadedSql = {}; // { "schema.sql": "...", "policies.sql": "...", "seed.sql": "..." }
-let activeSqlTab = "schema.sql";
+let loadedSql = {}; // { "instalar.sql": "..." }
+let activeSqlTab = "instalar.sql";
 
 // ===== Helpers =====
 function $(sel, root = document) { return root.querySelector(sel); }
@@ -343,7 +341,7 @@ function renderWelcomeStep() {
       <div class="wizard-card-body">
         <ol class="wizard-ordered-list">
           <li><strong>Crear un proyecto</strong> en supabase.com (gratis).</li>
-          <li><strong>Ejecutar 3 scripts SQL</strong> que crean las tablas, las políticas de seguridad y los datos demo. Solo copy/paste — no tienes que escribir SQL.</li>
+          <li><strong>Ejecutar 1 script SQL</strong> que crea las tablas y las políticas de seguridad. Solo copy/paste — no tienes que escribir SQL.</li>
           <li><strong>Crear tu usuario administrador</strong> en el panel de Supabase.</li>
           <li><strong>Pegar las credenciales</strong> (URL + key pública) en este asistente. Las guardamos en este navegador.</li>
           <li><strong>Habilitar Realtime</strong> para que los cambios se sincronicen entre dispositivos en vivo.</li>
@@ -438,10 +436,10 @@ function renderRunSqlStep() {
   return `
     <div class="wizard-step-header">
       <p class="wizard-step-eyebrow">Paso 3 de 7</p>
-      <h2 class="wizard-step-title">Ejecutar los scripts SQL</h2>
+      <h2 class="wizard-step-title">Ejecutar el script SQL</h2>
       <p class="wizard-step-description">
-        Ahora vamos a crear las tablas, las políticas de seguridad y los datos demo
-        en tu base de datos Supabase. Solo tienes que copiar cada script y pegarlo
+        Ahora vamos a crear las tablas y las políticas de seguridad
+        en tu base de datos Supabase. Solo tienes que copiar el script y pegarlo
         en el <strong>SQL Editor</strong> de Supabase.
       </p>
     </div>
@@ -461,8 +459,8 @@ function renderRunSqlStep() {
     <div class="wizard-card">
       <h3 class="wizard-card-title">Copiar y ejecutar cada script</h3>
       <div class="wizard-card-body">
-        <p>Pulsa cada pestaña, copia el SQL con el botón <strong>Copy</strong>, pégalo en el SQL Editor
-        y haz click en <strong>"Run"</strong>. Repite con los 3, <strong>en este orden exacto</strong>:</p>
+        <p>Copia el SQL con el botón <strong>Copy</strong>, pégalo en el SQL Editor
+        y haz click en <strong>"Run"</strong>.</p>
       </div>
 
       <div class="wizard-sql-tabs" id="sql-tabs">
@@ -492,9 +490,8 @@ function renderRunSqlStep() {
     <div class="wizard-alert wizard alert wizard-alert-warning">
       <span class="wizard-alert-icon">${ICONS.alert}</span>
       <div>
-        <strong>Orden estricto:</strong> schema.sql → policies.sql → seed.sql.
-        Si ejecutas policies.sql o seed.sql antes que schema.sql, dará error
-        "relation does not exist". Si pasa, completa primero schema.sql y vuelve a intentar.
+        <strong>Pega instalar.sql entero</strong> y pulsa Run. Se puede repetir sin
+        perder datos. Los almacenes y productos se crean después desde el panel admin.
       </div>
     </div>
 
@@ -595,7 +592,7 @@ values ('&lt;UUID&gt;'::uuid, 'admin', 'Administrador', 'admin@mannol.cu', 'admi
       <span class="wizard-alert-icon">${ICONS.alert}</span>
       <div>
         <strong>Si te aparece "permission denied for table public.users":</strong>
-        Es que todavía no ejecutaste <code>policies.sql</code> en el paso 3. Vuelve atrás,
+        Es que todavía no ejecutaste <code>instalar.sql</code> en el paso 3. Vuelve atrás,
         ejecútalo y regresa aquí.
       </div>
     </div>

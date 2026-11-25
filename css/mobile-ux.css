@@ -1908,3 +1908,140 @@ body:has(.sync-banner-offline, .home-hint-offline, [data-action="retry-warehouse
 .pf-image-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; }
 .pf-image-btns { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .modal--product .modal-footer .btn-primary { min-width: 9.5rem; }
+
+/* ===== v5.21.0: pedido sugerido ===== */
+.restock-row {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.375rem 0.5rem; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--bg-elevated);
+}
+.restock-qty {
+  font-weight: 800; font-size: 0.8125rem; color: var(--primary);
+  background: var(--primary-tint); border-radius: 999px; padding: 0.125rem 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+@media (min-width: 1280px) { .wi-layout > .wi-pedido { grid-column: 1 / -1; } }
+
+/* ============================================================
+   v5.22.0 — MEJORAS DE DISEÑO (sin quitar funciones)
+   ============================================================ */
+
+/* --- Almacén: pestañas de sección (solo teléfono / tablet) --- */
+.wi-tabs {
+  display: flex; gap: 0.25rem; padding: 0.25rem;
+  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 0.875rem;
+  position: sticky; top: calc(var(--app-header-h, 3.75rem) + 0.25rem); z-index: 5;
+}
+.wi-tab {
+  flex: 1; min-height: 2.75rem; border: 0; border-radius: 0.625rem; background: transparent;
+  font-weight: 700; font-size: 0.875rem; color: var(--text-soft);
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem; cursor: pointer;
+}
+.wi-tab.on { background: var(--bg-elevated); color: var(--text); box-shadow: 0 1px 3px oklch(0 0 0 / 0.12); }
+.wi-tab-n {
+  min-width: 1.25rem; height: 1.25rem; padding: 0 0.3rem; border-radius: 99px;
+  background: var(--warning); color: var(--warning-foreground); font-size: 0.6875rem; font-weight: 800;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.wi-tab-dot { width: 0.5rem; height: 0.5rem; border-radius: 99px; background: var(--warning); }
+@media (max-width: 1279.98px) {
+  .wi-layout[data-sec-active="hoy"] > [data-sec]:not([data-sec~="hoy"]),
+  .wi-layout[data-sec-active="inv"] > [data-sec]:not([data-sec~="inv"]),
+  .wi-layout[data-sec-active="caja"] > [data-sec]:not([data-sec~="caja"]) { display: none !important; }
+}
+@media (min-width: 1280px) { .wi-tabs { display: none; } }
+
+/* --- Almacén: el resumen como tarjeta oscura protagonista --- */
+.card.wi-resumen {
+  background: #0d1a20; color: #eef4f6; border-color: transparent;
+  box-shadow: 0 14px 30px -14px oklch(0 0 0 / 0.55);
+}
+.wi-resumen .card-header { border-bottom-color: oklch(1 0 0 / 0.08); }
+.wi-resumen .card-title { color: #eef4f6; }
+.wi-resumen .text-muted, .wi-resumen .kpi-label { color: #a8b7bf !important; }
+.wi-resumen .kpi-cell { background: oklch(1 0 0 / 0.06); border-color: oklch(1 0 0 / 0.08); }
+.wi-resumen .kpi-value { font-size: 1.375rem; color: #fff; }
+.wi-resumen .kpi-cell:nth-child(2) .kpi-value { color: #7fe0bf !important; }
+.wi-resumen .seg-group { background: oklch(1 0 0 / 0.08); border-color: transparent; }
+.wi-resumen .seg { color: #cfdbe0; font-size: 0.75rem; padding: 0.375rem 0.75rem; }
+.wi-resumen .seg-on { background: #19a07c; color: #fff; }
+.wi-resumen .curr-chip { background: oklch(1 0 0 / 0.07); border-color: oklch(1 0 0 / 0.1); color: #eef4f6; font-size: 0.8125rem; padding: 0.3125rem 0.625rem; }
+.wi-resumen .curr-chip strong[style*="accent-eur"] { color: #d3b7f5 !important; }
+.wi-resumen .curr-chip strong[style*="accent-mn"] { color: #9fd3f3 !important; }
+.wi-resumen .empty-state-icon { background: oklch(1 0 0 / 0.08); color: #cfdbe0; }
+
+/* --- Color propio de cada almacén --- */
+.wh-row-icon {
+  background: color-mix(in oklab, var(--wh, var(--primary)) 15%, transparent);
+  color: var(--wh, var(--primary));
+  font-weight: 900; font-size: 0.75rem; letter-spacing: 0.02em;
+}
+.wh-chip[style*="--wh"] { background: var(--wh); color: #fff; }
+
+/* --- Catálogo de ventas: filas compactas (v5.23.0; antes tarjetas grandes) --- */
+.catalog-list {
+  display: flex; flex-direction: column; gap: 0.375rem;
+  max-height: 58vh; overflow-y: auto; padding: 0.125rem;
+}
+@media (min-width: 768px) {
+  .catalog-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; }
+  .catalog-list > .catalog-fav-header, .catalog-list > .catalog-empty, .catalog-list > .empty-state { grid-column: 1 / -1; }
+}
+.catalog-row {
+  display: flex; align-items: center; gap: 0.625rem; min-height: 3.75rem;
+  padding: 0.375rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+.catalog-row.in-cart { border-color: var(--primary); background: color-mix(in oklab, var(--primary) 7%, var(--bg-elevated)); }
+.catalog-row.is-out { opacity: 0.5; }
+.cr-pic {
+  width: 2.5rem; height: 2.5rem; flex: none; border-radius: 0.625rem; overflow: hidden;
+  background: var(--bg-soft); color: var(--text-muted); display: grid; place-items: center; cursor: pointer;
+}
+.cr-pic img { width: 100%; height: 100%; object-fit: cover; }
+.cr-body { flex: 1; min-width: 0; cursor: pointer; }
+.cr-name { font-size: 0.875rem; font-weight: 700; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cr-meta { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; margin-top: 0.125rem; }
+.cr-stock { color: var(--text-muted); font-size: 0.75rem; }
+.cr-tag { font-size: 0.6875rem; font-weight: 800; padding: 0.0625rem 0.4375rem; border-radius: 99px; }
+.cr-out { background: var(--danger); color: #fff; }
+.cr-low { background: var(--warning); color: var(--warning-foreground); }
+.cr-ctrl { display: flex; align-items: center; gap: 0.25rem; flex: none; }
+.cr-ctrl .btn-icon { width: 2.75rem; height: 2.75rem; border-radius: 0.75rem; }
+.cr-qty { min-width: 1.5rem; text-align: center; font-weight: 800; font-size: 1rem; }
+
+/* --- Venta: pasos numerados y opcionales plegados (v5.23.0) --- */
+.sale-step { display: flex; align-items: center; gap: 0.5rem; font-weight: 800; font-size: 1rem; margin-bottom: 0.5rem; }
+.sale-step-n {
+  width: 1.625rem; height: 1.625rem; border-radius: 99px; flex: none;
+  background: var(--primary); color: var(--primary-foreground); font-size: 0.8125rem;
+  display: grid; place-items: center;
+}
+.sale-step-meta { margin-left: auto; font-size: 0.8125rem; font-weight: 700; color: var(--text-soft); }
+.sale-extras { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 0.625rem 0.75rem; background: var(--bg-soft); }
+.sale-extras > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  min-height: 2.25rem; font-weight: 700; font-size: 0.875rem;
+}
+.sale-extras > summary::-webkit-details-marker { display: none; }
+.sale-extras > summary::after { content: "▾"; color: var(--text-muted); transition: transform 0.15s; }
+.sale-extras[open] > summary::after { transform: rotate(180deg); }
+.sale-extras-sum { margin-left: auto; font-size: 0.75rem; font-weight: 700; color: var(--primary); max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- Venta registrada: confirmación grande de medio segundo --- */
+.sale-done-flash {
+  position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 0.5rem;
+  background: color-mix(in oklab, #0f7a5e 92%, transparent); color: #fff;
+  animation: sdfIn 0.18s ease-out; transition: opacity 0.3s;
+}
+.sale-done-flash.out { opacity: 0; }
+.sdf-ring { width: 6.5rem; height: 6.5rem; border-radius: 99px; background: #fff; color: #0f7a5e; display: grid; place-items: center; animation: sdfPop 0.4s cubic-bezier(.2, 1.6, .4, 1); }
+.sdf-txt { font-size: 1.5rem; font-weight: 800; margin-top: 0.5rem; }
+.sdf-sub { font-size: 0.9375rem; opacity: 0.85; }
+@keyframes sdfIn { from { opacity: 0; } }
+@keyframes sdfPop { from { transform: scale(0.4); } }
+@media (prefers-reduced-motion: reduce) { .sale-done-flash, .sdf-ring { animation: none; } }
+
+/* --- Ventas: total a cobrar más visible --- */
+#payment-section + .card .text-2xl { font-size: 2rem; letter-spacing: -0.02em; }

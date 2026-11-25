@@ -16,7 +16,7 @@ import {
   listStock, listSales, adjustStock,
   getRateConfig, saveRateConfig, syncRatesFromElToque,
   listStockMovements,
-  getSettings, saveSettings,
+  getSettings, saveSettings, saveMixSurchargeSettings,
   // Nuevas funciones v5.3.0
   listCardsWithBalances, getCardBalance, addCardMovement,
   listAllStockAcrossWarehouses, listStockForProductInAllWarehouses,
@@ -36,6 +36,7 @@ import {
 import { CURRENCIES, CATEGORY_COLORS, STOCK_REASONS, STOCK_REASON_LABELS } from "../types.js";
 import { lineChart, barChart, sparkline, COLORS } from "../charts.js";
 import { exportToCSV, exportMultipleCSVs } from "../csv-export.js";
+import { normalizeMixSurcharges } from "../payment-utils.js";
 import { computeSellerEarnings, saleVendorCommission, productsWithoutVendorCommission, monthRange, moneyPair } from "../seller-earnings.js";
 import { closureDateKey, aggregateClosuresReport, reportPeriodRange } from "../sales-stats.js";
 import { getGitHubConfig, saveGitHubConfig, testGitHubConnection, isGitHubConfigured } from "../github-storage.js";
@@ -172,7 +173,8 @@ export function mountAdminView(container, navigateOrUser) {
         <div class="text-xs text-muted truncate">${esc(r.productName || "—")} · ${r.quantity} u · ${esc(r.requestedByName || "empleado")}${r.note ? ` — "${esc(r.note)}"` : ""}</div>
       </div>
       <div style="display:flex;gap:0.375rem;flex-shrink:0">
-        <button class="btn btn-primary btn-sm" data-banner-view>Ver</button>
+        <button class="btn btn-primary btn-sm" data-quick-approve="${esc(r.id)}">${icon("check", 14)} Aprobar</button>
+        <button class="btn btn-outline btn-sm" data-banner-view>Ver</button>
         <button class="btn btn-ghost btn-sm" data-banner-dismiss>✕</button>
       </div>
     `;
@@ -183,6 +185,10 @@ export function mountAdminView(container, navigateOrUser) {
       renderTabContent();
     });
     banner.querySelector("[data-banner-dismiss]").addEventListener("click", () => banner.remove());
+    wireQuickRequestButtons(banner, () => {
+      banner.remove();
+      if (activeTab === "dashboard") fillDashRequests(container.querySelector("#dash-requests"), tabGeneration);
+    });
     host.prepend(banner);
   }
 
@@ -216,7 +222,86 @@ export function mountAdminView(container, navigateOrUser) {
       updatePendingBadge(pendientes.length);
     });
     nuevos.forEach((r) => notifyNewRequest(r));
+    if (activeTab === "dashboard") fillDashRequests(container.querySelector("#dash-requests"), tabGeneration);
   });
+
+  // ===== v5.21.0: aprobar / rechazar solicitudes con un toque =====
+  // Primer toque: el botón pide confirmación en el mismo sitio («¿Mover stock?»).
+  // Segundo toque (en 4 s): se aprueba. Sin ventanas emergentes.
+  function wireQuickRequestButtons(root, onDone) {
+    root.querySelectorAll("[data-quick-approve], [data-quick-reject]").forEach((btn) => {
+      let armed = false;
+      let timer = null;
+      const original = btn.innerHTML;
+      btn.addEventListener("click", async () => {
+        const approve = btn.hasAttribute("data-quick-approve");
+        const id = approve ? btn.dataset.quickApprove : btn.dataset.quickReject;
+        if (!armed) {
+          armed = true;
+          btn.innerHTML = approve ? `${icon("check", 14)} ¿Mover stock? Toca otra vez` : "¿Rechazar? Toca otra vez";
+          btn.classList.add("is-armed");
+          timer = setTimeout(() => { armed = false; btn.innerHTML = original; btn.classList.remove("is-armed"); }, 4000);
+          return;
+        }
+        clearTimeout(timer);
+        btn.disabled = true;
+        btn.innerHTML = `<div class="spinner spinner-sm"></div>`;
+        try {
+          await setTransferRequestStatus(id, approve ? "APROBADA" : "RECHAZADA", user);
+          toast(approve ? "Solicitud aprobada · stock movido" : "Solicitud rechazada", approve ? "success" : "info");
+          onDone?.();
+        } catch (err) {
+          toast("Error: " + (err.message || "desconocido"), "error");
+          btn.disabled = false;
+          btn.innerHTML = original;
+          armed = false;
+        }
+      });
+    });
+  }
+
+  function quickRequestRowHtml(r, whMap) {
+    const from = whMap.get(r.fromWarehouseId)?.name || r.fromWarehouseName || "origen";
+    const to = whMap.get(r.toWarehouseId)?.name || r.toWarehouseName || "destino";
+    return `
+      <div class="quick-req">
+        <div style="min-width:0;flex:1">
+          <div class="text-sm font-semibold truncate">${esc(r.productName || "—")} · <strong>${r.quantity}</strong> u</div>
+          <div class="text-xs text-muted truncate">${esc(from)} → ${esc(to)} · ${esc(r.requestedByName || "empleado")} · ${formatDate(r.createdAt)}</div>
+          ${r.note ? `<div class="text-xs text-muted truncate">“${esc(r.note)}”</div>` : ""}
+        </div>
+        <div class="quick-req-actions">
+          <button class="btn btn-primary btn-sm" data-quick-approve="${esc(r.id)}">${icon("check", 14)} Aprobar</button>
+          <button class="btn btn-ghost btn-sm text-danger" data-quick-reject="${esc(r.id)}" aria-label="Rechazar">${icon("x", 14)}</button>
+        </div>
+      </div>`;
+  }
+
+  // Tarjeta «Solicitudes por aprobar» del Dashboard
+  async function fillDashRequests(host, gen) {
+    if (!host) return;
+    try {
+      const [reqs, whs] = await Promise.all([
+        listTransferRequests({ status: "PENDIENTE", limit: 20 }),
+        listWarehouses(),
+      ]);
+      if (gen !== tabGeneration || !host.isConnected) return;
+      const pend = reqs.filter((r) => r.status === "PENDIENTE");
+      if (!pend.length) { host.innerHTML = ""; return; }
+      const whMap = new Map(whs.map((w) => [w.id, w]));
+      host.innerHTML = `
+        <div class="card quick-req-card">
+          <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+            <h3 class="card-title flex items-center gap-1">${icon("arrowLeftRight", 16)} Solicitudes por aprobar</h3>
+            <span class="badge badge-warning">${pend.length}</span>
+          </div>
+          <div class="card-content" style="display:flex;flex-direction:column;gap:0.5rem">
+            ${pend.map((r) => quickRequestRowHtml(r, whMap)).join("")}
+          </div>
+        </div>`;
+      wireQuickRequestButtons(host, () => fillDashRequests(host, gen));
+    } catch {}
+  }
 
   // Botón para activar las notificaciones del sistema (requiere gesto del usuario)
   container.addEventListener("click", (e) => {
@@ -1046,6 +1131,7 @@ export function mountAdminView(container, navigateOrUser) {
       // Renderizar primero el shell con acceso rápido, luego cargar datos
       content.innerHTML = renderShell();
       wireQuickAccess();
+      fillDashRequests(content.querySelector("#dash-requests"), gen);
       try {
         // Solo traer ventas del rango visible + el período anterior para la comparativa
         // (antes traía TODAS las ventas de la historia — lento con miles de registros)
@@ -1097,6 +1183,9 @@ export function mountAdminView(container, navigateOrUser) {
             <button class="btn btn-outline btn-sm" id="dash-export-csv" title="Exportar a CSV las ventas completadas del período">${icon("download", 14)} CSV</button>
           </div>
         </div>
+
+        <!-- v5.21.0: solicitudes de traspaso pendientes (aprobar con un toque) -->
+        <div id="dash-requests"></div>
 
         <!-- ACCESO RÁPIDO (v5.4.0: chips compactos — las KPIs quedan arriba) -->
         <div>
@@ -2185,13 +2274,13 @@ export function mountAdminView(container, navigateOrUser) {
         content.querySelector("#brands-recheck").addEventListener("click", reload);
         content.querySelector("#copy-brands-sql").addEventListener("click", async () => {
           try {
-            const res = await fetch("supabase/migration-v5.12-brands.sql", { cache: "no-store" });
+            const res = await fetch("supabase/instalar.sql", { cache: "no-store" });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const sql = await res.text();
             const ok = await copyText(sql);
             toast(ok ? "SQL copiado: pégalo en Supabase → SQL Editor" : "No se pudo copiar automáticamente", ok ? "success" : "warning");
           } catch {
-            toast("No se encontró el archivo supabase/migration-v5.12-brands.sql (súbelo junto con la app)", "error");
+            toast("No se encontró el archivo supabase/instalar.sql (súbelo junto con la app)", "error");
           }
         });
         return;
@@ -2807,7 +2896,7 @@ export function mountAdminView(container, navigateOrUser) {
           }
           toast("Almacén guardado" + (stockItems.length > 0 ? ` · ${stockItems.length} productos con stock` : ""), "success");
           if (lastWarehouseSaveSkippedSellers) {
-            toast("Falta un paso para guardar quién vende: ejecuta en Supabase el archivo supabase/migration-v5.14-vendedores.sql", "warning", 9000);
+            toast("Falta un paso para guardar quién vende: ejecuta en Supabase el archivo supabase/instalar.sql", "warning", 9000);
           }
           close();
           onSaved();
@@ -5291,9 +5380,61 @@ export function mountAdminView(container, navigateOrUser) {
         toast("Configuración guardada", "success");
         await load();
       });
+
+      mountMixSurchargeCard(content.firstElementChild);
     }
 
     load();
+  }
+
+  // ===== v5.21.0: recargos del pago mixto (MN por cada USD) =====
+  function mountMixSurchargeCard(host) {
+    if (!host) return;
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `<div class="card-content"><div class="spinner spinner-sm"></div></div>`;
+    host.appendChild(card);
+    getSettings().then((st) => {
+      const cfg = normalizeMixSurcharges(st);
+      const opts = cfg.options.filter((v) => v > 0);
+      card.innerHTML = `
+        <div class="card-header"><h3 class="card-title">${icon("wallet", 16)} Pago mixto: recargo en MN por cada USD</h3></div>
+        <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
+          <p class="text-xs text-muted" style="margin:0">Cuando el cliente paga una parte en USD y el resto en MN, el resto se calcula a la tasa del día <strong>más</strong> este recargo. Ej.: tasa 320 + 10 → 1 USD = 330 MN.</p>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="label label-xs" for="mix-opts">Botones de recargo (MN)</label>
+              <input class="input" id="mix-opts" inputmode="numeric" value="${esc(opts.join(", "))}" placeholder="10, 20" />
+              <p class="text-xs text-muted" style="margin:0.25rem 0 0">Separados por coma · hasta 4 · vacío = sin recargo</p>
+            </div>
+            <div>
+              <label class="label label-xs" for="mix-def">Marcado por defecto</label>
+              <select class="select" id="mix-def">
+                ${cfg.options.map((v) => `<option value="${v}" ${v === cfg.def ? "selected" : ""}>${v === 0 ? "Tasa del día (sin recargo)" : "+" + v + " MN"}</option>`).join("")}
+              </select>
+            </div>
+          </div>
+          <div><button class="btn btn-primary btn-sm" id="mix-save">${icon("save", 14)} Guardar recargos</button></div>
+        </div>`;
+      const optsInput = card.querySelector("#mix-opts");
+      const defSel = card.querySelector("#mix-def");
+      // Al cambiar la lista se rehace el desplegable
+      optsInput.addEventListener("input", () => {
+        const c = normalizeMixSurcharges({ mixSurchargeOptions: optsInput.value, mixSurchargeDefault: Number(defSel.value) });
+        defSel.innerHTML = c.options.map((v) => `<option value="${v}" ${v === c.def ? "selected" : ""}>${v === 0 ? "Tasa del día (sin recargo)" : "+" + v + " MN"}</option>`).join("");
+      });
+      card.querySelector("#mix-save").addEventListener("click", async () => {
+        const c = normalizeMixSurcharges({ mixSurchargeOptions: optsInput.value, mixSurchargeDefault: Number(defSel.value) });
+        const options = c.options.filter((v) => v > 0);
+        try {
+          await saveMixSurchargeSettings(options, c.def);
+          getStore().setSettings({ mixSurchargeOptions: options, mixSurchargeDefault: c.def });
+          toast("Recargos guardados: los vendedores los verán al abrir Ventas", "success");
+        } catch (err) {
+          toast(err.message || "No se pudo guardar", "error", 7000);
+        }
+      });
+    }).catch(() => { card.innerHTML = `<div class="card-content text-xs text-muted">No se pudieron cargar los recargos.</div>`; });
   }
 
   // ===== AUDIT (stock movements) =====

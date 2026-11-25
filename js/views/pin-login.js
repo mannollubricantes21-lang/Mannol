@@ -354,7 +354,7 @@ export function mountPinLoginView(container, navigate) {
       } else if (navigator.onLine === false) {
         errorBox.textContent = "PIN incorrecto o cambiado en la nube. Conéctate una vez para sincronizarlo.";
       } else {
-        errorBox.textContent = "No se pudo validar el PIN. Ejecuta supabase/migration-v5.17-seguridad.sql y revisa la conexión.";
+        errorBox.textContent = "No se pudo validar el PIN. Ejecuta supabase/instalar.sql y revisa la conexión.";
       }
       errorBox.classList.remove("hidden");
       submit.disabled = false;

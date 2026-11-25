@@ -5,7 +5,8 @@
 import { getStore } from "../store.js";
 import { subscribeSales, updateSaleStatus } from "../db.js";
 import { formatMoney, formatDate, formatDateShort, formatWhen, CURRENCY_LABELS, STATUS_LABELS, skeletonStatCard, skeletonRow } from "../currency.js";
-import { toast, icon, showModal, closeModal, esc } from "../ui.js";
+import { toast, icon, showModal, closeModal, esc, copyText, openWhatsApp, confirmDialog } from "../ui.js";
+import { buildTicketText, cartFromSale, mnRateLabel, paymentSummary } from "../ticket.js";
 import { exportToCSV } from "../csv-export.js";
 import { notifySaleCompleted } from "../push-notify.js";
 
@@ -13,6 +14,10 @@ export function mountSalesHistoryView(container, navigate) {
   const store = getStore();
   const user = store.getState().currentUser;
   const warehouse = store.getState().currentWarehouse;
+  // v5.21.0: el acceso por PIN ve su historial, pero no anula ni completa
+  // (eso lo hace un gestor o el admin)
+  const canChangeStatus = user?.role !== "empleado_pin";
+  const canSell = user?.role !== "admin" && !!warehouse;
   let sales = [];
   let search = "";
   let statusFilter = "all";
@@ -156,9 +161,9 @@ export function mountSalesHistoryView(container, navigate) {
                       </td>
                       <td class="text-right tl-hide">
                         <button class="btn btn-ghost btn-icon btn-sm" data-view-sale="${esc(s.id)}" title="Ver detalle">${icon("eye", 14)}</button>
-                        ${!s.pendingSync && s.status === 'PENDIENTE' ? `<button class="btn btn-ghost btn-icon btn-sm text-accent" data-complete="${esc(s.id)}" title="Completar">${icon("check", 14)}</button>` : ''}
-                        ${!s.pendingSync && s.status === 'COMPLETADA' ? `<button class="btn btn-ghost btn-icon btn-sm text-danger" data-cancel="${esc(s.id)}" title="Cancelar">${icon("ban", 14)}</button>` : ''}
-                        ${!s.pendingSync && s.status === 'CANCELADA' ? `<button class="btn btn-ghost btn-icon btn-sm text-warning" data-reopen="${esc(s.id)}" title="Reabrir">${icon("refresh", 14)}</button>` : ''}
+                        ${canChangeStatus && !s.pendingSync && s.status === 'PENDIENTE' ? `<button class="btn btn-ghost btn-icon btn-sm text-accent" data-complete="${esc(s.id)}" title="Completar">${icon("check", 14)}</button>` : ''}
+                        ${canChangeStatus && !s.pendingSync && s.status === 'COMPLETADA' ? `<button class="btn btn-ghost btn-icon btn-sm text-danger" data-cancel="${esc(s.id)}" title="Cancelar">${icon("ban", 14)}</button>` : ''}
+                        ${canChangeStatus && !s.pendingSync && s.status === 'CANCELADA' ? `<button class="btn btn-ghost btn-icon btn-sm text-warning" data-reopen="${esc(s.id)}" title="Reabrir">${icon("refresh", 14)}</button>` : ''}
                       </td>
                     </tr>
                   `).join('')
@@ -299,7 +304,7 @@ export function mountSalesHistoryView(container, navigate) {
             <div><div class="label label-xs">Pagos (multi-moneda)</div>
               <div style="display:flex;flex-direction:column;gap:0.25rem;margin-top:0.25rem">
                 ${sale.paidUSD > 0 ? `<div class="flex justify-between text-xs"><span>USD:</span><span>${formatMoney(sale.paidUSD, "USD")}</span></div>` : ''}
-                ${sale.paidMN > 0 ? `<div class="flex justify-between text-xs"><span>MN:</span><span>${formatMoney(sale.paidMN, "MN")}</span></div>` : ''}
+                ${sale.paidMN > 0 ? `<div class="flex justify-between text-xs"><span>MN${(() => { const l = (sale.payments || []).find((x) => x.currency === "MN"); const t = mnRateLabel(l); return t ? ` <span class="text-muted">(${esc(t)})</span>` : ""; })()}:</span><span>${formatMoney(sale.paidMN, "MN")}</span></div>` : ''}
                 ${sale.paidEUR > 0 ? `<div class="flex justify-between text-xs"><span>EUR:</span><span>${formatMoney(sale.paidEUR, "EUR")}</span></div>` : ''}
                 ${sale.paidTransfer > 0 ? `<div class="flex justify-between text-xs"><span>Transferencia ${esc(sale.cardName || '')}:</span><span>${formatMoney(sale.paidTransfer, "USD")}</span></div>` : ''}
               </div>
@@ -307,7 +312,7 @@ export function mountSalesHistoryView(container, navigate) {
           ` : `
             <div><div class="label label-xs">Pago</div>
               <div class="text-xs">
-                ${CURRENCY_LABELS[sale.currency] || esc(sale.currency)}: ${formatMoney(sale.totalAmount, sale.currency)}
+                ${CURRENCY_LABELS[sale.currency] || esc(sale.currency)}: ${esc(paymentSummary(sale, formatMoney).replace(/^\S+ /, ""))}
                 ${sale.cardName ? `<br>Tarjeta: ${esc(sale.cardName)} (${esc(sale.cardNumber || '')})` : ''}
                 ${sale.transferAmount ? `<br>Monto transferido: ${formatMoney(sale.transferAmount, "USD")}` : ''}
               </div>
@@ -321,9 +326,15 @@ export function mountSalesHistoryView(container, navigate) {
         </div>
       `,
       footer: `
-        ${!sale.pendingSync && sale.status === 'PENDIENTE' ? `<button class="btn btn-primary" type="button" data-detail-action="complete">${icon("check", 14)} Completar</button>` : ''}
-        ${!sale.pendingSync && sale.status === 'COMPLETADA' ? `<button class="btn btn-outline text-danger" type="button" data-detail-action="cancel">${icon("ban", 14)} Cancelar venta</button>` : ''}
-        ${!sale.pendingSync && sale.status === 'CANCELADA' ? `<button class="btn btn-outline text-warning" type="button" data-detail-action="reopen">${icon("refresh", 14)} Reabrir</button>` : ''}
+        <!-- v5.21.0: compartir el ticket y repetir la venta -->
+        <div class="detail-share" style="display:flex;gap:0.375rem;flex-wrap:wrap;width:100%">
+          <button class="btn btn-whatsapp btn-sm" type="button" data-detail-action="wa">${icon("whatsapp", 14)} WhatsApp</button>
+          <button class="btn btn-outline btn-sm" type="button" data-detail-action="copy">${icon("copy", 14)} Copiar ticket</button>
+          ${canSell && cartFromSale(sale).length ? `<button class="btn btn-outline btn-sm" type="button" data-detail-action="again">${icon("cart", 14)} Vender de nuevo</button>` : ''}
+        </div>
+        ${canChangeStatus && !sale.pendingSync && sale.status === 'PENDIENTE' ? `<button class="btn btn-primary" type="button" data-detail-action="complete">${icon("check", 14)} Completar</button>` : ''}
+        ${canChangeStatus && !sale.pendingSync && sale.status === 'COMPLETADA' ? `<button class="btn btn-outline text-danger" type="button" data-detail-action="cancel">${icon("ban", 14)} Cancelar venta</button>` : ''}
+        ${canChangeStatus && !sale.pendingSync && sale.status === 'CANCELADA' ? `<button class="btn btn-outline text-warning" type="button" data-detail-action="reopen">${icon("refresh", 14)} Reabrir</button>` : ''}
         <button class="btn btn-outline" id="close-detail">Cerrar</button>`,
     });
     document.querySelector("#close-detail").addEventListener("click", closeModal);
@@ -331,7 +342,14 @@ export function mountSalesHistoryView(container, navigate) {
     document.querySelectorAll("[data-detail-action]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const action = btn.dataset.detailAction;
+        if (action === "wa") { openWhatsApp(buildTicketText(sale, formatMoney)); return; }
+        if (action === "copy") {
+          const ok = await copyText(buildTicketText(sale, formatMoney));
+          toast(ok ? "Ticket copiado" : "No se pudo copiar", ok ? "success" : "warning");
+          return;
+        }
         closeModal();
+        if (action === "again") { sellAgain(sale); return; }
         if (action === "complete") showStatusDialog(sale, "COMPLETADA");
         else if (action === "cancel") showStatusDialog(sale, "CANCELADA");
         else if (action === "reopen") {
@@ -344,6 +362,29 @@ export function mountSalesHistoryView(container, navigate) {
         }
       });
     });
+  }
+
+  // v5.21.0: carga los productos de la venta en el carrito y abre Ventas
+  function sellAgain(sale) {
+    const items = cartFromSale(sale);
+    if (!items.length || !warehouse) return;
+    const key = `mannol-cart-draft-${warehouse.id}`;
+    const go = () => {
+      try {
+        localStorage.setItem(key, JSON.stringify({ ts: Date.now(), cart: items, note: "", reprice: true, fromCode: sale.code }));
+      } catch {
+        toast("No se pudo preparar la venta", "error");
+        return;
+      }
+      window.dispatchEvent(new CustomEvent("mannol:nav", { detail: { view: "sales" } }));
+    };
+    let busy = false;
+    try {
+      const cur = JSON.parse(localStorage.getItem(key) || "null");
+      busy = !!(cur && Array.isArray(cur.cart) && cur.cart.length);
+    } catch {}
+    if (busy) confirmDialog(`Tienes una venta a medias. ¿Reemplazarla por los productos de ${esc(sale.code)}?`, go);
+    else go();
   }
 
   // ===== Paginación =====

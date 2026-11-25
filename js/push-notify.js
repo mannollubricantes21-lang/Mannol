@@ -10,7 +10,9 @@
 //   notifySaleCompleted({ code: "V-00001", total: 50, currency: "USD" });
 // =====================================================
 
-let _permission = Notification.permission;
+// v5.22.1: algunos navegadores (WebView de Android, visores integrados) no tienen
+// la API de notificaciones; antes esta línea rompía el arranque de la app.
+let _permission = typeof Notification !== "undefined" ? Notification.permission : "denied";
 
 export function isSupported() {
   return typeof Notification !== "undefined";

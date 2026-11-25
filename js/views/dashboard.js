@@ -38,8 +38,9 @@ const NAV_ITEMS = [
   { id: "stock", label: "Inventario", icon: "boxes" },
   // v5.20.0: antes «Más» abría el mismo menú que ☰ (arriba). Ahora es un
   // acceso directo útil: Historial (o «Estado» para el acceso por PIN).
-  { id: "history", label: "Historial", icon: "receipt", hideForRoles: ["empleado_pin"] },
-  { id: "team-status", label: "Estado", icon: "activity", onlyForRoles: ["empleado_pin"] },
+  // v5.21.0: el acceso por PIN también tiene Historial (compartir ticket,
+  // «Vender de nuevo»); «Estado del equipo» sigue en el menú ☰.
+  { id: "history", label: "Historial", icon: "receipt" },
 ];
 const navItemsFor = (role) => NAV_ITEMS.filter((item) =>
   (!item.hideForRoles || !item.hideForRoles.includes(role)) &&
@@ -52,7 +53,7 @@ const DRAWER_ITEMS = [
   // v5.18.0: «¿ya se subió mi venta?» — última subida, errores y ventas en espera
   { id: "team-status", label: "Estado del equipo", icon: "activity", roles: ["admin", "gestor", "vendedor", "warehouse", "empleado_pin"] },
   { id: "managers", label: "Gestores", icon: "users", roles: ["admin", "gestor", "vendedor", "warehouse"] },
-  { id: "history", label: "Historial", icon: "receipt", roles: ["admin", "gestor", "vendedor", "warehouse"] },
+  { id: "history", label: "Historial", icon: "receipt", roles: ["admin", "gestor", "vendedor", "warehouse", "empleado_pin"] },
   { id: "catalog", label: "Catálogo", icon: "tags", roles: ["admin", "gestor"] },
 ];
 

@@ -44,3 +44,15 @@ describe("v5.20.0 · agotados al final del catálogo", () => {
     expect(sortOutOfStockLast(list, (p) => qty[p.id]).map((p) => p.id)).toEqual(["b", "d", "a", "c"]);
   });
 });
+
+import { normalizeMixSurcharges } from "../js/payment-utils.js";
+describe("v5.21.0 · recargos configurables", () => {
+  it("normaliza la lista del admin", () => {
+    expect(normalizeMixSurcharges({ mixSurchargeOptions: [20, 10, 10, -5, "x"], mixSurchargeDefault: 20 }))
+      .toEqual({ options: [0, 10, 20], def: 20 });
+    expect(normalizeMixSurcharges({ mixSurchargeOptions: "15, 25", mixSurchargeDefault: 99 }))
+      .toEqual({ options: [0, 15, 25], def: 15 });
+    expect(normalizeMixSurcharges({})).toEqual({ options: [0, 10, 20], def: 10 });
+    expect(normalizeMixSurcharges({ mixSurchargeOptions: [], mixSurchargeDefault: 0 })).toEqual({ options: [0], def: 0 });
+  });
+});

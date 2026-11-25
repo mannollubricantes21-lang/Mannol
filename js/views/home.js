@@ -6,7 +6,7 @@
 import { getStore } from "../store.js";
 import { listWarehouses, subscribeRates, syncElToqueRates, getSettings } from "../db.js";
 import { formatMoney, formatDate, convertAmount, formatMoneyGrouped, parseAmountInput } from "../currency.js";
-import { toast, icon, esc, showModal, brandMark } from "../ui.js";
+import { toast, icon, esc, showModal, brandMark, warehouseColor } from "../ui.js";
 import { APP_LABEL } from "../version.js";
 import { isSupabaseConfiguredAsync } from "../supabase.js";
 
@@ -183,11 +183,10 @@ export function renderHomeView(navigate) {
                 const tel = (w.phone || "").replace(/[^\d+]/g, "");
                 return `
                   <div class="wh-row ${isOwn ? 'wh-row-own' : ''}" data-enter-warehouse="${esc(w.id)}" role="button" tabindex="0" aria-label="Entrar al almacén ${esc(w.name)} con PIN">
-                    <div class="wh-row-icon">${icon("building", 20)}</div>
+                    <div class="wh-row-icon" style="--wh:${warehouseColor(w)}">${esc(w.code || "")}</div>
                     <div class="wh-row-body">
                       <div class="wh-row-title">
                         <span class="wh-row-name">${esc(w.name)}</span>
-                        <span class="wh-row-code">${esc(w.code)}</span>
                         ${isOwn ? `<span class="wh-row-tag">Tu local</span>` : ''}
                       </div>
                       ${w.address ? `<div class="wh-row-sub">${icon("mapPin", 12)}<span>${esc(w.address)}</span></div>` : ''}

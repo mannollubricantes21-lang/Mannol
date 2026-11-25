@@ -2835,3 +2835,19 @@ select.field-error { border-width: 2px; }
   padding: 0.25rem 0.125rem 0;
 }
 .catalog-fav-header--rest { margin-top: 0.5rem; border-top: 1px dashed var(--border); padding-top: 0.5rem; }
+
+/* ===== v5.21.0: solicitudes de traspaso — aprobar con un toque ===== */
+.quick-req-card { border-left: 4px solid var(--warning); }
+.quick-req {
+  display: flex; align-items: center; gap: 0.625rem;
+  padding: 0.5rem 0.625rem; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--bg-soft);
+}
+.quick-req-actions { display: flex; gap: 0.25rem; flex-shrink: 0; }
+[data-quick-approve].is-armed, [data-quick-reject].is-armed {
+  background: var(--warning); border-color: var(--warning); color: #1a1200;
+}
+@media (max-width: 480px) {
+  .quick-req { flex-wrap: wrap; }
+  .quick-req-actions { width: 100%; justify-content: flex-end; }
+}

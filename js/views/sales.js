@@ -12,7 +12,7 @@ import { toast, actionToast, icon, showModal, closeModal, esc, confirmDialog } f
 import { computeTopSellers, findProductByCode } from "../sales-stats.js";
 import { openScanner, canUseCamera } from "../barcode-scanner.js";
 import { buildCatalogFacets, filterCatalog, NO_CATEGORY, sortOutOfStockLast } from "../catalog-facets.js";
-import { roundCents, rateUSD, usdToNative, summarizeMultiPayment, billPresetsFor, normalizePaymentPreference, applyMnSurcharge, mixRestInMN } from "../payment-utils.js";
+import { roundCents, rateUSD, usdToNative, summarizeMultiPayment, billPresetsFor, normalizePaymentPreference, applyMnSurcharge, mixRestInMN, normalizeMixSurcharges } from "../payment-utils.js";
 import { getDataAgeMs, formatDataAge } from "../data-freshness.js"; // v5.17: «stock de hace X min»
 
 const CURRENCY_META = {
@@ -65,6 +65,8 @@ export function mountSalesView(container, navigate) {
   // v5.16: borrador del carrito. Sobrevive a recargas y a actualizaciones de
   // la app (antes una venta a medias se perdía). Solo menudeo, 12 h de vida.
   const DRAFT_TTL_MS = 12 * 3600 * 1000;
+  let pendingReprice = false;
+  let extrasOpen = false; // v5.23.0: «Gestor y nota» desplegado
   const draftWh = store.getState().currentWarehouse;
   const draftKey = draftWh ? `mannol-cart-draft-${draftWh.id}` : null;
   function saveDraft() {
@@ -82,7 +84,9 @@ export function mountSalesView(container, navigate) {
       if (valid && d.cart.length > 0) {
         cart = d.cart.map((i) => ({ ...i, quantity: Number(i.quantity), unitPrice: Number(i.unitPrice), subtotal: Number(i.quantity) * Number(i.unitPrice) }));
         note = typeof d.note === "string" ? d.note : "";
-        setTimeout(() => toast("Se recuperó la venta que tenías a medias", "info", 3500), 400);
+        // v5.21.0: «Vender de nuevo» desde el Historial → precios de HOY
+        pendingReprice = !!d.reprice;
+        setTimeout(() => toast(d.reprice ? `Productos de la venta ${d.fromCode || ""} cargados: revisa y cobra` : "Se recuperó la venta que tenías a medias", "info", 3500), 400);
       } else if (d) localStorage.removeItem(draftKey);
     } catch {}
   }
@@ -111,21 +115,36 @@ export function mountSalesView(container, navigate) {
   }
   // v5.20.0: pago mixto — el resto en MN se cobra a la tasa del día MÁS un
   // recargo por cada USD (+10 / +20 MN). Se recuerda por almacén.
-  const MIX_SURCHARGES = [0, 10, 20];
-  const mixKey = draftWh ? `mannol-mix-surcharge-${draftWh.id}` : null;
-  let mnSurcharge = 10;
+  // v5.21.0: los valores (+10 / +20…) y el marcado por defecto los define
+  // el admin en Admin → Tasas. La elección del vendedor se recuerda por
+  // almacén hasta que el admin cambie el valor por defecto.
+  const mixKey = draftWh ? `mannol-mix-surcharge-v2-${draftWh.id}` : null;
+  const mixCfg = () => normalizeMixSurcharges(store.getState().settings);
+  let mnSurchargeChoice = null;
   try {
-    const v = mixKey ? localStorage.getItem(mixKey) : null;
-    if (v != null && MIX_SURCHARGES.includes(Number(v))) mnSurcharge = Number(v);
+    const saved = mixKey ? JSON.parse(localStorage.getItem(mixKey) || "null") : null;
+    if (saved && saved.def === mixCfg().def) mnSurchargeChoice = Number(saved.v);
   } catch {}
   let mnTouched = false; // el vendedor escribió el monto en MN a mano
+  function currentSurcharge() {
+    const cfg = mixCfg();
+    return mnSurchargeChoice != null && cfg.options.includes(mnSurchargeChoice) ? mnSurchargeChoice : cfg.def;
+  }
   function setMnSurcharge(v) {
-    mnSurcharge = MIX_SURCHARGES.includes(Number(v)) ? Number(v) : 0;
-    try { if (mixKey) localStorage.setItem(mixKey, String(mnSurcharge)); } catch {}
+    const cfg = mixCfg();
+    mnSurchargeChoice = cfg.options.includes(Number(v)) ? Number(v) : cfg.def;
+    try { if (mixKey) localStorage.setItem(mixKey, JSON.stringify({ v: mnSurchargeChoice, def: cfg.def })); } catch {}
   }
   /** Tasas para el pago mixto: el MN lleva el recargo por USD. */
+  // Ajustes al día (recargos que pudo cambiar el admin)
+  import("../db.js").then((m) => m.getSettings()).then((st) => {
+    if (!st) return;
+    const before = JSON.stringify(mixCfg());
+    store.setSettings(st);
+    if (paymentMode === "MULTI" && JSON.stringify(mixCfg()) !== before && container.isConnected) render();
+  }).catch(() => {});
   function multiRates() {
-    return applyMnSurcharge(payRates(), mnSurcharge);
+    return applyMnSurcharge(payRates(), currentSurcharge());
   }
   /** MN por 1 USD (con recargo) o null sin tasa. */
   function mixUsdInMN() {
@@ -150,8 +169,9 @@ export function mountSalesView(container, navigate) {
     const base = rateUSD("MN", payRates());
     if (!base) return "Sin tasa de MN";
     const baseMN = Math.round(1 / base);
-    return mnSurcharge > 0
-      ? `1 USD = <strong>${baseMN + mnSurcharge} MN</strong> (${baseMN} + ${mnSurcharge})`
+    const sc = currentSurcharge();
+    return sc > 0
+      ? `1 USD = <strong>${baseMN + sc} MN</strong> (${baseMN} + ${sc})`
       : `1 USD = <strong>${baseMN} MN</strong>`;
   }
   function multiSummary() {
@@ -267,6 +287,22 @@ export function mountSalesView(container, navigate) {
   // (nota, vuelto, montos del pago mixto).
   const unsubProducts = subscribeProducts((items) => {
     products = items.filter((p) => p.active !== false);
+    if (pendingReprice && products.length) {
+      pendingReprice = false;
+      // Precio y comisiones actuales; se quitan los productos ya inexistentes
+      cart = cart.filter((i) => products.some((p) => p.id === i.productId)).map((i) => {
+        const p = products.find((x) => x.id === i.productId);
+        const unitPrice = Number(p.salePrice) || i.unitPrice;
+        return {
+          ...i, name: p.name, brand: p.brand, unitPrice, subtotal: unitPrice * i.quantity,
+          gestorCommission: p.gestorCommission ?? p.commission ?? 0,
+          gestorCommissionCurrency: p.gestorCommissionCurrency ?? p.commissionCurrency ?? "USD",
+          vendorCommission: p.vendorCommission ?? 0,
+          vendorCommissionCurrency: p.vendorCommissionCurrency ?? "MN",
+        };
+      });
+      setTimeout(() => { if (container.isConnected) render(); }, 0);
+    }
     refreshLiveData();
     catalogListRenderer?.();
   });
@@ -358,7 +394,6 @@ export function mountSalesView(container, navigate) {
             <!-- v5.20.0: botón para volver sin tener que tocar «Inicio» -->
             <button type="button" class="btn btn-ghost btn-sm" id="sales-back-btn" aria-label="Volver" style="margin:0 0 0.25rem -0.5rem;padding-left:0.25rem">${icon("arrowLeft", 16)} Volver</button>
             <h1 class="text-xl font-bold flex items-center gap-2">${icon("cart", 20)} Venta en ${esc(wh.name)} (${esc(wh.code)})</h1>
-            <p class="text-xs text-muted">Solo productos, gestor y pago.</p>
           </div>
           <div class="flex items-center gap-2" data-header-badges></div>
         </div>
@@ -385,12 +420,8 @@ export function mountSalesView(container, navigate) {
 
         ${saleType === "WHOLESALE" ? renderWholesaleSection() : `
         <div>
-          <label class="label">Gestor que refirió (opcional)</label>
-          <select class="select" id="manager-code">${managerOptionsHtml()}</select>
-          ${selectedManager ? `<p class="text-xs text-muted mt-1">${esc(selectedManager.name)}${selectedManager.code ? ` · Código: ${esc(selectedManager.code)}` : ''}${selectedManager.phone ? ` · ${esc(selectedManager.phone)}` : ''}</p>` : ''}
-        </div>
-        <div>
-          <label class="label flex items-center gap-1">${icon("boxes", 14)} Productos de la venta</label>
+          <!-- v5.23.0: pasos numerados; el gestor y la nota van juntos más abajo (opcionales) -->
+          <div class="sale-step"><span class="sale-step-n">1</span><span>Productos</span>${cart.length ? `<span class="sale-step-meta">${cart.reduce((n, i) => n + i.quantity, 0)} u · ${formatMoney(cartTotal(), "USD")}</span>` : ""}</div>
           <!-- v5.4.0: búsqueda rápida — filtra al escribir y añade con un toque (Enter = primer resultado) -->
           <div class="${canUseCamera() ? "input-scan" : ""}" style="position:relative;margin-top:0.375rem">
             <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)">${icon("search", 14)}</span>
@@ -435,17 +466,31 @@ export function mountSalesView(container, navigate) {
         </div>
         `}
 
-        <!-- Nota / Observaciones (común para retail y mayorista) -->
-        <div>
-          <label class="label flex items-center gap-1">${icon("receipt", 14)} Nota / Observaciones (opcional)</label>
-          <textarea class="textarea" id="note-input" placeholder="Ej: cliente frecuente, datos de envío, acuerdo de pago, descripción del vehículo..." maxlength="500" style="min-height:4rem">${note}</textarea>
-          <div class="text-xs text-muted text-right mt-1" id="note-counter">${note.length}/500</div>
-        </div>
+        <!-- v5.23.0: opcionales plegados (gestor en menudeo + nota) para no distraer -->
+        <details class="sale-extras" data-sale-extras ${extrasOpen || note ? "open" : ""}>
+          <summary>
+            <span class="flex items-center gap-1">${icon("users", 14)} ${saleType === "WHOLESALE" ? "Nota" : "Gestor y nota"} <span class="text-muted" style="font-weight:500">(opcional)</span></span>
+            <span class="sale-extras-sum">${[saleType !== "WHOLESALE" && selectedManager ? esc(selectedManager.name) : "", note ? "con nota" : ""].filter(Boolean).join(" · ")}</span>
+          </summary>
+          <div style="display:flex;flex-direction:column;gap:0.75rem;padding-top:0.625rem">
+            ${saleType === "WHOLESALE" ? "" : `
+            <div>
+              <label class="label" for="manager-code">Gestor que refirió</label>
+              <select class="select" id="manager-code">${managerOptionsHtml()}</select>
+              ${selectedManager ? `<p class="text-xs text-muted mt-1">${esc(selectedManager.name)}${selectedManager.code ? ` · Código: ${esc(selectedManager.code)}` : ''}${selectedManager.phone ? ` · ${esc(selectedManager.phone)}` : ''}</p>` : ''}
+            </div>`}
+            <div>
+              <label class="label flex items-center gap-1" for="note-input">${icon("receipt", 14)} Nota / Observaciones</label>
+              <textarea class="textarea" id="note-input" placeholder="Ej: cliente frecuente, datos de envío, acuerdo de pago, descripción del vehículo..." maxlength="500" style="min-height:4rem">${note}</textarea>
+              <div class="text-xs text-muted text-right mt-1" id="note-counter">${note.length}/500</div>
+            </div>
+          </div>
+        </details>
 
         ${(saleType === "WHOLESALE" ? wholesaleProduct : cart.length > 0) ? `
           <!-- Selector de modo de pago -->
           <div id="payment-section">
-            <label class="label">Moneda / Método de pago</label>
+            <div class="sale-step"><span class="sale-step-n">2</span><span>Cobro</span><span class="sale-step-meta">${formatMoney(cartTotal(), "USD")}</span></div>
             <div class="tabs-list" style="grid-template-columns: 1fr 1fr;margin-bottom:0.75rem">
               <button class="tabs-trigger ${paymentMode === 'SINGLE' ? 'active' : ''}" data-mode="SINGLE">Una moneda</button>
               <button class="tabs-trigger ${paymentMode === 'MULTI' ? 'active' : ''}" data-mode="MULTI">Pago mixto</button>
@@ -454,7 +499,7 @@ export function mountSalesView(container, navigate) {
             ${paymentMode === 'SINGLE' ? `
               <div class="grid grid-cols-2 gap-2">
                 ${CURRENCIES.map((curr) => `
-                  <button class="payment-card ${selectedCurrency === curr ? 'selected' : ''}" data-currency="${curr}" style="display:flex;align-items:center;gap:0.75rem;padding:1rem;border:2px solid ${selectedCurrency === curr ? 'var(--primary)' : 'var(--border)'};border-radius:var(--radius-lg);background:${selectedCurrency === curr ? 'var(--primary-tint)' : 'var(--bg-elevated)'};cursor:pointer;text-align:left">
+                  <button class="payment-card ${selectedCurrency === curr ? 'selected' : ''}" data-currency="${curr}" style="display:flex;align-items:center;gap:0.75rem;padding:1rem;border:2px solid ${selectedCurrency === curr ? CURRENCY_META[curr].color : 'var(--border)'};border-radius:var(--radius-lg);background:${selectedCurrency === curr ? `color-mix(in oklab, ${CURRENCY_META[curr].color} 12%, var(--bg-elevated))` : 'var(--bg-elevated)'};cursor:pointer;text-align:left">
                     <span style="font-size:1.5rem;font-weight:700;color:${CURRENCY_META[curr].color}">${CURRENCY_META[curr].icon}</span>
                     <div>
                       <div class="font-semibold text-sm">${curr === "TRANSFERENCIA" ? "TRANSF." : curr}</div>
@@ -465,12 +510,12 @@ export function mountSalesView(container, navigate) {
               </div>
             ` : `
               <!-- v5.20.0: recargo por USD cuando el resto se cobra en MN -->
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem">
+              ${mixCfg().options.length > 1 ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem">
                 <span class="text-xs text-muted">Resto en MN con recargo por USD:</span>
                 <div class="seg-group" role="group" aria-label="Recargo por USD al cobrar en MN">
-                  ${MIX_SURCHARGES.map((v) => `<button type="button" class="seg ${mnSurcharge === v ? 'seg-on' : ''}" data-mix-surcharge="${v}" aria-pressed="${mnSurcharge === v}">${v === 0 ? 'Tasa' : '+' + v}</button>`).join("")}
+                  ${mixCfg().options.map((v) => `<button type="button" class="seg ${currentSurcharge() === v ? 'seg-on' : ''}" data-mix-surcharge="${v}" aria-pressed="${currentSurcharge() === v}">${v === 0 ? 'Tasa' : '+' + v}</button>`).join("")}
                 </div>
-              </div>
+              </div>` : ""}
               <div class="grid grid-cols-2 gap-2">
                 ${CURRENCIES.map((curr) => `
                   <div style="padding:0.75rem;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--bg-elevated)">
@@ -1131,6 +1176,7 @@ export function mountSalesView(container, navigate) {
       transferInput.addEventListener("input", (e) => { transferAmount = parseFloat(e.target.value) || 0; });
     }
 
+    container.querySelector("[data-sale-extras]")?.addEventListener("toggle", (e) => { extrasOpen = e.currentTarget.open; });
     container.querySelector("#sales-back-btn")?.addEventListener("click", () => {
       // El carrito a medias queda guardado (borrador) y se recupera al volver
       window.dispatchEvent(new CustomEvent("mannol:nav", { detail: { view: "dashboard" } }));
@@ -1181,7 +1227,7 @@ export function mountSalesView(container, navigate) {
           </div>
           <div class="facet-row" id="facet-cats" role="group" aria-label="Filtrar por tipo" hidden></div>
           <div class="facet-row" id="facet-brands" role="group" aria-label="Filtrar por marca" hidden></div>
-          <div id="catalog-list" style="display:flex;flex-direction:column;gap:0.5rem;max-height:55vh;overflow-y:auto;padding-right:0.25rem"></div>
+          <div id="catalog-list" class="catalog-list"></div>
         </div>
       `,
       footer: `
@@ -1253,21 +1299,17 @@ export function mountSalesView(container, navigate) {
           const minStock = p.minStock || 5;
           const isLow = !isOut && qty <= minStock;
           return `
-          <div class="catalog-item ${isOut ? "opacity-50" : ""}" data-product-id="${esc(p.id)}" style="display:flex;align-items:center;gap:0.625rem;padding:0.625rem;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--bg-elevated)">
-            <div style="width:3rem;height:3rem;border-radius:var(--radius);overflow:hidden;background:var(--bg-soft);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-              ${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="${esc(p.name)}" style="width:100%;height:100%;object-fit:cover" />` : icon("boxes", 20)}
+          <div class="catalog-item catalog-row ${isOut ? "is-out" : ""} ${inCart > 0 ? "in-cart" : ""}" data-product-id="${esc(p.id)}">
+            <div class="cr-pic" aria-hidden="true">${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="" loading="lazy" />` : icon("boxes", 18)}</div>
+            <div class="cr-body">
+              <div class="cr-name">${esc(p.name)}</div>
+              <div class="cr-meta"><strong>${formatMoney(p.salePrice, "USD")}</strong>
+                ${isOut ? `<span class="cr-tag cr-out">Agotado</span>` : isLow ? `<span class="cr-tag cr-low">Quedan ${qty}</span>` : `<span class="cr-stock">Stock ${qty}</span>`}</div>
             </div>
-            <div style="flex:1;min-width:0">
-              <div class="text-sm font-semibold truncate">${esc(p.name)}</div>
-              <div class="text-xs flex items-center gap-1" style="color:var(--primary)">
-                <span>${formatMoney(p.salePrice, "USD")} · Stock: ${qty}</span>
-                ${isOut ? `<span class="badge badge-danger" style="font-size:0.5rem;padding:0 0.25rem">Agotado</span>` : isLow ? `<span class="badge badge-warning" style="font-size:0.5rem;padding:0 0.25rem">${icon("alertTriangle", 10)} Bajo</span>` : ''}
-              </div>
-            </div>
-            <div class="flex items-center gap-1" style="flex-shrink:0">
-              <button class="btn btn-outline btn-icon btn-sm" data-qty-dec="${esc(p.id)}" ${inCart <= 0 ? 'disabled' : ''} aria-label="Quitar una unidad de ${esc(p.name)}">${icon("minus", 12)}</button>
-              <span style="width:2rem;text-align:center;font-weight:700;font-size:0.875rem" data-qty-display="${esc(p.id)}">${inCart}</span>
-              <button class="btn btn-outline btn-icon btn-sm" data-qty-inc="${esc(p.id)}" ${isOut || inCart >= qty ? 'disabled' : ''} aria-label="Añadir una unidad de ${esc(p.name)}${qty ? `, quedan ${qty}` : ""}">${icon("plus", 12)}</button>
+            <div class="cr-ctrl">
+              ${inCart > 0 ? `<button class="btn btn-outline btn-icon" data-qty-dec="${esc(p.id)}" aria-label="Quitar una unidad de ${esc(p.name)}">${icon("minus", 14)}</button>
+              <span class="cr-qty" data-qty-display="${esc(p.id)}">${inCart}</span>` : ""}
+              <button class="btn btn-primary btn-icon" data-qty-inc="${esc(p.id)}" ${isOut || inCart >= qty ? 'disabled' : ''} aria-label="Añadir una unidad de ${esc(p.name)}${qty ? `, quedan ${qty}` : ""}">${icon("plus", 16)}</button>
             </div>
           </div>
         `;
@@ -1343,6 +1385,10 @@ export function mountSalesView(container, navigate) {
           }
           renderCatalogList();
         });
+      });
+      // v5.22.0: tocar la foto o el nombre también añade una unidad
+      document.querySelectorAll("#catalog-list .catalog-row:not(.is-out) .cr-pic, #catalog-list .catalog-row:not(.is-out) .cr-body").forEach((el) => {
+        el.addEventListener("click", () => el.closest(".catalog-row")?.querySelector("[data-qty-inc]:not([disabled])")?.click());
       });
     }
 
@@ -1486,7 +1532,22 @@ export function mountSalesView(container, navigate) {
     return true;
   }
 
+  // v5.22.0: confirmación visual grande (medio segundo, no bloquea)
+  function flashSaleDone(sale) {
+    try {
+      const el = document.createElement("div");
+      el.className = "sale-done-flash";
+      el.setAttribute("role", "status");
+      el.innerHTML = `<div class="sdf-ring">${icon("check", 44)}</div><div class="sdf-txt">Venta registrada</div><div class="sdf-sub">${esc(sale.code)} · ${formatMoney(sale.totalAmount, "USD")}</div>`;
+      document.body.appendChild(el);
+      el.addEventListener("click", () => el.remove());
+      setTimeout(() => el.classList.add("out"), 900);
+      setTimeout(() => el.remove(), 1200);
+    } catch {}
+  }
+
   function showUndoToast(sale, undoSnapshot, message, type) {
+    flashSaleDone(sale);
     actionToast(message, {
       type,
       actionLabel: "Deshacer",
@@ -1581,7 +1642,8 @@ export function mountSalesView(container, navigate) {
         return;
       }
       // v5.20.0: queda constancia del recargo aplicado al MN
-      paymentLines = sum.lines.map((l) => (l.currency === "MN" && mnSurcharge > 0 ? { ...l, surchargeMNPerUSD: mnSurcharge } : l));
+      const sc = currentSurcharge();
+      paymentLines = sum.lines.map((l) => (l.currency === "MN" && sc > 0 ? { ...l, surchargeMNPerUSD: sc } : l));
     }
     for (const l of paymentLines) {
       if (l.currency === "USD") paidUSD = l.amount;

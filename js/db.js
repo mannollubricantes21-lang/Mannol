@@ -312,6 +312,9 @@ const DEFAULT_SETTINGS = {
   weekendRedirectEnabled: false,    // Si true, las ventas de sábados y domingos se reasignan
   weekendWarehouseId: null,        // Almacén que recibe las ventas de fin de semana (ej: Vedado)
   weekendWarehouseName: null,       // Cache denormalizado para mostrar en UI
+  // v5.21.0: pago mixto — recargo por USD cuando el resto se cobra en MN
+  mixSurchargeOptions: [10, 20],    // botones que ve el vendedor (además de «Tasa»)
+  mixSurchargeDefault: 10,          // el que viene marcado
 };
 
 // Helper: get Supabase instance (cached)
@@ -545,9 +548,14 @@ export async function getSettings() {
   try {
     // v5.17: columnas seguras — pin_code ya no se lee (ni siquiera para admin;
     // el admin usa getSettingsAdmin). Con anon, select * fallaría por permisos.
-    const { data, error } = await s.from("settings")
-      .select("id, el_toque_enabled, el_toque_markup, business_name, last_rate_sync, weekend_warehouse_id, weekend_redirect_enabled")
+    const BASE_COLS = "id, el_toque_enabled, el_toque_markup, business_name, last_rate_sync, weekend_warehouse_id, weekend_redirect_enabled";
+    let { data, error } = await s.from("settings")
+      .select(`${BASE_COLS}, mix_surcharge_options, mix_surcharge_default`)
       .eq("id", "global").maybeSingle();
+    // v5.21.0: si aún no se ejecutó la migración (columnas nuevas), lista base
+    if (error && (String(error.code) === "42703" || /does not exist|permission denied/i.test(error.message || ""))) {
+      ({ data, error } = await s.from("settings").select(BASE_COLS).eq("id", "global").maybeSingle());
+    }
     if (error) throw error;
     if (data) {
       const r = row(data);
@@ -616,10 +624,40 @@ export async function saveSettings(settings) {
   _settingsCache = { ts: 0, data: null }; // invalidar caché de settings
   try {
     const update = { ...sanitizeSettingsRow(toRow(settings)), id: "global" };
-    const { error } = await s.from("settings").upsert(update, { onConflict: "id" });
+    let { error } = await s.from("settings").upsert(update, { onConflict: "id" });
+    // v5.21.0: base sin la migración v5.21 → guardar sin las columnas nuevas
+    if (error && (String(error.code) === "PGRST204" || String(error.code) === "42703" || /column/i.test(error.message || ""))) {
+      const { mix_surcharge_options, mix_surcharge_default, ...rest } = update;
+      if (mix_surcharge_options !== undefined || mix_surcharge_default !== undefined) {
+        ({ error } = await s.from("settings").upsert(rest, { onConflict: "id" }));
+      }
+    }
     if (error) throw error;
   } catch (err) {
     console.error("saveSettings failed:", err);
+  }
+}
+
+/**
+ * v5.21.0: guarda los recargos del pago mixto (admin). A diferencia de
+ * saveSettings, avisa si falla (p. ej. falta la migración v5.21).
+ * @param {number[]} options  recargos en MN por USD (ej. [10, 20])
+ * @param {number} def        el que viene marcado (0 = tasa del día)
+ */
+export async function saveMixSurchargeSettings(options, def) {
+  const s = await sb();
+  if (!s) return; // modo demo: solo en memoria (store)
+  _settingsCache = { ts: 0, data: null };
+  const { error } = await s.from("settings").upsert({
+    id: "global",
+    mix_surcharge_options: options,
+    mix_surcharge_default: def,
+  }, { onConflict: "id" });
+  if (error) {
+    if (String(error.code) === "PGRST204" || String(error.code) === "42703" || /column/i.test(error.message || "")) {
+      throw new Error("Falta ejecutar supabase/instalar.sql en Supabase para guardar los recargos.");
+    }
+    throw new Error(error.message || "No se pudo guardar");
   }
 }
 
@@ -2151,6 +2189,7 @@ export const SETTINGS_COLUMNS = new Set([
   "id", "pin_code", "el_toque_enabled", "el_toque_markup",
   "business_name", "last_rate_sync",
   "weekend_warehouse_id", "weekend_redirect_enabled",
+  "mix_surcharge_options", "mix_surcharge_default", // v5.21.0
 ]);
 
 export function sanitizeSettingsRow(r) {
@@ -3807,7 +3846,7 @@ export async function createTransferRequest(data, user) {
     }
     // v5.20.0: permisos (RLS) — el acceso por PIN es rol anon
     if (String(err.code) === "42501" || /row-level security|permission denied/i.test(err.message || "")) {
-      throw new Error("La base de datos no permite solicitudes desde el acceso por PIN. El administrador debe ejecutar supabase/migration-v5.20.sql");
+      throw new Error("La base de datos no permite solicitudes desde el acceso por PIN. El administrador debe ejecutar supabase/instalar.sql");
     }
     if (!navigator.onLine) throw new Error("Sin conexión: la solicitud necesita internet");
     throw err;
@@ -3942,7 +3981,13 @@ export function subscribeTransferRequests(cb) {
       const channel = s.channel("transfer-requests-live");
       channel.on("postgres_changes", { event: "*", schema: "public", table: "transfer_requests" }, emit);
       channel.subscribe();
+      // v5.21.0: respaldo si el tiempo real no llega (tabla fuera de la
+      // publicación o red inestable): se revisa cada 45 s con la app visible.
+      const poll = setInterval(() => {
+        if (typeof document === "undefined" || document.visibilityState !== "hidden") emit();
+      }, 45000);
       unsub = () => {
+        clearInterval(poll);
         try { s.client.removeChannel(channel); } catch {}
       };
     } catch (err) {

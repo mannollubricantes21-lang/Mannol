@@ -7,10 +7,10 @@ import { getStore } from "../store.js";
 import { hasPersistedSupabaseSession } from "../supabase.js";
 import { subscribeSales, subscribeStock, listProducts, listWarehouses, listAllStockAcrossWarehouses, listStockForProductInAllWarehouses, createTransferRequest, listTransferRequests, saveDailyClosure, listDailyClosures, listSalesInRange } from "../db.js";
 import { computeSellerEarnings, renderSellerEarningsCard, monthRange } from "../seller-earnings.js";
-import { computeClosureStats, closureDateKey, validateTransferRequest, buildClosureShareText } from "../sales-stats.js";
+import { computeClosureStats, closureDateKey, validateTransferRequest, buildClosureShareText, suggestRestock, buildRestockText } from "../sales-stats.js";
 import { formatMoney, formatDate } from "../currency.js";
 import { sortOutOfStockLast } from "../catalog-facets.js";
-import { icon, esc, toast, showModal, closeModal, confirmDialog, copyText, openWhatsApp } from "../ui.js";
+import { icon, esc, toast, showModal, closeModal, confirmDialog, copyText, openWhatsApp, warehouseColor } from "../ui.js";
 
 /**
  * v5.20.0: salir del almacén (fin de la sesión PIN) y volver al inicio.
@@ -54,6 +54,11 @@ export function mountWarehouseInterior(container, navigate) {
   let prevLoading = false;
   let prevFrom = null;          // mes cargado (si la app queda abierta al cambiar de mes)
   let earnOpen = false;         // «Ver detalle por producto» abierto
+  let restockOpen = false;      // v5.21.0: «Pedido sugerido» desplegado
+  // v5.22.0: sección visible en el teléfono (Hoy / Inventario / Caja)
+  let section = "hoy";
+  try { section = sessionStorage.getItem("mannol-wi-section") || "hoy"; } catch {}
+  if (!["hoy", "inv", "caja"].includes(section)) section = "hoy";
 
   if (!warehouse) {
     container.innerHTML = `<div class="empty-state">Selecciona un almacén</div>`;
@@ -106,7 +111,7 @@ export function mountWarehouseInterior(container, navigate) {
   }
 
   // v5.5.0: diálogo para solicitar traspaso desde otro almacén
-  function showRequestDialog(product) {
+  function showRequestDialog(product, defaultQty = 5) {
     const available = otherWarehousesStock
       .filter((s) => s.productId === product.id && (s.quantity || 0) > 0)
       .sort((a, b) => b.quantity - a.quantity);
@@ -128,7 +133,7 @@ export function mountWarehouseInterior(container, navigate) {
           </div>
           <div>
             <label class="label label-xs">Cantidad (unidades) *</label>
-            <input class="input" type="number" min="1" id="tr-qty" value="5" inputmode="numeric" />
+            <input class="input" type="number" min="1" id="tr-qty" value="${Math.max(1, Math.min(defaultQty, available[0]?.quantity || defaultQty))}" inputmode="numeric" />
           </div>
           <div>
             <label class="label label-xs">Nota (opcional)</label>
@@ -256,13 +261,20 @@ export function mountWarehouseInterior(container, navigate) {
     const earnPrev = prevSales ? computeSellerEarnings(prevSales, { warehouse: sellerWh, offset: -1 }) : null;
     const earningsHtml = renderSellerEarningsCard(earnCur, earnPrev, { open: earnOpen, prevLoading });
 
+    // v5.21.0: pedido sugerido (ventas de 30 días: este mes + el pasado)
+    const salesById = new Map();
+    [...(prevSales || []), ...sales].forEach((x) => salesById.set(x.id, x));
+    const restock = products.length && stock.length
+      ? suggestRestock({ products, stock, sales: [...salesById.values()] })
+      : [];
+
     container.innerHTML = `
-      <div class="wi-layout" style="display:flex;flex-direction:column;gap:0.875rem">
+      <div class="wi-layout" data-sec-active="${section}" style="display:flex;flex-direction:column;gap:0.875rem">
         <!-- Hero del almacén (v5.7.0) -->
         <div class="wh-hero wi-hero">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem">
             <div style="display:flex;align-items:center;gap:0.5rem;min-width:0">
-              <span class="wh-chip">${icon("store", 11)} ${esc(warehouse.code)}</span>
+              <span class="wh-chip" style="--wh:${warehouseColor(warehouse)}">${icon("store", 11)} ${esc(warehouse.code)}</span>
               <h2 class="text-lg font-bold" style="margin:0">${esc(warehouse.name)}</h2>
             </div>
             <button class="btn btn-ghost btn-sm" data-nav-back style="flex-shrink:0">${icon("arrowLeft", 14)} Volver</button>
@@ -275,8 +287,15 @@ export function mountWarehouseInterior(container, navigate) {
           ` : ''}
         </div>
 
+        <!-- v5.22.0: secciones (en el teléfono se ve una a la vez; en PC todo) -->
+        <div class="wi-tabs" role="tablist" aria-label="Secciones del almacén">
+          <button type="button" role="tab" class="wi-tab ${section === "hoy" ? "on" : ""}" aria-selected="${section === "hoy"}" data-sec-tab="hoy">${icon("activity", 15)} Hoy</button>
+          <button type="button" role="tab" class="wi-tab ${section === "inv" ? "on" : ""}" aria-selected="${section === "inv"}" data-sec-tab="inv">${icon("boxes", 15)} Inventario${lowStock + outOfStock > 0 ? `<span class="wi-tab-n">${lowStock + outOfStock}</span>` : ""}</button>
+          <button type="button" role="tab" class="wi-tab ${section === "caja" ? "on" : ""}" aria-selected="${section === "caja"}" data-sec-tab="caja">${icon("receipt", 15)} Caja${!todayClosed && todayStats.salesCount > 0 ? `<span class="wi-tab-dot" title="Pendiente de cerrar"></span>` : ""}</button>
+        </div>
+
         <!-- Resumen con período integrado (v5.7.0) -->
-        <div class="card wi-resumen">
+        <div class="card wi-resumen" data-sec="hoy">
           <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;padding:0.625rem 0.75rem">
             <h3 class="card-title flex items-center gap-1">${icon("activity", 14)} Resumen</h3>
             <div class="seg-group">
@@ -337,10 +356,10 @@ export function mountWarehouseInterior(container, navigate) {
              el botón 🛒 de la barra de abajo está siempre disponible. -->
 
         <!-- v5.14.0: lo que lleva ganado (comisión fija por producto) -->
-        <div class="wi-ganado">${earningsHtml}</div>
+        <div class="wi-ganado" data-sec="hoy caja">${earningsHtml}</div>
 
         <!-- Cierre de caja (v5.5.0) -->
-        <div class="card wi-cierre">
+        <div class="card wi-cierre" data-sec="caja">
           <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
             <h3 class="card-title flex items-center gap-1">${icon("receipt", 14)} Cierre de caja</h3>
             ${todayClosed
@@ -400,7 +419,7 @@ export function mountWarehouseInterior(container, navigate) {
         </div>
 
         <!-- Inventario con tabs: Stock / Otros almacenes / Transferencias -->
-        <div class="card wi-inv">
+        <div class="card wi-inv" data-sec="inv">
           <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem">
             <h3 class="card-title flex items-center gap-1">${icon("boxes", 14)} Inventario</h3>
             <div style="display:flex;gap:0.25rem">
@@ -555,9 +574,34 @@ export function mountWarehouseInterior(container, navigate) {
           ` : ''}
         </div>
 
+        <!-- v5.21.0: Pedido sugerido -->
+        ${restock.length ? `
+          <div class="card wi-pedido" data-sec="hoy inv">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
+              <h3 class="card-title flex items-center gap-1">${icon("listTree", 14)} Pedido sugerido</h3>
+              <span class="badge badge-warning" style="font-size:0.625rem">${restock.length} producto${restock.length === 1 ? "" : "s"}</span>
+            </div>
+            <div class="card-content" style="padding:0.5rem 0.75rem 0.75rem;display:flex;flex-direction:column;gap:0.375rem">
+              <p class="text-xs text-muted" style="margin:0">Para cubrir ~2 semanas al ritmo de venta de los últimos 30 días.</p>
+              ${(restockOpen ? restock : restock.slice(0, 4)).map((r) => `
+                <div class="restock-row">
+                  <div style="flex:1;min-width:0">
+                    <div class="text-xs font-semibold truncate">${esc(r.name)}</div>
+                    <div class="text-xs text-muted">Hay ${r.qty} · ${esc(r.reason)}${r.perDay > 0 ? ` · ${r.perDay.toLocaleString("es-ES")}/día` : ""}</div>
+                  </div>
+                  <span class="restock-qty" title="Unidades sugeridas">+${r.suggested}</span>
+                  <button class="btn btn-ghost btn-sm" data-restock-request="${esc(r.productId)}" data-restock-qty="${r.suggested}" title="Pedir a otro almacén">${icon("arrowLeftRight", 12)}</button>
+                </div>
+              `).join("")}
+              ${restock.length > 4 ? `<button class="btn btn-ghost btn-sm btn-block" data-restock-toggle>${restockOpen ? "Ver menos ▲" : `Ver los ${restock.length} ▼`}</button>` : ""}
+              <button class="btn btn-whatsapp btn-sm" id="restock-share">${icon("whatsapp", 14)} Enviar pedido por WhatsApp</button>
+            </div>
+          </div>
+        ` : ""}
+
         <!-- Ventas recientes -->
         ${periodSales.length > 0 ? `
-          <div class="card wi-recientes">
+          <div class="card wi-recientes" data-sec="hoy caja">
             <div class="card-header"><h3 class="card-title">Ventas recientes</h3></div>
             <div class="card-content" style="padding:0.5rem">
               <div style="max-height:14rem;overflow-y:auto;display:flex;flex-direction:column;gap:0.25rem">
@@ -661,6 +705,28 @@ export function mountWarehouseInterior(container, navigate) {
     container.querySelector("#share-closure-copy")?.addEventListener("click", async () => {
       const ok = await copyText(closureText());
       toast(ok ? "Resumen del cierre copiado" : "No se pudo copiar el resumen", ok ? "success" : "warning");
+    });
+
+    // v5.22.0: pestañas de sección
+    container.querySelectorAll("[data-sec-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        section = btn.dataset.secTab;
+        try { sessionStorage.setItem("mannol-wi-section", section); } catch {}
+        render();
+        try { container.querySelector(".wi-tabs")?.scrollIntoView({ block: "nearest" }); } catch {}
+      });
+    });
+
+    // v5.21.0: pedido sugerido
+    container.querySelector("[data-restock-toggle]")?.addEventListener("click", () => { restockOpen = !restockOpen; render(); });
+    container.querySelector("#restock-share")?.addEventListener("click", () => openWhatsApp(buildRestockText({ warehouseName: warehouse.name, items: restock })));
+    container.querySelectorAll("[data-restock-request]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const p = products.find((x) => x.id === btn.dataset.restockRequest);
+        if (!p) return;
+        if (otherWarehousesStock.length === 0 && othersState !== "loading") await loadOtherStock();
+        showRequestDialog(p, Number(btn.dataset.restockQty) || 5);
+      });
     });
 
     const toggleClosuresBtn = container.querySelector("[data-toggle-closures]");

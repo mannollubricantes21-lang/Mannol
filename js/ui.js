@@ -389,3 +389,15 @@ export function setupTableCards(root) {
   obs.observe(root, { childList: true, subtree: true });
   root.__tableCards = obs;
 }
+
+// =====================================================
+// v5.22.0 — Color propio de cada almacén (el mismo en todos los equipos)
+// =====================================================
+const WAREHOUSE_COLORS = ["#138a6b", "#2777a8", "#8a4fd0", "#b8641a", "#c0392b", "#0e7490", "#7c6a0a", "#be185d"];
+/** Color estable a partir del código (o id) del almacén. */
+export function warehouseColor(w) {
+  const key = String(w?.code || w?.id || "");
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return WAREHOUSE_COLORS[h % WAREHOUSE_COLORS.length];
+}

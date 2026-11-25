@@ -32,10 +32,10 @@ sincronización de tasas con API elToque. PWA vanilla JS sin bundler.
 | `js/firebase.js`                 | `js/supabase.js`                         |
 | `js/firebase-config.example.js`  | `js/supabase-config.example.js`          |
 | `js/firestore.js`                | `js/db.js` (misma API surface)           |
-| `firebase.json`                  | `supabase/schema.sql` + `policies.sql`   |
-| `firestore.rules`                | `supabase/policies.sql` (RLS)            |
-| `firestore.indexes.json`         | `supabase/schema.sql` (CREATE INDEX)     |
-| `storage.rules`                  | `supabase/policies.sql` (buckets)         |
+| `firebase.json`                  | `supabase/instalar.sql`                  |
+| `firestore.rules`                | `supabase/instalar.sql` (RLS)            |
+| `firestore.indexes.json`         | `supabase/instalar.sql` (CREATE INDEX)   |
+| `storage.rules`                  | `supabase/instalar.sql` (buckets)        |
 
 Archivos Firebase eliminados: `firebase.json`, `firestore.rules`, `storage.rules`,
 `firestore.indexes.json`, `js/firebase.js`, `js/firestore.js`, `js/firebase-config.example.js`.
@@ -52,13 +52,10 @@ Archivos Firebase eliminados: `firebase.json`, `firestore.rules`, `storage.rules
 
 ### 2. Ejecutar el esquema SQL
 
-Entra a **SQL Editor → New query** y ejecuta **en este orden exacto**:
+Entra a **SQL Editor → New query**, pega **todo** `supabase/instalar.sql` y pulsa **Run**.
 
-1. **`supabase/schema.sql`** → crea 14 tablas + índices + 3 RPCs + campos mayorista
-2. **`supabase/policies.sql`** → activa RLS + buckets de Storage + grants + funciones de seguridad (filtrado por almacén, cambio de contraseña, desactivación de usuarios)
-3. **`supabase/seed.sql`** → datos demo + productos con tiers mayorista
-
-> ⚠️ **IMPORTANTE**: Ejecuta los 3 scripts en orden. NO ejecutes ningún archivo `migration-*.sql` en una instalación nueva — todo está consolidado en `policies.sql`. Si los ejecutas sin tener las tablas creadas, dará error "relation does not exist".
+- Sirve para una base **nueva** y para **actualizar** la que ya usas (no borra datos, se puede repetir).
+- Detalles: `supabase/README.md`.
 
 ### 3. Crear el usuario admin inicial
 
@@ -165,11 +162,9 @@ Mannol/
 │   │   └── sync-banner.js  ← Banner de estado de sync
 │   └── views/              ← 14 vistas (home, dashboard, sales, ...)
 ├── supabase/
-│   ├── schema.sql          ← 14 tablas + índices + 3 RPCs + campos mayorista
-│   ├── policies.sql        ← RLS + buckets Storage + grants + funciones seguridad
-│   ├── seed.sql            ← Datos demo iniciales
-│   ├── supabase-README.md  ← Guía detallada del backend
-│   └── lifecycle-cleanup.sql  ← Mantenimiento (manual o pg_cron)
+│   ├── instalar.sql        ← TODA la base (instalar o actualizar; re-ejecutable)
+│   ├── limpieza.sql        ← Mantenimiento (opcional)
+│   └── README.md           ← Cómo usarlos
 ├── tests/                   ← Tests con Vitest
 │   ├── pin-rate-limit.test.js
 │   ├── escape-html.test.js
@@ -275,10 +270,7 @@ El PIN del almacén y de Ajustes **se validan en el servidor** con
 número completo de las tarjetas (solo la columna `last4`). La app valida sin
 conexión con un hash SHA-256 guardado tras el primer login correcto.
 
-- Instalación nueva: todo está en `schema.sql` + `policies.sql`.
-- Base de datos existente: ejecutar una vez `supabase/migration-v5.17-seguridad.sql`
-  (re-ejecutable). Sin la migración el login por PIN sigue funcionando por
-  compatibilidad, pero las fugas siguen abiertas.
+- Todo está en `supabase/instalar.sql` (sirve para base nueva o existente).
 
 ---
 
@@ -350,20 +342,10 @@ que usa la RPC `create_admin_user`.
 
 ## Resolución de problemas
 
-### Error: "relation public.products does not exist"
+### Error: "relation … does not exist", "column … does not exist" o "function … does not exist"
 
-Ejecutaste `policies.sql` o `seed.sql` antes de `schema.sql`.
-**Solución**: ejecuta `schema.sql` → `policies.sql` → `seed.sql` (en ese orden).
-
-### Error: "column units_per_box does not exist"
-
-Tu `schema.sql` es de una versión muy antigua (pre-v9).
-**Solución**: descarga la última versión del repo y vuelve a ejecutar `schema.sql` (incluye todos los campos mayoristas).
-
-### Error: "function user_can_access_warehouse does not exist"
-
-Tu `policies.sql` es de una versión muy antigua.
-**Solución**: descarga la última versión del repo y vuelve a ejecutar `policies.sql`.
+A tu base le falta algo de una versión nueva.
+**Solución**: ejecuta otra vez `supabase/instalar.sql` entero (no borra datos).
 
 ### Las suscripciones realtime no funcionan
 

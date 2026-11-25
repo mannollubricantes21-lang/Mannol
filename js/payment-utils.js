@@ -153,3 +153,25 @@ export function mixRestInMN(multi, totalUSD, rates) {
   const native = usdToNative(sum.missingUSD, "MN", rates);
   return native == null ? 0 : Math.ceil(native - 1e-9);
 }
+
+/**
+ * v5.21.0: recargos del pago mixto configurados por el admin → lista segura.
+ * Siempre incluye 0 («Tasa del día») al principio; quita repetidos, negativos
+ * y valores absurdos (> 1000 MN por USD). Máximo 4 botones de recargo.
+ * @param {Object} settings  { mixSurchargeOptions, mixSurchargeDefault }
+ * @returns {{options:number[], def:number}}
+ */
+export function normalizeMixSurcharges(settings) {
+  let raw = settings?.mixSurchargeOptions;
+  if (typeof raw === "string") {
+    try { raw = JSON.parse(raw); } catch { raw = raw.split(/[,\s;]+/); }
+  }
+  if (!Array.isArray(raw)) raw = [10, 20];
+  const nums = [...new Set(raw.map((v) => Math.round(Number(v))).filter((v) => Number.isFinite(v) && v > 0 && v <= 1000))]
+    .sort((a, b) => a - b)
+    .slice(0, 4);
+  const options = [0, ...nums];
+  const d = Math.round(Number(settings?.mixSurchargeDefault));
+  const def = options.includes(d) ? d : (nums[0] ?? 0);
+  return { options, def };
+}

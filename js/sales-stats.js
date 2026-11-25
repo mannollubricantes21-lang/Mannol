@@ -311,3 +311,58 @@ export function findProductByCode(products, code) {
   }
   return null;
 }
+
+// =====================================================
+// v5.21.0 — Pedido sugerido (puro, testeado)
+// =====================================================
+/**
+ * Qué reponer y cuánto, según lo que se vendió en los últimos `days` días.
+ * Objetivo por producto: cubrir `coverDays` días de venta + su mínimo.
+ * Entra en la lista si está agotado, por debajo del mínimo o se acaba en
+ * menos de `warnDays` días al ritmo actual.
+ *
+ * @param {{products:Array, stock:Array, sales:Array, nowMs?:number, days?:number, coverDays?:number, warnDays?:number}} p
+ * @returns {Array<{productId:string, name:string, qty:number, min:number, perDay:number, daysLeft:number|null, suggested:number, reason:string}>}
+ */
+export function suggestRestock({ products = [], stock = [], sales = [], nowMs = Date.now(), days = 30, coverDays = 14, warnDays = 7 } = {}) {
+  const since = nowMs - days * 86400000;
+  const sold = new Map();
+  for (const s of sales) {
+    if (!s || s.status !== "COMPLETADA" || !(s.createdAt >= since)) continue;
+    for (const it of s.items || []) {
+      const q = Number(it?.quantity) || 0;
+      if (it?.productId && q > 0) sold.set(it.productId, (sold.get(it.productId) || 0) + q);
+    }
+  }
+  const stockMap = new Map(stock.map((x) => [x.productId, x]));
+  const out = [];
+  for (const p of products) {
+    if (!p || p.active === false) continue;
+    const st = stockMap.get(p.id);
+    const qty = Math.max(0, Number(st?.quantity) || 0);
+    const min = Number(st?.minStock || p.minStock) || 5;
+    const perDay = (sold.get(p.id) || 0) / days;
+    // Sin stock registrado y sin ventas: el almacén no trabaja ese producto
+    if (!st && perDay === 0) continue;
+    const daysLeft = perDay > 0 ? qty / perDay : null;
+    let reason = "";
+    if (qty === 0) reason = "agotado";
+    else if (qty <= min) reason = "bajo mínimo";
+    else if (daysLeft != null && daysLeft < warnDays) reason = `se acaba en ~${Math.max(1, Math.round(daysLeft))} días`;
+    if (!reason) continue;
+    const target = Math.ceil(perDay * coverDays) + min;
+    const suggested = Math.max(0, target - qty);
+    if (suggested <= 0) continue;
+    out.push({ productId: p.id, name: p.name || "—", qty, min, perDay: Math.round(perDay * 100) / 100, daysLeft, suggested, reason });
+  }
+  const urgency = (r) => (r.qty === 0 ? -1 : r.daysLeft ?? 999);
+  return out.sort((a, b) => urgency(a) - urgency(b) || b.perDay - a.perDay || a.name.localeCompare(b.name));
+}
+
+/** Texto del pedido para WhatsApp. */
+export function buildRestockText({ warehouseName, items }) {
+  const lines = [`*Pedido sugerido · ${warehouseName || "almacén"}*`, ""];
+  for (const r of items) lines.push(`• ${r.name}: *${r.suggested}* u (hay ${r.qty}, ${r.reason})`);
+  lines.push("", `Total: ${items.reduce((n, r) => n + r.suggested, 0)} unidades`);
+  return lines.join("\n");
+}

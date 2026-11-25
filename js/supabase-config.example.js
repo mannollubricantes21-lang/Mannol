@@ -9,7 +9,7 @@
 //    - Project URL:    https://xxxxxx.supabase.co
 //    - anon public key: eyJhbGc...
 // 3. Replace the values below
-// 4. Run supabase/schema.sql, supabase/policies.sql, supabase/seed.sql
+// 4. Run supabase/instalar.sql
 //    in Supabase Dashboard → SQL Editor
 // 5. Create the first admin user via:
 //    Dashboard → Authentication → Users → "Add user" → mark as admin in users table

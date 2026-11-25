@@ -107,7 +107,7 @@ export async function loginWithEmail(email, password) {
 /**
  * v5.20.0: "usuario" o "email" → email para Supabase Auth.
  * Con "@" se usa tal cual. Sin "@" se busca el email del usuario con la RPC
- * email_for_username (migration-v5.20.sql); si la RPC no existe aún,
+ * email_for_username (supabase/instalar.sql); si la RPC no existe aún,
  * se prueba usuario@mannol.cu (el dominio de las cuentas creadas por defecto).
  */
 async function resolveLoginEmail(s, input) {
