@@ -332,6 +332,7 @@ export async function getSupabase() {
         auth: client.auth,
         from: (table) => client.from(table),
         channel: (name) => client.channel(name),
+        rpc: (fn, args, opts) => client.rpc(fn, args, opts), // v5.23.3
         storage: client.storage,
       };
 

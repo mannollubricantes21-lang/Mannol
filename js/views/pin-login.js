@@ -223,6 +223,7 @@ export function mountPinLoginView(container, navigate) {
     try {
       const isDemo = !isSupabaseConfigured;
       const cachedMeta = loadPinMeta(warehouse.code);
+      let rpcFailMsg = ""; // v5.23.3: motivo real si la validación en el servidor falla
       const enterWarehouse = (whData) => {
         clearPinAttempts(warehouse.id);
         const empleado = {
@@ -332,6 +333,7 @@ export function mountPinLoginView(container, navigate) {
           // RPC ausente (migración sin ejecutar) o red caída a mitad → cae al
           // fallback con hash local. Nada se marca como error de datos aquí.
           console.warn("[PIN] RPC no disponible, uso validación local:", rpcErr?.message || rpcErr);
+          rpcFailMsg = String(rpcErr?.message || rpcErr || "").slice(0, 140);
         }
       }
 
@@ -354,7 +356,8 @@ export function mountPinLoginView(container, navigate) {
       } else if (navigator.onLine === false) {
         errorBox.textContent = "PIN incorrecto o cambiado en la nube. Conéctate una vez para sincronizarlo.";
       } else {
-        errorBox.textContent = "No se pudo validar el PIN. Ejecuta supabase/instalar.sql y revisa la conexión.";
+        // v5.23.3: mostrar el motivo real (antes solo se veía en la consola)
+        errorBox.textContent = "No se pudo validar el PIN" + (rpcFailMsg ? ` (${rpcFailMsg})` : "") + ". Revisa la conexión; si sigue, ejecuta supabase/instalar.sql.";
       }
       errorBox.classList.remove("hidden");
       submit.disabled = false;

@@ -1,5 +1,15 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.23.3 (2026-11-25) — El PIN valida en el servidor (por fin)
+
+- `verifyWarehousePin` llamaba a `s.rpc(...)`, que no existe en el envoltorio
+  de Supabase (es `s.client.rpc`). La validación del PIN fallaba SIEMPRE antes
+  de llegar al servidor; solo entraban los equipos que guardaban el PIN de
+  antes. Era la causa de «no puedo iniciar sesión desde otros dispositivos».
+- El envoltorio expone también `rpc()` para que no vuelva a pasar.
+- Si la validación falla, el mensaje muestra el motivo real.
+- Test nuevo: `tests/pin-rpc.test.js`.
+
 ## v5.23.2 (2026-11-25) — El PIN vuelve a validar
 
 - En Supabase, `digest()`, `crypt()` y `gen_salt()` (pgcrypto) están en el

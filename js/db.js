@@ -874,7 +874,9 @@ export async function verifyWarehousePin(code, pin) {
     e.code = "SIN_CLIENTE";
     throw e;
   }
-  const { data, error } = await s.rpc("verify_warehouse_pin", { p_code: code, p_pin: pin });
+  // v5.23.3: era s.rpc(...) → no existe en el envoltorio (es s.client.rpc):
+  // la validación SIEMPRE fallaba con «No se pudo validar el PIN».
+  const { data, error } = await s.client.rpc("verify_warehouse_pin", { p_code: code, p_pin: pin });
   if (error) throw error;
   return data || { ok: false, reason: "wrong_pin" };
 }
