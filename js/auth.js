@@ -138,7 +138,12 @@ export function subscribeAuth(cb) {
     try {
       const { getUserByEmail } = await import("./db.js");
       // Supabase: onAuthStateChange fires on init + changes
-      const { data } = s.auth.onAuthStateChange(async (_event, session) => {
+      // v5.23.4: supabase-js ESPERA a este callback mientras tiene tomado su
+      // candado de sesión. Si aquí dentro se consulta algo (getSession o la
+      // tabla users), se espera a sí mismo → el login se quedaba en
+      // «Entrando…» para siempre. El trabajo se hace justo después (setTimeout),
+      // como indica la documentación de Supabase.
+      const handleAuthChange = async (_event, session) => {
         if (_event === "SIGNED_OUT") { cb(null); return; }
         if (!session?.user) {
           // Check if there's a persisted session we should restore
@@ -161,6 +166,9 @@ export function subscribeAuth(cb) {
           if (!isOnline() || keepLocalUser()) return;
           cb(null);
         }
+      };
+      const { data } = s.auth.onAuthStateChange((event, session) => {
+        setTimeout(() => { handleAuthChange(event, session).catch((e) => console.error("[auth]", e)); }, 0);
       });
       unsub = () => { try { data.subscription.unsubscribe(); } catch {} };
 

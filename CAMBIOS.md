@@ -1,5 +1,14 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.23.4 (2026-11-25) — Iniciar sesión ya no se queda en «Entrando…»
+
+- `subscribeAuth` consultaba la sesión y el perfil DENTRO del aviso
+  `onAuthStateChange`. supabase-js espera a ese aviso con su candado de sesión
+  tomado → la consulta se esperaba a sí misma y el inicio de sesión nunca
+  terminaba (en equipos sin sesión guardada). Ahora el trabajo se hace justo
+  después (setTimeout), como indica Supabase.
+- Test nuevo que reproduce el bloqueo: `tests/auth-deadlock.test.js`.
+
 ## v5.23.3 (2026-11-25) — El PIN valida en el servidor (por fin)
 
 - `verifyWarehousePin` llamaba a `s.rpc(...)`, que no existe en el envoltorio
