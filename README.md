@@ -258,10 +258,27 @@ Las ventas mayoristas se guardan en la misma tabla `sales` con:
 | `create_admin_user()` | Crea auth.user + perfil público en una transacción |
 | `change_user_password()` | Admin cambia contraseña sin exponer service_role |
 | `deactivate_user()` | Soft-delete + ban automático en auth.users |
+| `verify_warehouse_pin()` | **v5.17** — valida el PIN del almacén en el servidor (rate limit 5/10 min) y devuelve hash para revalidar sin conexión |
+| `register_sale()` | Cola offline: venta + stock en una tx, idempotente por client_ref |
+| `deduct_sale_stock()` | Descuento clásico (ruta antigua; solo servidor desde v5.17) |
 | `is_admin()` | Helper RLS |
 | `is_active_user()` | Helper RLS |
 | `is_admin_or_gestor()` | Helper RLS |
 | `user_can_access_warehouse()` | Helper RLS por warehouseIds |
+
+---
+
+## Seguridad (desde v5.17)
+
+El PIN del almacén y de Ajustes **se validan en el servidor** con
+`verify_warehouse_pin()`; `anon` ya no puede leer `pin`/`pin_code` ni el
+número completo de las tarjetas (solo la columna `last4`). La app valida sin
+conexión con un hash SHA-256 guardado tras el primer login correcto.
+
+- Instalación nueva: todo está en `schema.sql` + `policies.sql`.
+- Base de datos existente: ejecutar una vez `supabase/migration-v5.17-seguridad.sql`
+  (re-ejecutable). Sin la migración el login por PIN sigue funcionando por
+  compatibilidad, pero las fugas siguen abiertas.
 
 ---
 

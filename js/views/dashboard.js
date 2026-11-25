@@ -6,6 +6,7 @@
 import { getStore } from "../store.js";
 import { APP_LABEL } from "../version.js";
 import { subscribeSales, listWarehouses, listManagers, listCards, listCategories, listSalesInRange } from "../db.js";
+import { computeClosureStats, buildClosureShareText } from "../sales-stats.js"; // v5.18.0: «Cierre de hoy»
 import { computeSellerEarnings, renderSellerEarningsCard, monthRange } from "../seller-earnings.js";
 import { logout } from "../auth.js";
 import { formatMoney, formatDate, formatDateShort, skeletonCard, skeletonStatCard } from "../currency.js";
@@ -19,6 +20,7 @@ import { mountCatalogView } from "./catalog.js";
 import { mountUsersView } from "./users.js";
 import { mountSettingsView } from "./settings.js";
 import { mountSalesHistoryView } from "./sales-history.js";
+import { mountTeamStatusView } from "./team-status.js"; // v5.18.0: «¿ya se subió mi venta?»
 import { mountManagersView } from "./managers.js";
 import { mountWarehouseInterior } from "./warehouse-interior.js";
 import { createSyncBanner } from "../components/sync-banner.js";
@@ -41,6 +43,8 @@ const DRAWER_ITEMS = [
   { id: "dashboard", label: "Inicio", icon: "home", roles: ["admin", "gestor", "vendedor", "warehouse", "empleado_pin"] },
   { id: "sales", label: "Ventas", icon: "cart", roles: ["gestor", "vendedor", "warehouse", "empleado_pin"] },
   { id: "stock", label: "Inventario", icon: "boxes", roles: ["admin", "gestor", "warehouse", "empleado_pin"] },
+  // v5.18.0: «¿ya se subió mi venta?» — última subida, errores y ventas en espera
+  { id: "team-status", label: "Estado del equipo", icon: "activity", roles: ["admin", "gestor", "vendedor", "warehouse", "empleado_pin"] },
   { id: "managers", label: "Gestores", icon: "users", roles: ["admin", "gestor", "vendedor", "warehouse"] },
   { id: "history", label: "Historial", icon: "receipt", roles: ["admin", "gestor", "vendedor", "warehouse"] },
   { id: "catalog", label: "Catálogo", icon: "tags", roles: ["admin", "gestor"] },
@@ -317,6 +321,7 @@ export function mountDashboardView(container, navigate) {
         case "dashboard": cleanup = mountOverview(content, navigate); break;
         case "warehouse-interior": cleanup = mountWarehouseInterior(content, navigate); break;
         case "sales": cleanup = mountSalesView(content, navigate); break;
+        case "team-status": cleanup = mountTeamStatusView(content, navigate); break;
         case "history": cleanup = mountSalesHistoryView(content, navigate); break;
         case "stock": cleanup = mountStockView(content, navigate); break;
         case "managers": cleanup = mountManagersView(content, navigate); break;
@@ -428,6 +433,8 @@ export function mountDashboardView(container, navigate) {
             </div>
           </div>
 
+          ${buildTodayClosureCard(todaySales, warehouse)}
+
           ${showEarnings ? `<div class="overview-earn" style="grid-column: 1 / -1">${renderSellerEarningsCard(
             computeSellerEarnings(sales, { warehouse: sellerWh }),
             prevSales ? computeSellerEarnings(prevSales, { warehouse: sellerWh, offset: -1 }) : null,
@@ -488,6 +495,73 @@ export function mountDashboardView(container, navigate) {
         </div>
       `;
       content.querySelector("[data-earn-details]")?.addEventListener("toggle", (e) => { earnOpen = e.currentTarget.open; });
+      wireTodayClosureCard(todaySales, warehouse);
+    }
+
+    // ===== v5.18.0: «Cierre de caja con un toque» =====
+    // Tarjeta con el total de HOY por moneda (los mismos números que el
+    // cierre del interior del almacén) + botón para compartirlo por
+    // WhatsApp (o copiarlo). Sin navegaciones: los números quedan a la vista.
+    function buildTodayClosureCard(todaySales, warehouse) {
+      if (todaySales.length === 0) return "";
+      const stats = computeClosureStats(todaySales, {});
+      const CURR_FMT = { USD: "USD", MN: "MN", EUR: "EUR", TRANSFERENCIA: "USD" };
+      const CURR_LABEL = { USD: "USD", MN: "MN", EUR: "EUR", TRANSFERENCIA: "Transf." };
+      const CURR_COLOR = { USD: "var(--accent-usd)", MN: "var(--accent-mn)", EUR: "var(--accent-eur)", TRANSFERENCIA: "var(--accent-transfer)" };
+      const activeCurrs = ["USD", "MN", "EUR", "TRANSFERENCIA"]
+        .filter((c) => stats.byCurrency[c].count > 0 || stats.byCurrency[c].amount > 0);
+      return `
+        <div class="card" style="grid-column: 1 / -1">
+          <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap">
+            <h2 class="card-title flex items-center gap-1">${icon("wallet", 14)} Cierre de hoy${warehouse?.name ? ` · ${esc(warehouse.name)}` : ""}</h2>
+            <button class="btn btn-outline btn-sm" id="closure-share-btn">${icon("whatsapp", 13)} Compartir</button>
+          </div>
+          <div class="card-content" style="padding:0.625rem 0.75rem 0.75rem">
+            <div style="display:flex;flex-wrap:wrap;gap:0.375rem">
+              ${activeCurrs.map((c) => `
+                <span class="curr-chip">
+                  <span class="curr-dot" style="background:${CURR_COLOR[c]}"></span>
+                  <strong class="text-xs" style="color:${CURR_COLOR[c]}">${CURR_LABEL[c]}</strong>
+                  <strong class="text-xs">${formatMoney(stats.byCurrency[c].amount, CURR_FMT[c])}</strong>
+                  <span class="text-muted" style="font-size:0.625rem">· ${stats.byCurrency[c].count}</span>
+                </span>
+              `).join("")}
+            </div>
+            <p class="text-xs text-muted" style="margin:0.4375rem 0 0">
+              ${icon("receipt", 11)} ${stats.salesCount} venta(s) · ${stats.unitsSold} unidades · total ${formatMoney(stats.totalUSD, "USD")}
+            </p>
+          </div>
+        </div>
+      `;
+    }
+
+    function wireTodayClosureCard(todaySales, warehouse) {
+      const btn = content.querySelector("#closure-share-btn");
+      if (!btn) return;
+      const stats = computeClosureStats(todaySales, {});
+      btn.addEventListener("click", async () => {
+        const txt = buildClosureShareText({
+          warehouseName: warehouse?.name || "",
+          warehouseCode: warehouse?.code || "",
+          dateMs: Date.now(),
+          stats,
+          fmt: formatMoney,
+        });
+        if (navigator.share) {
+          try {
+            await navigator.share({ title: "Cierre de hoy · MANNOL", text: txt });
+            return;
+          } catch (err) {
+            if (err?.name === "AbortError") return;
+          }
+        }
+        try {
+          await navigator.clipboard.writeText(txt);
+          toast("Cierre copiado: pégalo en WhatsApp", "success");
+        } catch {
+          toast("No se pudo copiar el cierre", "warning");
+        }
+      });
     }
 
     function buildLast7DaysData(sales) {
@@ -585,6 +659,12 @@ export function mountDashboardView(container, navigate) {
 
   // ===== Keyboard shortcuts =====
   function onKeydown(e) {
+    // Escape cierra el drawer (pendiente del REVIEW.md, hecho en v5.17)
+    if (e.key === "Escape" && drawerOpen) {
+      const docked = isDesktop() && !!getStore().getState().currentUser;
+      if (!docked) { e.preventDefault(); closeDrawer(); }
+      return;
+    }
     // Ignore if typing in an input
     const tag = (e.target.tagName || "").toLowerCase();
     if (["input", "textarea", "select"].includes(tag)) return;

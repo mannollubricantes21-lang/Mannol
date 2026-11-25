@@ -7,8 +7,8 @@
 // APP_VERSION y APP_BUILD aquí (y el CACHE_VERSION de sw.js).
 // =====================================================
 
-export const APP_VERSION = "5.16.0";
-export const APP_BUILD = "2026-11-24";
+export const APP_VERSION = "5.19.0";
+export const APP_BUILD = "2026-11-25";
 export const APP_LABEL = `MANNOL POS v${APP_VERSION} · build ${APP_BUILD}`;
 
 console.info(`[MANNOL] ${APP_LABEL}`);

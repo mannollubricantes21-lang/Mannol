@@ -3,7 +3,7 @@
 // =====================================================
 
 import { getStore } from "../store.js";
-import { getSettings, saveSettings, syncElToqueRates, subscribeRates, listWarehouses, saveWarehouse } from "../db.js";
+import { getSettingsAdmin, saveSettings, syncElToqueRates, subscribeRates, listWarehousesAdmin, saveWarehouse } from "../db.js";
 import { formatDate } from "../currency.js";
 import { toast, icon, showModal, esc } from "../ui.js";
 
@@ -15,9 +15,11 @@ export function mountSettingsView(container, navigate) {
   let saving = false;
 
   async function load() {
-    form = await getSettings();
+    // v5.17: el panel de Ajustes usa las variantes admin (traen pinCode y el
+    // PIN de cada almacén). La lista pública de almacenes ya no incluye PINs.
+    form = await getSettingsAdmin();
     store.setSettings(form);
-    warehouses = await listWarehouses();
+    warehouses = await listWarehousesAdmin();
     render();
   }
 

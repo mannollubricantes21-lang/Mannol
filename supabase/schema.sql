@@ -18,6 +18,10 @@ create extension if not exists pgcrypto;
 create table if not exists public.settings (
   id text primary key default 'global',
   pin_code text not null default '2025',
+  -- v5.17: hash del PIN. El PIN en claro no se lee desde anon: se valida
+  -- en el servidor con verify_warehouse_pin() (ver policies.sql).
+  pin_salt text,
+  pin_hash text,
   el_toque_enabled boolean not null default true,
   el_toque_markup numeric not null default 5,
   business_name text not null default 'MANNOL',
@@ -61,6 +65,9 @@ create table if not exists public.warehouses (
   phone text,
   active boolean not null default true,
   pin text,
+  -- v5.17: hash del PIN (SHA-256 + sal, se recalcula con un trigger)
+  pin_salt text,
+  pin_hash text,
   seller_commission_percent numeric not null default 0,
   seller_commission_currency text not null default 'USD' check (seller_commission_currency in ('USD','MN')),
   -- v5.14: quién vende (una persona, o dos: lunes a viernes + fin de semana)
@@ -104,6 +111,8 @@ create table if not exists public.cards (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   number text not null,
+  -- v5.17: a anon (sesiones PIN) solo se leen los últimos 4 dígitos
+  last4 text generated always as (right(number, 4)) stored,
   bank text check (bank in ('BPA','BANDEC','BANMET') or bank is null),
   active boolean not null default true,
   created_at timestamptz not null default now()

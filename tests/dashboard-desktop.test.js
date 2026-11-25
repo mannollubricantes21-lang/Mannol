@@ -71,9 +71,10 @@ describe("menú lateral en PC", () => {
     expect(el.querySelector(".drawer-overlay")).toBeNull();
     expect(el.querySelector("#close-drawer")).toBeNull();
     expect(el.querySelector(".mobile-shell").classList.contains("has-dock")).toBe(true);
-    // Un empleado con PIN solo ve sus secciones (los permisos no cambian)
+    // Un empleado con PIN solo ve sus secciones (los permisos no cambian).
+    // v5.18.0: se añade «team-status» (Estado del equipo), permitida para todos.
     const items = [...el.querySelectorAll(".drawer-item[data-drawer-nav]")].map((b) => b.dataset.drawerNav);
-    expect(items).toEqual(["dashboard", "sales", "stock"]);
+    expect(items).toEqual(["dashboard", "sales", "stock", "team-status"]);
     expect(el.querySelector('.drawer-item.active').dataset.drawerNav).toBe("dashboard");
   });
 

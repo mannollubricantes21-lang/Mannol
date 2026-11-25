@@ -39,6 +39,7 @@ const NAV_ITEMS = [
   { id: "sales", label: "Registrar venta", icon: "cart", section: "Navegación" },
   { id: "stock", label: "Inventario", icon: "boxes", section: "Navegación" },
   { id: "history", label: "Historial de ventas", icon: "receipt", section: "Navegación" },
+  { id: "team-status", label: "Estado del equipo (ventas por subir)", icon: "activity", section: "Navegación" }, // v5.18.0
   { id: "managers", label: "Gestores", icon: "users", section: "Navegación" },
   { id: "catalog", label: "Catálogo", icon: "tags", section: "Navegación" },
   { id: "commissions", label: "Comisiones", icon: "wallet", section: "Navegación" },

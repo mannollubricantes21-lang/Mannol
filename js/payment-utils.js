@@ -58,3 +58,63 @@ export function summarizeMultiPayment(multi, totalUSD, rates) {
     ok: lines.length > 0 && missingRates.length === 0 && missingUSD === 0 && overUSD === 0,
   };
 }
+
+// =====================================================
+// v5.18.0 — Atajos de cobro (puro, testeado)
+// =====================================================
+
+const PAY_CURRENCIES = new Set(["USD", "MN", "EUR", "TRANSFERENCIA"]);
+
+const BILL_SYMBOL = { USD: "$", EUR: "€", MN: "₱" };
+
+/**
+ * Billetes comunes en el mostrador, por moneda. Un toque = monto completo
+ * en el campo «¿Con cuánto paga el cliente?» (evita teclear cifras).
+ */
+export const BILLS_BY_CURRENCY = {
+  USD: [5, 10, 20, 50, 100],
+  EUR: [5, 10, 20, 50],
+  MN: [500, 1000, 2000, 5000],
+  TRANSFERENCIA: [],
+};
+
+/**
+ * Presets del teclado rápido para la moneda dada: sus billetes + «Exacto»
+ * con el total convertido a ESA moneda (con la tasa del día). Sin tasa para
+ * la moneda, el chip «Exacto» no se ofrece (los billetes quedan solos).
+ * @param {string} currency
+ * @param {number} totalUSD
+ * @param {Object} rates  mapa de tasas del estado
+ * @returns {Array<{label:string, value:number}>}
+ */
+export function billPresetsFor(currency, totalUSD, rates) {
+  const bills = (BILLS_BY_CURRENCY[currency] || []).map((b) => ({
+    label: `${BILL_SYMBOL[currency] || ""}${b}`,
+    value: b,
+  }));
+  const exact = usdToNative(totalUSD, currency, rates);
+  if (exact != null) bills.push({ label: "Exacto", value: exact });
+  return bills;
+}
+
+/**
+ * v5.18.0 — preferencia de cobro recordada por almacén.
+ * Acepta el objeto o su JSON (tal cual sale de localStorage) y devuelve
+ * { mode, currency } seguro, o null si no sirve. En MULTI la moneda no se
+ * recuerda (se usan varias); en SINGLE exige una moneda conocida.
+ * @returns {{mode:string, currency:string|null}|null}
+ */
+export function normalizePaymentPreference(raw) {
+  let v = raw;
+  try {
+    if (typeof v === "string") v = JSON.parse(v);
+  } catch {
+    return null;
+  }
+  if (!v || typeof v !== "object") return null;
+  const mode = v.mode === "MULTI" ? "MULTI" : v.mode === "SINGLE" ? "SINGLE" : null;
+  if (!mode) return null;
+  if (mode === "MULTI") return { mode, currency: null };
+  const currency = PAY_CURRENCIES.has(v.currency) ? v.currency : null;
+  return currency ? { mode, currency } : null;
+}

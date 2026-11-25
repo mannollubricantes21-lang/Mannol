@@ -362,7 +362,12 @@
   .premium-header-btn { min-width: 2.75rem; min-height: 2.75rem; }
   .btn-sm { min-height: 2.75rem; }
   .cart-item .btn-icon,
+  .cart-item [data-qty-edit],
   .catalog-item .btn-icon { min-width: 2.75rem !important; min-height: 2.75rem !important; }
+  /* v5.17: «+», «−» y «quitar» del carrito bien separados para no tocar el
+     botón equivocado con el dedo */
+  .cart-item { gap: 0.625rem; }
+  .cart-item .btn-icon { margin: 0 0.125rem; }
   .stock-row [data-view-others] { min-width: 2.75rem; min-height: 2.75rem; }
   /* Controles compactos: área táctil ampliada con un pseudo-elemento invisible */
   .seg { min-height: 2.25rem; padding: 0.375rem 0.875rem; font-size: 0.75rem; position: relative; }

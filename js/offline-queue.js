@@ -253,6 +253,36 @@ export function summarizeQueue(queue, currentWarehouseId = null) {
 }
 
 /**
+ * v5.18.0 — agrupa una lista de ventas pendientes (getPendingSales) por
+ * almacén, con el almacén actual primero. Pura: la usan el modal «Ventas en
+ * espera» y la vista «Estado del equipo».
+ * @param {Array<Object>} pendingList  ventas con warehouseId/Code/Name
+ * @param {string|null} currentWarehouseId
+ * @returns {Array<{warehouseId:string|null, warehouseCode:string, warehouseName:string, items:Array, blocked:number}>}
+ */
+export function groupPendingByWarehouse(pendingList, currentWarehouseId = null) {
+  const groups = new Map();
+  for (const s of Array.isArray(pendingList) ? pendingList : []) {
+    const key = s.warehouseId || "?";
+    if (!groups.has(key)) {
+      groups.set(key, {
+        warehouseId: s.warehouseId || null,
+        warehouseCode: s.warehouseCode || "?",
+        warehouseName: s.warehouseName || "",
+        items: [],
+        blocked: 0,
+      });
+    }
+    const g = groups.get(key);
+    g.items.push(s);
+    if (s.blockedReason) g.blocked++;
+  }
+  return [...groups.entries()].sort(([a], [b]) =>
+    a === currentWarehouseId ? -1 : b === currentWarehouseId ? 1 : 0,
+  ).map(([, g]) => g);
+}
+
+/**
  * Unidades vendidas sin subir, por producto, SOLO del almacén indicado.
  * @returns {Map<string, number>}
  */

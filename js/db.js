@@ -225,6 +225,7 @@ import {
 } from "./demo-data.js";
 import { slugify, normalizeKey } from "./catalog-facets.js";
 import { readQueue, subscribeQueue, mergePendingSales, applyPendingToStock } from "./offline-queue.js";
+import { recordDataOk } from "./data-freshness.js"; // v5.17: frescura de datos para el banner de estado
 
 const noopUnsub = () => {};
 
@@ -453,7 +454,7 @@ function toRow(obj) {
 // =====================================================
 // Creates a Supabase realtime channel that watches a table and
 // re-fetches the full list on any change (simple + reliable).
-function subscribeTable({ channelName, table, filter, order, fn, demoData, isDemoMode }) {
+function subscribeTable({ channelName, table, filter, order, fn, demoData, isDemoMode, select }) {
   let unsub = noopUnsub;
   let delivered = false; // v5.13.0: con red inestable se conserva la última lista buena
   (async () => {
@@ -488,7 +489,7 @@ function subscribeTable({ channelName, table, filter, order, fn, demoData, isDem
     const s = await sb();
     if (!s) { if (!delivered) fn([]); return; }
     try {
-      let query = s.from(table).select("*");
+      let query = s.from(table).select(select || "*");
       if (filter) {
         // filter is an array of [column, op, value]
         for (const [col, op, val] of filter) {
@@ -542,7 +543,11 @@ export async function getSettings() {
   const s = await sb();
   if (!s) return { ...DEFAULT_SETTINGS, ...(mirrorLoad("settings") || {}) };
   try {
-    const { data, error } = await s.from("settings").select("*").eq("id", "global").maybeSingle();
+    // v5.17: columnas seguras — pin_code ya no se lee (ni siquiera para admin;
+    // el admin usa getSettingsAdmin). Con anon, select * fallaría por permisos.
+    const { data, error } = await s.from("settings")
+      .select("id, el_toque_enabled, el_toque_markup, business_name, last_rate_sync, weekend_warehouse_id, weekend_redirect_enabled")
+      .eq("id", "global").maybeSingle();
     if (error) throw error;
     if (data) {
       const r = row(data);
@@ -569,6 +574,34 @@ export async function getSettings() {
     const mirror = mirrorLoad("settings");
     if (mirror) return { ...DEFAULT_SETTINGS, ...mirror };
     return { ...DEFAULT_SETTINGS };
+  }
+}
+
+/**
+ * v5.17: ajustes COMPLETOS (incluye pinCode) — solo con sesión de admin.
+ * El panel de Ajustes es la única pantalla que muestra/edita el PIN global.
+ * @returns {Promise<Settings>}
+ */
+export async function getSettingsAdmin() {
+  const demo = await isDemo();
+  if (demo) return { ...DEFAULT_SETTINGS };
+  const s = await sb();
+  if (!s) return getSettings(); // sin red: usa la caché que haya
+  try {
+    const { data, error } = await s.from("settings").select("*").eq("id", "global").maybeSingle();
+    if (error) throw error;
+    if (data) {
+      const r = row(data);
+      const merged = { ...DEFAULT_SETTINGS, ...r };
+      if (r.pinCode == null || String(r.pinCode).trim() === "") {
+        merged.pinCode = DEFAULT_SETTINGS.pinCode;
+      }
+      return { ...merged };
+    }
+    return { ...DEFAULT_SETTINGS };
+  } catch (err) {
+    console.warn("getSettingsAdmin failed:", err);
+    return getSettings();
   }
 }
 
@@ -714,6 +747,16 @@ export function resolveEffectiveWarehouse(sellerWarehouse, allWarehouses, settin
 let _whCache = { ts: 0, data: null };
 const WH_CACHE_TTL = 30000;
 
+// v5.17: columnas de warehouses seguras para anon (sesiones PIN). El PIN
+// (pin/pin_salt/pin_hash) se valida en el servidor con verify_warehouse_pin.
+export const WAREHOUSE_SAFE_COLUMNS =
+  "id, name, code, address, phone, active, seller_commission_percent, seller_commission_currency, seller_weekend_split, seller_name, seller_weekend_name, created_at";
+
+// Lista sin las columnas de vendedores (v5.14): para bases de datos donde esa
+// migración aún no se ejecutó (la lista completa daría error 42703).
+export const WAREHOUSE_SAFE_COLUMNS_LEGACY =
+  "id, name, code, address, phone, active, seller_commission_percent, seller_commission_currency, created_at";
+
 export async function listWarehouses() {
   const demo = await isDemo();
   if (demo) return DEMO_WAREHOUSES;
@@ -722,10 +765,27 @@ export async function listWarehouses() {
   if (_whCache.data && Date.now() - _whCache.ts < WH_CACHE_TTL) {
     return _whCache.data.map((w) => ({ ...w }));
   }
-  try {
-    const { data, error } = await s.from("warehouses").select("*").order("created_at", { ascending: true });
+  const fetchList = async (cols) => {
+    const { data, error } = await s.from("warehouses")
+      .select(cols)
+      .order("created_at", { ascending: true });
     if (error) throw error;
-    const list = rows(data);
+    return rows(data);
+  };
+  try {
+    // v5.17: columnas seguras (anon no tiene permiso para `select *`)
+    let list;
+    try {
+      list = await fetchList(WAREHOUSE_SAFE_COLUMNS);
+    } catch (err) {
+      if (isMissingSellerColumnsError(err)) {
+        // La BD aún no tiene las columnas de vendedores (migration-v5.14 pendiente)
+        console.warn("[listWarehouses] columnas de vendedores ausentes — uso lista antigua");
+        list = await fetchList(WAREHOUSE_SAFE_COLUMNS_LEGACY);
+      } else {
+        throw err;
+      }
+    }
     _whCache = { ts: Date.now(), data: list };
     mirrorSave("warehouses", list);
     return list.map((w) => ({ ...w }));
@@ -739,6 +799,49 @@ export async function listWarehouses() {
 }
 
 /**
+ * v5.17: lista COMPLETA de almacenes (incluye pin) — solo con sesión de
+ * admin. La usan el editor de almacenes de Admin y de Ajustes.
+ * @returns {Promise<Array>}
+ */
+export async function listWarehousesAdmin() {
+  const demo = await isDemo();
+  if (demo) return DEMO_WAREHOUSES;
+  const s = await sb();
+  if (!s) return listWarehouses();
+  try {
+    const { data, error } = await s.from("warehouses").select("*").order("created_at", { ascending: true });
+    if (error) throw error;
+    return rows(data);
+  } catch (err) {
+    console.warn("listWarehousesAdmin failed:", err);
+    return listWarehouses();
+  }
+}
+
+/**
+ * v5.17: valida el PIN del almacén EN EL SERVIDOR (RPC verify_warehouse_pin,
+ * migration-v5.17-seguridad.sql). El PIN ya no se lee de la tabla: anon no
+ * tiene permiso para la columna `pin`. Si es correcto, la RPC devuelve los
+ * datos públicos del almacén + un hash (SHA-256+sal) para revalidar sin
+ * conexión; si no, { ok:false, reason } con rate limit de 5/10 min.
+ * Lanza el error de red si la conexión falla (el que llama decide el fallback).
+ * @param {string} code - código del almacén ("VIB")
+ * @param {string} pin
+ * @returns {Promise<{ok:boolean, reason?:string, retryAfterSec?:number, pinSource?:string, pinLength?:number, pinSalt?:string, pinHash?:string, warehouse?:Object}>}
+ */
+export async function verifyWarehousePin(code, pin) {
+  const s = await sb();
+  if (!s) {
+    const e = new Error("SIN_CLIENTE");
+    e.code = "SIN_CLIENTE";
+    throw e;
+  }
+  const { data, error } = await s.rpc("verify_warehouse_pin", { p_code: code, p_pin: pin });
+  if (error) throw error;
+  return data || { ok: false, reason: "wrong_pin" };
+}
+
+/**
  * Subscribe to warehouse changes (realtime).
  * @param {(warehouses: Warehouse[]) => void} cb
  * @returns {() => void} unsubscribe
@@ -747,6 +850,7 @@ export function subscribeWarehouses(cb) {
   return subscribeTable({
     channelName: "warehouses-ch",
     table: "warehouses",
+    select: WAREHOUSE_SAFE_COLUMNS, // v5.17: anon no puede hacer select *
     order: ["created_at", "asc"],
     fn: cb,
     demoData: DEMO_WAREHOUSES,
@@ -1398,6 +1502,7 @@ export function subscribeProducts(cb) {
       try {
         const { data, error } = await s.from("products").select("*").order("created_at", { ascending: true });
         if (error) throw error;
+        recordDataOk("products"); // v5.17: para «datos de hace X» en el banner
         cb(rows(data));
       } catch (err) {
         console.error("refresh products failed:", err);
@@ -1662,6 +1767,7 @@ export function subscribeStock(warehouseId, cb) {
       try {
         const { data, error } = await s.from("stock").select("*").eq("warehouse_id", warehouseId);
         if (error) throw error;
+        recordDataOk(`stock:${warehouseId}`); // v5.17: «stock de hace X min»
         last = rows(data);
       } catch (err) {
         console.error("refresh stock failed:", err);
@@ -2671,7 +2777,7 @@ export async function getWarehouseSummary(warehouseId, period = "today") {
     const [salesRes, stockRes, whRes, productsRes] = await Promise.all([
       s.from("sales").select("*").eq("warehouse_id", warehouseId).gte("created_at", new Date(from).toISOString()),
       s.from("stock").select("*").eq("warehouse_id", warehouseId),
-      s.from("warehouses").select("*").eq("id", warehouseId).maybeSingle(),
+      s.from("warehouses").select(WAREHOUSE_SAFE_COLUMNS).eq("id", warehouseId).maybeSingle(),
       s.from("products").select("*"),
     ]);
 
@@ -2833,9 +2939,12 @@ export async function getWarehouseHistory(warehouseId, status = "all") {
       if (s.currency) summary.byCurrency[s.currency] = (summary.byCurrency[s.currency] || 0) + s.totalAmount;
     }
 
-    const wh = await s.from("warehouses").select("*").eq("id", warehouseId).maybeSingle();
+    const { data: wh, error: whErr } = await s.from("warehouses")
+      .select(WAREHOUSE_SAFE_COLUMNS)
+      .eq("id", warehouseId).maybeSingle();
+    if (whErr) throw whErr;
     return {
-      warehouse: wh.data ? row(wh.data) : null,
+      warehouse: wh ? row(wh) : null,
       summary,
       days: Object.values(days).sort((a, b) => b.date.localeCompare(a.date)),
       generatedAt: Date.now(),
@@ -2991,12 +3100,36 @@ export async function listCards() {
   const s = await sb();
   if (!s) return mirrorLoad("cards") || [];
   try {
-    const { data, error } = await s.from("cards").select("*").order("created_at", { ascending: true });
+    // v5.17: columnas seguras — a anon solo se leen los últimos 4 dígitos
+    // (last4, columna generada). El admin ve el número completo con listCardsAdmin.
+    const { data, error } = await s.from("cards")
+      .select("id, name, bank, active, created_at, initial_balance, balance_currency, last4")
+      .order("created_at", { ascending: true });
     if (error) throw error;
     const list = rows(data);
     mirrorSave("cards", list);
     return list;
   } catch { return mirrorLoad("cards") || []; } // v5.13.0: sin conexión, últimas tarjetas
+}
+
+/**
+ * v5.17: tarjetas COMPLETAS (incluye number) — solo con sesión de admin.
+ * Se usa en el editor de tarjetas del panel admin.
+ * @returns {Promise<Array>}
+ */
+export async function listCardsAdmin() {
+  const demo = await isDemo();
+  if (demo) return DEMO_CARDS;
+  const s = await sb();
+  if (!s) return listCards();
+  try {
+    const { data, error } = await s.from("cards").select("*").order("created_at", { ascending: true });
+    if (error) throw error;
+    return rows(data);
+  } catch (err) {
+    console.warn("listCardsAdmin failed:", err);
+    return listCards();
+  }
 }
 
 export async function saveCard(c) {
@@ -3093,7 +3226,14 @@ export async function getCardBalance(cardId) {
  *
  * @returns {Promise<Array<{id, name, number, bank, balance, currency, salesCount}>>}
  */
-export async function listCardsWithBalances() {
+/**
+ * Tarjetas con saldo calculado. Por defecto NO incluye el número completo
+ * (seguro para sesiones PIN/anon). Con { includeNumber: true } devuelve
+ * `number` — usar SOLO con sesión de admin.
+ * @param {{includeNumber?: boolean}} [opts]
+ * @returns {Promise<Array>}
+ */
+export async function listCardsWithBalances({ includeNumber = false } = {}) {
   const s = await sb();
   if (!s) {
     // Modo demo: devolver cards sin balance
@@ -3106,8 +3246,11 @@ export async function listCardsWithBalances() {
     }));
   }
   try {
+    const cardCols = includeNumber
+      ? "id, name, number, bank, active, created_at, initial_balance, balance_currency, last4"
+      : "id, name, bank, active, created_at, initial_balance, balance_currency, last4";
     const { data: cards, error: cErr } = await s.from("cards")
-      .select("*")
+      .select(cardCols)
       .order("created_at", { ascending: true });
     if (cErr) throw cErr;
 
@@ -3201,7 +3344,10 @@ export async function recordCardMovementForSale(sale) {
     const { error } = await s.from("card_movements").insert(r);
     if (error) throw error;
   } catch (err) {
+    // v5.17: se lanza (antes se tragaba y el movimiento de la tarjeta se
+    // perdía sin reintento). saveSale y la cola deciden cómo tratarlo.
     console.error("recordCardMovementForSale failed:", err);
+    throw err;
   }
 }
 

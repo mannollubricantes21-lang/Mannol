@@ -44,11 +44,10 @@
   <!-- Modal container -->
   <div id="modal-container"></div>
 
-  <!-- Bootstrap wizard — tries versioned file first, falls back to canonical name -->
+  <!-- Bootstrap wizard — v5.17: el duplicado setup-wizard-v5.0.2.js (55 KB
+       idénticos) se eliminó; solo queda el archivo canónico -->
   <script type="module">
     const WIZARD_LOADERS = [
-      () => import('./js/setup-wizard-v5.0.2.js'),
-      () => import('./js/setup-wizard-v5.0.1.js'),
       () => import('./js/setup-wizard.js'),
     ];
 

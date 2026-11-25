@@ -6,12 +6,12 @@
 import { getStore } from "../store.js";
 import {
   listUsers, saveUser, deleteUser,
-  listWarehouses, saveWarehouse, saveWarehouseWithStock,
+  listWarehouses, listWarehousesAdmin, saveWarehouse, saveWarehouseWithStock, // v5.17: Admin usa la lista completa (con PIN)
   listProducts, saveProduct, deleteProduct,
   listCategories, saveCategory, deleteCategory,
   fetchBrands, saveBrand, deleteBrand, renameBrandInProducts, updateProductsCatalogFields,
   listManagers, saveManager, deleteManager,
-  listCards, saveCard, deleteCard,
+  listCards, listCardsAdmin, saveCard, deleteCard,
   listSalesInRange, lastWarehouseSaveSkippedSellers,
   listStock, listSales, adjustStock,
   getRateConfig, saveRateConfig, syncRatesFromElToque,
@@ -852,7 +852,7 @@ export function mountAdminView(container, navigateOrUser) {
                   <div style="flex:1;min-width:0">
                     <div class="text-xs font-medium truncate">${esc(c.name)}</div>
                     <div class="text-xs text-muted">
-                      <code style="font-family:ui-monospace,monospace;font-size:0.6875rem">${esc(c.number || '').slice(0, 4)}···${esc(c.number || '').slice(-4)}</code>
+                      <code style="font-family:ui-monospace,monospace;font-size:0.6875rem">···· ${esc(c.last4 || (c.number || '').slice(-4))}</code>
                       ${c.bank ? ` · ${esc(c.bank)}` : ''}
                     </div>
                   </div>
@@ -1432,7 +1432,7 @@ export function mountAdminView(container, navigateOrUser) {
                   <td class="text-center">${u.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
                   <td class="text-right">
                     <button class="btn btn-ghost btn-sm" data-edit-user="${esc(u.id)}">Editar</button>
-                    <button class="btn btn-ghost btn-sm text-danger" data-delete-user="${esc(u.id)}" title="Desactivar">${icon("trash", 12)}</button>
+                    <button class="btn btn-ghost btn-sm text-danger" data-delete-user="${esc(u.id)}" aria-label="Desactivar el usuario ${esc(u.displayName || u.username || "")}" title="Desactivar">${icon("trash", 12)}</button>
                   </td>
                 </tr>
               `).join('')}
@@ -1638,9 +1638,9 @@ export function mountAdminView(container, navigateOrUser) {
                   <td class="text-right text-xs"><span class="badge badge-outline" style="font-size:0.625rem;white-space:nowrap">G ${p.gestorCommission ?? p.commission ?? 0} ${p.gestorCommissionCurrency ?? p.commissionCurrency ?? "USD"} · V ${p.vendorCommission ?? 0} ${p.vendorCommissionCurrency ?? "MN"}</span></td>
                   <td class="text-center">${p.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
                   <td class="text-right">
-                    <button class="btn btn-ghost btn-sm" data-stock-product="${esc(p.id)}" title="Añadir / ajustar stock por almacén">${icon("boxes", 12)}</button>
+                    <button class="btn btn-ghost btn-sm" data-stock-product="${esc(p.id)}" aria-label="Añadir o ajustar stock de ${esc(p.name)}" title="Añadir / ajustar stock por almacén">${icon("boxes", 12)}</button>
                     <button class="btn btn-ghost btn-sm" data-edit-product="${esc(p.id)}">Editar</button>
-                    <button class="btn btn-ghost btn-sm text-danger" data-delete-product="${esc(p.id)}" title="Eliminar producto y su imagen">${icon("trash", 12)}</button>
+                    <button class="btn btn-ghost btn-sm text-danger" data-delete-product="${esc(p.id)}" aria-label="Eliminar ${esc(p.name)}" title="Eliminar producto y su imagen">${icon("trash", 12)}</button>
                   </td>
                 </tr>
               `).join('')}
@@ -2505,7 +2505,8 @@ export function mountAdminView(container, navigateOrUser) {
   function mountWarehousesPanel(content, gen) {
     gen = gen ?? tabGeneration;
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
-    listWarehouses().then((warehouses) => {
+    // v5.17: lista admin (incluye PIN). La lista pública ya no trae PIN.
+    listWarehousesAdmin().then((warehouses) => {
       if (gen !== tabGeneration) return;
       const pinRevealState = new Set(); // IDs de almacenes con PIN visible
       function render() {
@@ -2533,7 +2534,7 @@ export function mountAdminView(container, navigateOrUser) {
                           <code class="font-mono" style="font-size:0.875rem;font-weight:700;color:var(--primary);background:var(--bg-soft);padding:0.125rem 0.5rem;border-radius:var(--radius-sm)">
                             ${pinVisible ? esc(w.pin) : '••••'}
                           </code>
-                          <button class="btn btn-ghost btn-sm" data-reveal-pin="${esc(w.id)}" title="${pinVisible ? 'Ocultar' : 'Revelar'} PIN" style="padding:0.25rem 0.5rem">
+                          <button class="btn btn-ghost btn-sm" data-reveal-pin="${esc(w.id)}" aria-label="${pinVisible ? 'Ocultar' : 'Revelar'} el PIN de ${esc(w.name)}" title="${pinVisible ? 'Ocultar' : 'Revelar'} PIN" style="padding:0.25rem 0.5rem">
                             ${icon(pinVisible ? "eyeOff" : "eye", 12)}
                           </button>
                         </div>
@@ -3749,7 +3750,7 @@ export function mountAdminView(container, navigateOrUser) {
                     </h3>
                     <div style="display:flex;align-items:center;gap:0.375rem;flex-shrink:0">
                       <span class="badge badge-accent">${totalsByWh[w.id] || 0} u.</span>
-                      <button class="btn btn-primary btn-xs" data-stk-wh-entry="${esc(w.id)}" title="Añadir stock a ${esc(w.name)}" style="white-space:nowrap">${icon("plus", 12)}</button>
+                      <button class="btn btn-primary btn-xs" data-stk-wh-entry="${esc(w.id)}" aria-label="Añadir stock a ${esc(w.name)}" title="Añadir stock a ${esc(w.name)}" style="white-space:nowrap">${icon("plus", 12)}</button>
                     </div>
                   </div>
                   <div class="card-content" style="padding:0.75rem;max-height:16rem;overflow-y:auto">
@@ -3761,7 +3762,7 @@ export function mountAdminView(container, navigateOrUser) {
                           <span class="text-xs truncate" style="min-width:0" title="${esc(r.p.name)}">${esc(r.p.name)}</span>
                           <span style="display:flex;align-items:center;gap:0.25rem;flex-shrink:0">
                             <span class="text-xs font-bold ${r.byWh[w.id] <= (r.minStock || 0) ? 'text-warning' : ''}">${r.byWh[w.id]}</span>
-                            <button class="btn btn-ghost btn-xs" data-stk-wh-adjust data-wh="${esc(w.id)}" data-pid="${esc(r.p.id)}" title="Ajustar ${esc(r.p.name)} en ${esc(w.name)}" style="padding:0.125rem 0.375rem">${icon("plus", 10)}</button>
+                            <button class="btn btn-ghost btn-xs" data-stk-wh-adjust data-wh="${esc(w.id)}" data-pid="${esc(r.p.id)}" aria-label="Ajustar ${esc(r.p.name)} en ${esc(w.name)}" title="Ajustar ${esc(r.p.name)} en ${esc(w.name)}" style="padding:0.125rem 0.375rem">${icon("plus", 10)}</button>
                           </span>
                         </div>
                       `).join("");
@@ -4794,7 +4795,7 @@ export function mountAdminView(container, navigateOrUser) {
     gen = gen ?? tabGeneration;
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
     Promise.all([
-      listCardsWithBalances(),
+      listCardsWithBalances({ includeNumber: true }), // v5.17: el admin ve el número completo para editar
       Promise.resolve(getStore().getState().currentUser),
     ]).then(([cards, currentUser]) => {
       if (gen !== tabGeneration) return;

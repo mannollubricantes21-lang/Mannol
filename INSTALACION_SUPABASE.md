@@ -2,6 +2,14 @@
 
 Responde esta pregunta en 2 minutos y sigue solo TU caso.
 
+> ## ⚠️ v5.17 — Migración de seguridad (para TODOS los casos con BD ya creada)
+>
+> Si tu base de datos ya existe, ejecuta una vez
+> **`supabase/migration-v5.17-seguridad.sql`** (SQL Editor → pegar → Run).
+> Es re-ejecutable y no depende de otras migraciones. Sin ella, la app
+> funciona por compatibilidad, pero el PIN sigue legible con la clave pública
+> y las tarjetas guardan el número completo.
+
 ---
 
 ## Paso 0 — Averigua el estado de tu base de datos

@@ -3,11 +3,11 @@
 // =====================================================
 
 import { getStore } from "../store.js";
-import { getSettings, listWarehouses } from "../db.js";
+import { getSettings, listWarehouses, verifyWarehousePin } from "../db.js";
 import { isSupabaseConfigured } from "../supabase.js";
 import { toast, icon } from "../ui.js";
 import { canAttemptPin, recordPinAttempt, clearPinAttempts, getPinBlockRemainingSec } from "../pin-rate-limit.js";
-import { resolveExpectedPin, pinMatches, normalizePin } from "../pin-utils.js";
+import { resolveExpectedPin, pinMatches, normalizePin, savePinMeta, loadPinMeta, clearPinMeta, verifyPinHash } from "../pin-utils.js";
 
 // v5.8 (móvil): puntos del PIN (mínimo 4, crecen hasta 8 si el PIN es más largo)
 function renderPinDots(filled) {
@@ -128,8 +128,11 @@ export function mountPinLoginView(container, navigate) {
 
   // ===== v5.8 (móvil): teclado numérico =====
   const selectedWh = getStore().getState()._selectedWarehouse;
+  // v5.17: el PIN ya no viene en los datos del almacén. Para el auto-envío
+  // al completar los dígitos se usa la longitud guardada del último login.
+  const pinMeta = loadPinMeta(selectedWh?.code);
   // Si el almacén tiene PIN propio, se envía solo al completar los dígitos
-  const autoLen = normalizePin(selectedWh?.pin).length || 0;
+  const autoLen = pinMeta?.len || normalizePin(selectedWh?.pin).length || 0;
 
   function updateDots() {
     if (!dotsEl) return;
@@ -211,68 +214,154 @@ export function mountPinLoginView(container, navigate) {
     submit.innerHTML = `<div class="spinner spinner-sm"></div> Entrando...`;
     errorBox.classList.add("hidden");
 
+    // ===== v5.17: el PIN se valida EN EL SERVIDOR =====
+    // Antes la app comparaba el PIN contra la columna `pin` leída con la
+    // clave pública (cualquiera podía ver todos los PIN). Ahora:
+    //   · Con conexión → RPC verify_warehouse_pin (rate limit 5/10 min).
+    //   · Sin conexión → hash guardado del último login (SHA-256, WebCrypto).
+    //   · Modo demo (sin Supabase) → comparación local, como siempre.
     try {
-      // v5.6.1: si el almacén tiene su propio PIN no hace falta consultar
-      // settings (evita esperar red en cada intento). Solo se consulta como
-      // fallback cuando el almacén no tiene pin guardado.
-      const hasOwnPin = String(warehouse.pin ?? "").trim() !== "";
-      const settings = hasOwnPin ? null : await getSettings();
-      const expectedPin = resolveExpectedPin(warehouse, settings);
+      const isDemo = !isSupabaseConfigured;
+      const cachedMeta = loadPinMeta(warehouse.code);
+      const enterWarehouse = (whData) => {
+        clearPinAttempts(warehouse.id);
+        const empleado = {
+          id: `pin-${Date.now()}`,
+          email: "",
+          displayName: `Empleado · ${warehouse.code}`,
+          role: "empleado_pin",
+          active: true,
+          warehouseId: (whData || warehouse).id,
+          warehouseCode: warehouse.code,
+          createdAt: Date.now(),
+        };
+        store.setUser(empleado);
+        store.setAuthMode("pin");
+        store.setWarehouse({ ...warehouse, ...(whData || {}) });
+        toast(`Bienvenido a ${warehouse.name}`, "success");
+        navigate("dashboard");
+        // No resetear _submitting aquí porque la vista se desmonta
+      };
 
-      if (!expectedPin) {
-        errorBox.textContent = "Este almacén no tiene PIN configurado. Defínelo en Admin → Almacenes (o en Ajustes, PIN global).";
-        errorBox.classList.remove("hidden");
-        submit.disabled = false;
-        submit._submitting = false;
-        setPadDisabled(false);
-        submit.innerHTML = `${icon("lock", 14)} Entrar`;
-        return;
-      }
-
-      if (!pinMatches(pin, expectedPin)) {
-        // Registrar intento fallido (localStorage + auditoría remota pin_attempts)
-        recordPinAttempt(warehouse.id, warehouse.code);
-        const remaining = getPinBlockRemainingSec(warehouse.id);
-        if (remaining > 0) {
-          const min = Math.ceil(remaining / 60);
-          errorBox.textContent = `PIN incorrecto. Bloqueado por ${min} minuto(s) tras demasiados intentos.`;
-        } else {
-          errorBox.textContent = "PIN incorrecto. Inténtalo de nuevo.";
+      if (isDemo) {
+        // Modo demo: los almacenes son locales y traen su PIN
+        const settings = await getSettings();
+        const expectedPin = resolveExpectedPin(warehouse, settings);
+        if (!expectedPin) {
+          errorBox.textContent = "Este almacén de prueba no tiene PIN configurado.";
+          errorBox.classList.remove("hidden");
+          submit.disabled = false;
+          submit._submitting = false;
+          setPadDisabled(false);
+          submit.innerHTML = `${icon("lock", 14)} Entrar`;
+          return;
         }
-        errorBox.classList.remove("hidden");
-        submit.disabled = false;
-        submit._submitting = false;
-        submit.innerHTML = `${icon("lock", 14)} Entrar`;
-        pinFeedbackError();
-        input.value = "";
-        setTimeout(() => updateDots(), 450);
-        if (remaining > 0) {
-          input.disabled = true;
-          setPadDisabled(true);
-        } else {
+        if (!pinMatches(pin, expectedPin)) {
+          errorBox.textContent = "PIN incorrecto. Inténtalo de nuevo.";
+          errorBox.classList.remove("hidden");
+          submit.disabled = false;
+          submit._submitting = false;
+          submit.innerHTML = `${icon("lock", 14)} Entrar`;
+          pinFeedbackError();
+          input.value = "";
+          setTimeout(() => updateDots(), 450);
           setPadDisabled(false);
           if (!isTouchDevice()) input.focus();
+          return;
         }
+        enterWarehouse();
         return;
       }
-      // PIN correcto: limpiar historial y crear sesión
-      clearPinAttempts(warehouse.id);
-      const empleado = {
-        id: `pin-${Date.now()}`,
-        email: "",
-        displayName: `Empleado · ${warehouse.code}`,
-        role: "empleado_pin",
-        active: true,
-        warehouseId: warehouse.id,
-        warehouseCode: warehouse.code,
-        createdAt: Date.now(),
-      };
-      store.setUser(empleado);
-      store.setAuthMode("pin");
-      store.setWarehouse(warehouse);
-      toast(`Bienvenido a ${warehouse.name}`, "success");
-      navigate("dashboard");
-      // No resetear _submitting aquí porque la vista se desmonta
+
+      // --- Con Supabase: primero la RPC (con conexión) ---
+      if (navigator.onLine !== false) {
+        try {
+          const res = await verifyWarehousePin(warehouse.code, pin);
+          if (res?.ok) {
+            // Hash para revalidar SIN conexión la próxima vez
+            savePinMeta(warehouse.code, { salt: res.pinSalt, hash: res.pinHash, len: res.pinLength });
+            enterWarehouse(res.warehouse);
+            return;
+          }
+          if (res?.reason === "rate_limited") {
+            const min = Math.max(1, Math.ceil((res.retryAfterSec || 600) / 60));
+            recordPinAttempt(warehouse.id, warehouse.code);
+            errorBox.textContent = `Demasiados intentos fallidos. El almacén queda bloqueado ~${min} minuto(s).`;
+            errorBox.classList.remove("hidden");
+            input.disabled = true;
+            submit.disabled = true;
+            setPadDisabled(true);
+            pinFeedbackError();
+            return;
+          }
+          if (res?.reason === "warehouse_not_found") {
+            errorBox.textContent = "Este almacén ya no existe en la nube. Actualiza la app (sal y vuelve a entrar).";
+            errorBox.classList.remove("hidden");
+            submit.disabled = false;
+            submit._submitting = false;
+            setPadDisabled(false);
+            submit.innerHTML = `${icon("lock", 14)} Entrar`;
+            return;
+          }
+          if (res?.reason === "no_pin_configured") {
+            errorBox.textContent = "Este almacén no tiene PIN configurado. Defínelo en Admin → Almacenes (o el PIN global en Ajustes).";
+            errorBox.classList.remove("hidden");
+            submit.disabled = false;
+            submit._submitting = false;
+            setPadDisabled(false);
+            submit.innerHTML = `${icon("lock", 14)} Entrar`;
+            return;
+          }
+          // wrong_pin: mismo feedback que antes (bloqueo local tras 5)
+          recordPinAttempt(warehouse.id, warehouse.code);
+          const remaining = getPinBlockRemainingSec(warehouse.id);
+          errorBox.textContent = remaining > 0
+            ? `PIN incorrecto. Bloqueado por ${Math.ceil(remaining / 60)} minuto(s) tras demasiados intentos.`
+            : "PIN incorrecto. Inténtalo de nuevo.";
+          errorBox.classList.remove("hidden");
+          submit.disabled = false;
+          submit._submitting = false;
+          submit.innerHTML = `${icon("lock", 14)} Entrar`;
+          pinFeedbackError();
+          input.value = "";
+          setTimeout(() => updateDots(), 450);
+          if (remaining > 0) { input.disabled = true; setPadDisabled(true); }
+          else { setPadDisabled(false); if (!isTouchDevice()) input.focus(); }
+          return;
+        } catch (rpcErr) {
+          // RPC ausente (migración sin ejecutar) o red caída a mitad → cae al
+          // fallback con hash local. Nada se marca como error de datos aquí.
+          console.warn("[PIN] RPC no disponible, uso validación local:", rpcErr?.message || rpcErr);
+        }
+      }
+
+      // --- Sin conexión (o RPC caída): hash del último login correcto ---
+      if (cachedMeta && (await verifyPinHash(pin, cachedMeta.salt, cachedMeta.hash))) {
+        enterWarehouse();
+        return;
+      }
+
+      // Compatibilidad mientras se ejecuta la migración v5.17: si los datos
+      // del almacén aún traen el PIN (sesión admin / caché antigua), se usa.
+      const legacyPin = normalizePin(warehouse.pin) || normalizePin((await getSettings())?.pinCode);
+      if (legacyPin && pinMatches(pin, legacyPin)) {
+        enterWarehouse();
+        return;
+      }
+
+      if (navigator.onLine === false && !cachedMeta) {
+        errorBox.textContent = "Sin conexión: la primera vez que entras a un almacén necesitas internet (una vez dentro, funciona sin conexión).";
+      } else if (navigator.onLine === false) {
+        errorBox.textContent = "PIN incorrecto o cambiado en la nube. Conéctate una vez para sincronizarlo.";
+      } else {
+        errorBox.textContent = "No se pudo validar el PIN. Ejecuta supabase/migration-v5.17-seguridad.sql y revisa la conexión.";
+      }
+      errorBox.classList.remove("hidden");
+      submit.disabled = false;
+      submit._submitting = false;
+      submit.innerHTML = `${icon("lock", 14)} Entrar`;
+      pinFeedbackError();
+      setPadDisabled(false);
     } catch (err) {
       errorBox.textContent = "Error de conexión";
       errorBox.classList.remove("hidden");

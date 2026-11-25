@@ -22,6 +22,8 @@ import {
 import { getStore } from "../store.js";
 import { icon, escapeHtml, showModal, toast, copyText, confirmDialog } from "../ui.js";
 import { formatMoney, formatWhen } from "../currency.js";
+import { getDataAgeMs, formatDataAge } from "../data-freshness.js"; // v5.17
+import { groupPendingByWarehouse } from "../offline-queue.js"; // v5.18.0: misma agrupación que «Estado del equipo»
 
 const esc = (v) => escapeHtml(String(v ?? ""));
 
@@ -65,11 +67,18 @@ export function createSyncBanner(container) {
 
     // ----- Sin conexión -----
     if (!isOnline) {
-      const sub = mine > 0
-        ? `${plural(mine, "venta", "ventas")}${whCode ? ` de ${whCode}` : ""} esperando conexión · se subirán solas`
-        : total > 0 && wh
-          ? "Ninguna venta de este almacén en espera"
-          : "Puedes seguir vendiendo: las ventas se guardan en este equipo";
+      // v5.17: decir HACE CUÁNTO son los datos que se ven (el service worker
+      // sirve la última copia guardada; antes parecía stock en vivo)
+      const stockAge = wh?.id ? getDataAgeMs(`stock:${wh.id}`) : null;
+      const ageTxt = stockAge != null ? `Stock guardado de hace ${formatDataAge(stockAge)}` : "";
+      const sub = [
+        mine > 0
+          ? `${plural(mine, "venta", "ventas")}${whCode ? ` de ${whCode}` : ""} esperando conexión · se subirán solas`
+          : total > 0 && wh
+            ? "Ninguna venta de este almacén en espera"
+            : "Puedes seguir vendiendo: las ventas se guardan en este equipo",
+        ageTxt,
+      ].filter(Boolean).join(" · ");
       container.innerHTML = `
         <div class="sync-banner sync-banner-offline" role="status">
           <div class="sync-banner-icon">${icon("wifiOff", 18)}</div>
@@ -202,14 +211,9 @@ export function openPendingList() {
   const wh = getStore().getState().currentWarehouse || null;
   const all = getPendingSales();
   const lastOk = getLastSyncOkAt();
-  const groups = new Map();
-  for (const s of all) {
-    const k = s.warehouseId || "?";
-    if (!groups.has(k)) groups.set(k, { code: s.warehouseCode || "?", name: s.warehouseName || "", items: [] });
-    groups.get(k).items.push(s);
-  }
-  // El almacén actual primero
-  const ordered = [...groups.entries()].sort(([a], [b]) => (a === wh?.id ? -1 : b === wh?.id ? 1 : 0));
+  // v5.18.0: agrupación compartida con la vista «Estado del equipo»
+  const ordered = groupPendingByWarehouse(all, wh?.id || null)
+    .map((g) => [g.warehouseId || "?", { code: g.warehouseCode, name: g.warehouseName, items: g.items }]);
 
   const body = all.length === 0
     ? `<div class="empty-state" style="padding:1.5rem 0">${icon("cloud", 28)}<p class="mt-2">No hay ventas en espera. Todo está subido.</p></div>`

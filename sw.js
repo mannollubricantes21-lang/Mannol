@@ -17,7 +17,7 @@
 //    red no responde en 4 s se abre la copia guardada.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v38";
+const CACHE_VERSION = "mannol-pos-supabase-v42";
 const DATA_CACHE = "mannol-pos-data-v1"; // respuestas de Supabase (se conserva entre versiones)
 const NAV_TIMEOUT_MS = 4000;
 const API_TIMEOUT_MS = 6000;
@@ -45,6 +45,7 @@ const STATIC_ASSETS = [
   "./js/demo-data.js",
   "./js/offline-sync.js",
   "./js/offline-queue.js",     // v5.13.0: cola de ventas sin conexión
+  "./js/data-freshness.js",    // v5.17: «stock de hace X min» en el banner
   "./js/image-upload.js",
   "./js/github-storage.js",
   "./js/github-config.example.js",
@@ -69,6 +70,7 @@ const STATIC_ASSETS = [
   "./js/views/dashboard.js",
   "./js/views/sales.js",
   "./js/views/sales-history.js",
+  "./js/views/team-status.js", // v5.18.0: «Estado del equipo»
   "./js/views/stock.js",
   "./js/views/commissions.js",
   "./js/views/transfers.js",
@@ -100,7 +102,10 @@ self.addEventListener("install", (event) => {
       Promise.allSettled(STATIC_ASSETS.map((url) => cache.add(url)))
     )
   );
-  self.skipWaiting();
+  // v5.17: SIN skipWaiting automático. Antes el SW nuevo tomaba el control
+  // nada más instalar y update-banner recargaba la página sola: una venta a
+  // medias desaparecía. Ahora el SW nuevo queda en espera y toma el control
+  // cuando la persona toca «Actualizar» en el banner (mensaje SKIP_WAITING).
 });
 
 self.addEventListener("activate", (event) => {

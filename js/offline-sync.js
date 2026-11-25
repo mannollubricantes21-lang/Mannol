@@ -119,7 +119,18 @@ export const BLOCK_REASONS = {
   items_empty: "La venta no tiene productos.",
   warehouse_missing: "El almacén de esta venta ya no existe en la nube (¿se borró?). No se sube para no asignarla a otro almacén.",
   sale_invalid: "A la venta le faltan datos (id o referencia). Copia el detalle y regístrala a mano.",
+  sync_failed: "El servidor la rechazó varias veces (no fue un problema de red). Copia el detalle y revísala con el administrador.",
 };
+
+// v5.17: un error NO de red ya no se reintenta para siempre (2 s…60 s sin
+// fin). Tras este número de intentos fallidos, la venta pasa a «para revisar».
+export const MAX_SYNC_ATTEMPTS = 10;
+
+/** ¿Toca pasar a «para revisar» tras este intento? (puro, testeado) */
+export function shouldBlockAfterAttempt(attempts, isNetwork) {
+  if (isNetwork) return false; // sin red: reintentar con espera creciente
+  return Number(attempts) >= MAX_SYNC_ATTEMPTS;
+}
 
 /**
  * Errores DEFINITIVOS del servidor (migration-v5.13): reintentar no sirve.
@@ -282,7 +293,10 @@ async function uploadLegacy(sale) {
           await adjustStock(s.warehouseId, item.productId, -item.quantity, "VENTA", `Venta ${s.code}`, s.userId, s.userName);
         } catch (err) {
           if (isNetworkError(err)) throw err; // se reintenta desde este producto
-          console.warn(`[Sync] No se pudo descontar ${item.productId} de ${s.code}:`, err);
+          // v5.17: antes se marcaba el producto como hecho IGUAL y el stock
+          // quedaba sin descontar para siempre. Ahora el error sube: la venta
+          // se reintenta (y si el fallo persiste, pasa a «para revisar»).
+          throw err;
         }
         done.add(i);
         s = updateQueuedSale(s.id, { _stockItemsDone: [...done] }) || s;
@@ -310,8 +324,10 @@ async function uploadOne(sale, { configured }) {
     try {
       const res = await registerSaleRemote(sale, { timeoutMs: 20000 });
       if (!res?.duplicate) {
-        // Igual que antes: movimiento de la tarjeta si se pagó por transferencia
-        try { await recordCardMovementForSale(sale); } catch {}
+        // v5.17: el movimiento de la tarjeta ya no se traga con un catch {} —
+        // se reintenta unas veces y, si no se logra, queda registrado en el
+        // error de sincronización (visible en el banner) en vez de perderse.
+        await recordCardMovementWithRetry(sale);
       }
       return { ok: true, duplicate: !!res?.duplicate, shortages: res?.shortages || [] };
     } catch (err) {
@@ -319,6 +335,25 @@ async function uploadOne(sale, { configured }) {
     }
   }
   return uploadLegacy(sale);
+}
+
+// v5.17: movimiento de tarjeta con reintentos cortos (solo si falla la red);
+// si sigue fallando, se avisa sin descartar la venta ya subida.
+async function recordCardMovementWithRetry(sale, tries = 3) {
+  for (let i = 1; i <= tries; i++) {
+    try {
+      await recordCardMovementForSale(sale);
+      return true;
+    } catch (err) {
+      console.warn(`[Sync] Movimiento de tarjeta de ${sale.code} falló (intento ${i}/${tries}):`, err?.message || err);
+      if (i === tries) {
+        recordSyncError(err, sale);
+        return false; // la venta YA está subida: no se pierde, solo se avisa
+      }
+      await sleep(800 * i);
+    }
+  }
+  return false;
 }
 
 // ===== Main sync function =====
@@ -450,14 +485,30 @@ async function runSync({ silent, manual, immediate }) {
         console.error(`[Sync] Failed to sync sale ${sale.code}:`, err);
         recordSyncError(err, sale);
         failed++;
+        const network = isNetworkError(err);
         const attempts = (sale._syncAttempts || 0) + 1;
         maxAttempts = Math.max(maxAttempts, attempts);
+        // v5.17: un rechazo que NO es de red (datos, permisos, RPC ausente…)
+        // ya no se reintenta para siempre: tras MAX_SYNC_ATTEMPTS pasa a
+        // «para revisar» con su motivo visible.
+        if (shouldBlockAfterAttempt(attempts, network)) {
+          console.warn(`[Sync] Venta ${sale.code} agotó ${attempts} intentos (error no de red) — queda para revisar`);
+          updateQueuedSale(sale.id, {
+            _syncAttempts: attempts,
+            _lastAttemptAt: Date.now(),
+            _blocked: "sync_failed",
+            _blockedAt: Date.now(),
+            _lastError: { code: _lastSyncError.code, message: _lastSyncError.message, network: false },
+          });
+          blocked++;
+          continue;
+        }
         updateQueuedSale(sale.id, {
           _syncAttempts: attempts,
           _lastAttemptAt: Date.now(),
           _lastError: { code: _lastSyncError.code, message: _lastSyncError.message, network: _lastSyncError.network },
         });
-        if (isNetworkError(err)) {
+        if (network) {
           networkDown = true;
           break; // sin red no tiene sentido seguir con las demás
         }
@@ -604,5 +655,22 @@ export function discardBlockedSale(id) {
   if (!sale || !sale._blocked) return false;
   removeFromQueue(id);
   notifySyncStatus();
+  return true;
+}
+
+/**
+ * v5.17: retirar del equipo una venta NORMAL que aún no se subió (botón
+ * «Deshacer» del ticket). No se permite mientras se está subiendo ahora
+ * mismo: en ese caso la venta ya salió de manos del vendedor.
+ * @param {string} id
+ * @returns {boolean}
+ */
+export function discardQueuedSale(id) {
+  const sale = readQueue().find((s) => s.id === id);
+  if (!sale) return false;
+  if (sale.id === _currentSaleId) return false; // subiéndose ahora mismo
+  removeFromQueue(id);
+  notifySyncStatus();
+  console.info(`[Sync] Venta ${sale.code} retirada de la cola (deshacer)`);
   return true;
 }

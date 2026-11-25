@@ -6,13 +6,14 @@
 import { getStore } from "../store.js";
 import { subscribeProducts, subscribeStock, subscribeCategories, subscribeBrands, listCards, listManagers, listSales, isUuid, getWholesaleTier, getSuggestedPricePerBox, getSuggestedVendorCommissionPerBox, getSuggestedGestorCommissionPerBox, isWholesaleProduct, listWarehouses, resolveEffectiveWarehouse, sumCartCommissions } from "../db.js";
 import { formatMoney, generateSaleId, generateSaleCode, CURRENCIES, CURRENCY_LABELS, CARD_BRANDS, getRate } from "../currency.js";
-import { enqueueSale, generateClientRef, requestSync, getPendingCount } from "../offline-sync.js";
+import { enqueueSale, generateClientRef, requestSync, getPendingCount, getPendingSales, discardQueuedSale } from "../offline-sync.js";
 import { isSupabaseConfiguredAsync } from "../supabase.js";
 import { toast, icon, showModal, closeModal, esc, confirmDialog } from "../ui.js";
 import { computeTopSellers, findProductByCode } from "../sales-stats.js";
 import { openScanner, canUseCamera } from "../barcode-scanner.js";
 import { buildCatalogFacets, filterCatalog, NO_CATEGORY } from "../catalog-facets.js";
-import { roundCents, rateUSD, usdToNative, summarizeMultiPayment } from "../payment-utils.js";
+import { roundCents, rateUSD, usdToNative, summarizeMultiPayment, billPresetsFor, normalizePaymentPreference } from "../payment-utils.js";
+import { getDataAgeMs, formatDataAge } from "../data-freshness.js"; // v5.17: «stock de hace X min»
 
 const CURRENCY_META = {
   USD: { icon: "$", label: "Efectivo", sublabel: "Dólar", color: "var(--accent-usd)" },
@@ -88,6 +89,26 @@ export function mountSalesView(container, navigate) {
 
   // v5.16: estado del pago en varias monedas (falta / sobra) en vivo
   const payRates = () => store.getState().rates || {};
+
+  // v5.18.0: recordar la moneda de cobro que se usó la última vez en ESTE
+  // almacén y preseleccionarla (en el mostrador casi siempre se cobra igual).
+  // Va en su propia clave de localStorage, no en el borrador del carrito.
+  const payPrefKey = draftWh ? `mannol-pay-pref-${draftWh.id}` : null;
+  if (payPrefKey) {
+    try {
+      const pref = normalizePaymentPreference(localStorage.getItem(payPrefKey));
+      if (pref) {
+        paymentMode = pref.mode;
+        if (pref.currency) selectedCurrency = pref.currency;
+      }
+    } catch {}
+  }
+  function savePayPreference() {
+    if (!payPrefKey) return;
+    try {
+      localStorage.setItem(payPrefKey, JSON.stringify({ mode: paymentMode, currency: selectedCurrency }));
+    } catch {}
+  }
   function multiSummary() {
     return summarizeMultiPayment(multiPayments, roundCents(cartTotal()), payRates());
   }
@@ -120,6 +141,14 @@ export function mountSalesView(container, navigate) {
   function refreshMultiStatus() {
     const el = container.querySelector("#multi-status");
     if (el) el.innerHTML = multiStatusHtml();
+    // v5.18.0: el error junto al campo — en rojo el input concreto (la moneda
+    // sin tasa, o los montos que se pasan del total)
+    const s = multiSummary();
+    container.querySelectorAll("[data-multi-currency]").forEach((inp) => {
+      const c = inp.dataset.multiCurrency;
+      const bad = s.missingRates.includes(c) || (s.overUSD > 0 && (multiPayments[c] || 0) > 0);
+      inp.classList.toggle("field-error", bad);
+    });
     refreshRegisterBtn();
   }
   // Total expresado en la moneda elegida (para el vuelto)
@@ -127,6 +156,37 @@ export function mountSalesView(container, navigate) {
     const t = roundCents(cartTotal());
     const n = usdToNative(t, selectedCurrency, payRates());
     return n == null ? t : n;
+  }
+
+  // v5.18.0: pintar la línea de vuelto sin re-render (lo usan el teclado de
+  // billetes y el input manual)
+  function updateChangeDue() {
+    const el = container.querySelector("#change-due");
+    if (!el) return;
+    const t = changeTotal();
+    el.textContent = paidWith > 0
+      ? (paidWith >= t ? `Vuelto: ${formatMoney(paidWith - t, selectedCurrency)}` : `Faltan ${formatMoney(t - paidWith, selectedCurrency)}`)
+      : `Total: ${formatMoney(t, selectedCurrency)}`;
+    el.style.color = paidWith >= t && paidWith > 0 ? "var(--primary)" : "var(--text-muted)";
+  }
+  function setPaidWith(v, { focusInput = false } = {}) {
+    paidWith = Number(v) || 0;
+    const inp = container.querySelector("#paid-with");
+    if (inp) inp.value = paidWith > 0 ? String(paidWith) : "";
+    updateChangeDue();
+    if (focusInput && inp) { inp.focus(); inp.selectionStart = inp.selectionEnd = inp.value.length; }
+  }
+
+  // v5.18.0: marcar el campo concreto que falta (borde rojo + foco) —
+  // el motivo ya lo decía el botón; ahora también se VE dónde.
+  function flagField(selector, focus = true) {
+    const el = container.querySelector(selector);
+    if (!el) return;
+    el.classList.add("field-error");
+    if (focus) {
+      el.focus?.();
+      try { el.scrollIntoView({ block: "center", behavior: "smooth" }); } catch {}
+    }
   }
 
   // Cargar datos
@@ -142,7 +202,10 @@ export function mountSalesView(container, navigate) {
       managers = m;
       catalogsLoaded = true;
       catalogsLoading = false;
-      render();
+      // v5.19.0: solo los desplegables afectados (puede llegar tarde, con la
+      // venta ya a medias: no se redibuja todo)
+      paintManagerSelect();
+      paintCardSelect();
     }).catch((err) => {
       catalogsLoading = false;
       console.warn(`[Ventas] gestores/tarjetas no cargaron (intento ${attempt}):`, err);
@@ -153,15 +216,19 @@ export function mountSalesView(container, navigate) {
   }
   loadCatalogs();
 
+  // v5.19.0: los datos que llegan solos (productos, stock) NO redibujan el
+  // formulario — repintan solo los fragmentos afectados. Antes un render
+  // completo recreaba los campos y cortaba lo que se estaba escribiendo
+  // (nota, vuelto, montos del pago mixto).
   const unsubProducts = subscribeProducts((items) => {
     products = items.filter((p) => p.active !== false);
-    render();
+    refreshLiveData();
     catalogListRenderer?.();
   });
   const warehouse = store.getState().currentWarehouse;
   const unsubStock = warehouse ? subscribeStock(warehouse.id, (items) => {
     stock = items;
-    render();
+    refreshLiveData();
     catalogListRenderer?.();
   }) : () => {};
   // v5.12.0: tipos y marcas en vivo — lo que el admin crea u ordena aparece aquí al instante
@@ -187,7 +254,7 @@ export function mountSalesView(container, navigate) {
           if (!top.length) return;
           topSellerIds = top.map((t) => t.productId);
           try { localStorage.setItem(topKey, JSON.stringify({ ts: Date.now(), ids: topSellerIds })); } catch {}
-          render();
+          paintTopSellers(); // v5.19.0: solo los chips, sin redibujar todo
         })
         .catch(() => {});
     }
@@ -201,11 +268,22 @@ export function mountSalesView(container, navigate) {
   // Subscribe to sync status for pending count
   let unsubSync = () => {};
   import("../offline-sync.js").then(({ subscribeSyncStatus }) => {
-    unsubSync = subscribeSyncStatus(() => render());
+    // v5.19.0: la cola de subida solo afecta a las insignias del encabezado
+    unsubSync = subscribeSyncStatus(() => paintHeaderBadges());
   }).catch(() => {});
 
   function getStockQty(productId) {
     return stock.find((s) => s.productId === productId)?.quantity ?? 0;
+  }
+
+  // v5.17: el service worker sirve la copia guardada cuando no hay red.
+  // Mostrar hace cuánto: «stock de hace 12 min» (antes era invisible y se
+  // podía vender con un stock desactualizado).
+  function stockAgeText() {
+    const whNow = store.getState().currentWarehouse;
+    const age = getDataAgeMs(`stock:${whNow?.id || ""}`);
+    if (age == null) return "";
+    return `stock de hace ${formatDataAge(age)}`;
   }
 
   function cartTotal() {
@@ -234,10 +312,7 @@ export function mountSalesView(container, navigate) {
             <h1 class="text-xl font-bold flex items-center gap-2">${icon("cart", 20)} Venta en ${esc(wh.name)} (${esc(wh.code)})</h1>
             <p class="text-xs text-muted">Solo productos, gestor y pago.</p>
           </div>
-          <div class="flex items-center gap-2">
-            <span class="badge ${isOnline ? "badge-accent" : "badge-warning"}">${isOnline ? "En línea" : "Offline"}</span>
-            ${pendingHere > 0 ? `<span class="badge badge-warning">${icon("clock", 12)} ${pendingHere} por subir</span>` : ""}
-          </div>
+          <div class="flex items-center gap-2" data-header-badges></div>
         </div>
 
         ${!isOnline ? `
@@ -245,7 +320,7 @@ export function mountSalesView(container, navigate) {
             <div class="sync-banner-icon">${icon("wifiOff", 18)}</div>
             <div class="sync-banner-content">
               <div class="sync-banner-title">Sin conexión</div>
-              <div class="sync-banner-sub">${pendingHere > 0 ? `${pendingHere} venta(s) de ${esc(wh.code)} esperando conexión · se subirán solas` : "Puedes seguir vendiendo: las ventas se guardan en este equipo y se suben solas"}</div>
+              <div class="sync-banner-sub">${pendingHere > 0 ? `${pendingHere} venta(s) de ${esc(wh.code)} esperando conexión · se subirán solas` : "Puedes seguir vendiendo: las ventas se guardan en este equipo y se suben solas"}${stockAgeText() ? ` · ${stockAgeText()}` : ""}</div>
             </div>
           </div>
         ` : ''}
@@ -263,10 +338,7 @@ export function mountSalesView(container, navigate) {
         ${saleType === "WHOLESALE" ? renderWholesaleSection() : `
         <div>
           <label class="label">Gestor que refirió (opcional)</label>
-          <select class="select" id="manager-code">
-            <option value="">— Sin gestor —</option>
-            ${managers.filter((m) => m.active !== false).sort((a, b) => (a.name || "").localeCompare(b.name || "")).map((m) => `<option value="${esc(m.id)}" ${selectedManager?.id === m.id ? 'selected' : ''}>${esc(m.name)}${m.code ? ` (${esc(m.code)})` : ''}</option>`).join("")}
-          </select>
+          <select class="select" id="manager-code">${managerOptionsHtml()}</select>
           ${selectedManager ? `<p class="text-xs text-muted mt-1">${esc(selectedManager.name)}${selectedManager.code ? ` · Código: ${esc(selectedManager.code)}` : ''}${selectedManager.phone ? ` · ${esc(selectedManager.phone)}` : ''}</p>` : ''}
         </div>
         <div>
@@ -276,28 +348,15 @@ export function mountSalesView(container, navigate) {
             <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)">${icon("search", 14)}</span>
             <input class="input" id="quick-search" placeholder="Buscar y añadir rápido (ej: 5W-30)…" value="${esc(quickSearch)}" style="padding-left:2.1rem" autocomplete="off" />
             ${canUseCamera() ? `<button type="button" class="scan-btn" id="scan-sale-btn" aria-label="Escanear código de barras" title="Escanear código de barras">${icon("scan", 18)}</button>` : ""}
-            ${quickSearch ? `
-              <div id="quick-results" style="position:absolute;left:0;right:0;top:calc(100% + 0.25rem);z-index:30;display:flex;flex-direction:column;gap:0.25rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);padding:0.375rem;box-shadow:var(--shadow-md);max-height:16rem;overflow-y:auto">
-                ${quickMatches().length === 0
-                  ? `<div class="text-xs text-muted" style="padding:0.5rem">Sin resultados para “${esc(quickSearch)}”</div>`
-                  : quickMatches().map((p) => {
-                      const qty = getStockQty(p.id);
-                      const isOut = qty <= 0;
-                      return `
-                        <button class="btn btn-ghost btn-sm" data-quick-add="${esc(p.id)}" ${isOut ? 'disabled' : ''} style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;width:100%">
-                          <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left">${esc(p.name)}</span>
-                          <span style="flex-shrink:0;font-size:0.75rem;color:var(--text-muted)">${formatMoney(p.salePrice, "USD")} · ${isOut ? 'agotado' : `stock ${qty}`}</span>
-                        </button>
-                      `;
-                    }).join("")}
-              </div>
-            ` : ''}
+            <!-- v5.19.0: contenedor fijo — los resultados los pinta paintQuickResults()
+                 (antes cada tecla re-renderizaba TODO y había que devolver el foco a mano) -->
+            <div id="quick-results" style="position:absolute;left:0;right:0;top:calc(100% + 0.25rem);z-index:30;display:none;flex-direction:column;gap:0.25rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);padding:0.375rem;box-shadow:var(--shadow-md);max-height:16rem;overflow-y:auto"></div>
           </div>
-          ${renderTopSellers()}
+          <div data-top-sellers-zone></div>
           ${cart.length === 0 ? `
             <button class="btn btn-primary btn-block btn-lg" id="open-catalog-btn" style="justify-content:space-between">
               <span class="flex items-center gap-2">${icon("boxes", 18)} Abrir catálogo</span>
-              <span class="badge">${products.filter(p => getStockQty(p.id) > 0).length} disponibles</span>
+              <span class="badge" data-catalog-badge>${products.filter(p => getStockQty(p.id) > 0).length} disponibles</span>
             </button>
           ` : `
             <div style="display:flex;flex-direction:column;gap:0.5rem">
@@ -308,16 +367,17 @@ export function mountSalesView(container, navigate) {
                   <div class="cart-item" style="display:flex;align-items:center;gap:0.5rem;padding:0.625rem">
                     <div style="flex:1 1 100%;min-width:0">
                       <div class="text-sm font-medium truncate">${esc(item.name)}</div>
-                      <div class="text-xs text-muted">${formatMoney(item.unitPrice, "USD")} c/u · Stock: ${stockQty + item.quantity}</div>
+                      <div class="text-xs text-muted">${formatMoney(item.unitPrice, "USD")} c/u · Stock: <span data-cart-stock="${esc(item.productId)}">${stockQty + item.quantity}</span></div>
                       ${user?.role === "admin" ? `<div class="text-xs text-muted">Comisión gestor: ${p?.gestorCommission ?? p?.commission ?? 0} ${p?.gestorCommissionCurrency ?? p?.commissionCurrency ?? "USD"} · Comisión vendedor: ${p?.vendorCommission ?? 0} ${p?.vendorCommissionCurrency ?? "MN"}</div>` : ''}
                     </div>
                     <div class="flex items-center gap-1">
-                      <button class="btn btn-outline btn-icon btn-sm" data-action="dec" data-idx="${i}">${icon("minus", 12)}</button>
-                      <span style="width:2rem;text-align:center;font-weight:600">${item.quantity}</span>
-                      <button class="btn btn-outline btn-icon btn-sm" data-action="inc" data-idx="${i}">${icon("plus", 12)}</button>
+                      <button class="btn btn-outline btn-icon btn-sm" data-action="dec" data-idx="${i}" aria-label="Quitar una unidad de ${esc(item.name)}">${icon("minus", 12)}</button>
+                      <!-- v5.17: cantidad editable — se toca el número y se escribe, en vez de dar «+» diez veces -->
+                      <input class="input" type="number" min="1" max="${Math.max(stockQty + item.quantity, item.quantity)}" value="${item.quantity}" data-qty-edit="${i}" inputmode="numeric" aria-label="Cantidad de ${esc(item.name)}" style="width:3.25rem;text-align:center;padding:0.25rem 0.25rem;min-height:2.25rem" />
+                      <button class="btn btn-outline btn-icon btn-sm" data-action="inc" data-idx="${i}" aria-label="Añadir una unidad de ${esc(item.name)}">${icon("plus", 12)}</button>
                     </div>
                     <div class="text-sm font-bold" style="width:5rem;text-align:right">${formatMoney(item.subtotal, "USD")}</div>
-                    <button class="btn btn-ghost btn-icon btn-sm text-danger" data-action="remove" data-idx="${i}">${icon("trash", 12)}</button>
+                    <button class="btn btn-ghost btn-icon btn-sm text-danger" data-action="remove" data-idx="${i}" aria-label="Quitar ${esc(item.name)} de la venta">${icon("trash", 12)}</button>
                   </div>
                 `;
               }).join("")}
@@ -376,10 +436,7 @@ export function mountSalesView(container, navigate) {
             ${selectedCurrency === 'TRANSFERENCIA' || (paymentMode === 'MULTI' && multiPayments.TRANSFERENCIA > 0) ? `
               <div class="card mt-3" style="padding:0.75rem">
                 <label class="label label-xs">Tarjeta de transferencia</label>
-                <select class="select" id="card-select">
-                  <option value="">— Selecciona tarjeta —</option>
-                  ${cards.map((c) => `<option value="${esc(c.id)}" ${selectedCardId === c.id ? 'selected' : ''}>${esc(c.name)} · ${esc(c.bank || '')} · ${esc((c.number || '').slice(-4))}</option>`).join("")}
-                </select>
+                <select class="select" id="card-select">${cardOptionsHtml()}</select>
                 <label class="label label-xs mt-2">Monto transferido (USD)</label>
                 <input class="input" type="number" step="0.01" id="transfer-amount" value="${transferAmount || ''}" placeholder="0.00" />
               </div>
@@ -397,6 +454,12 @@ export function mountSalesView(container, navigate) {
             <div class="card" style="padding:0.875rem 1rem">
               <label class="label label-xs flex items-center gap-1">${icon("receipt", 12)} Vuelto · ¿Con cuánto paga el cliente? (${selectedCurrency})</label>
               <input class="input" type="number" step="0.01" min="0" id="paid-with" value="${paidWith || ''}" placeholder="0.00" style="max-width:12rem" inputmode="decimal" />
+              <!-- v5.18.0: teclado rápido de billetes — un toque = monto completo -->
+              <div class="pay-bills" id="pay-bills" role="group" aria-label="Montos rápidos de billetes">
+                ${billPresetsFor(selectedCurrency, cartTotal(), payRates()).map((b) => `
+                  <button type="button" class="pay-bill-chip" data-bill="${b.value}" aria-label="Poner ${esc(b.label)} en el pago">${esc(b.label)}</button>
+                `).join("")}
+              </div>
               <div class="text-sm font-semibold" id="change-due" style="margin-top:0.375rem;color:${paidWith > 0 && paidWith >= changeTotal() ? 'var(--primary)' : 'var(--text-muted)'}">
                 ${paidWith > 0 ? (paidWith >= changeTotal() ? `Vuelto: ${formatMoney(paidWith - changeTotal(), selectedCurrency)}` : `Faltan ${formatMoney(changeTotal() - paidWith, selectedCurrency)}`) : `Total: ${formatMoney(changeTotal(), selectedCurrency)}`}
               </div>
@@ -427,7 +490,134 @@ export function mountSalesView(container, navigate) {
     `;
 
     wireEvents();
+    paintHeaderBadges();
+    paintQuickResults();
+    paintTopSellers();
     setupCheckoutBar();
+  }
+
+  // ===== v5.19.0: pintores parciales =====
+  // Los datos que cambian solos (stock, productos, gestores/tarjetas, cola de
+  // subida) repintan SOLO estos fragmentos. Nunca tocan el formulario: lo que
+  // se está escribiendo (nota, vuelto, montos del pago mixto) no se recrea y
+  // no pierde el foco. render() sigue completo para cambios estructurales
+  // (carrito, modo de pago, cambio de pestaña).
+
+  function managerOptionsHtml() {
+    return `<option value="">— Sin gestor —</option>` +
+      managers.filter((m) => m.active !== false).sort((a, b) => (a.name || "").localeCompare(b.name || "")).map((m) => `<option value="${esc(m.id)}" ${selectedManager?.id === m.id ? 'selected' : ''}>${esc(m.name)}${m.code ? ` (${esc(m.code)})` : ''}</option>`).join("");
+  }
+
+  function cardOptionsHtml() {
+    return `<option value="">— Selecciona tarjeta —</option>` +
+      cards.map((c) => `<option value="${esc(c.id)}" ${selectedCardId === c.id ? 'selected' : ''}>${esc(c.name)} · ${esc(c.bank || '')} · ${esc(c.last4 || String(c.number || '').slice(-4))}</option>`).join("");
+  }
+
+  function paintManagerSelect() {
+    const sel = container.querySelector("#manager-code");
+    if (sel) sel.innerHTML = managerOptionsHtml(); // el nodo se conserva: el listener sigue
+  }
+
+  function paintCardSelect() {
+    const sel = container.querySelector("#card-select");
+    if (sel) sel.innerHTML = cardOptionsHtml();
+  }
+
+  function paintHeaderBadges() {
+    const el = container.querySelector("[data-header-badges]");
+    if (!el) return;
+    const wh = store.getState().currentWarehouse;
+    const pendingHere = wh ? getPendingCount(wh.id) : 0;
+    el.innerHTML = `
+      <span class="badge ${isOnline ? "badge-accent" : "badge-warning"}">${isOnline ? "En línea" : "Offline"}</span>
+      ${pendingHere > 0 ? `<span class="badge badge-warning">${icon("clock", 12)} ${pendingHere} por subir</span>` : ""}
+    `;
+  }
+
+  // Resultados de la búsqueda rápida: contenedor fijo, se repinta por tecla
+  // sin tocar el input (el foco y el cursor quedan donde estaban).
+  function paintQuickResults() {
+    const el = container.querySelector("#quick-results");
+    if (!el) return;
+    if (!quickSearch.trim()) {
+      el.style.display = "none";
+      el.innerHTML = "";
+      return;
+    }
+    el.style.display = "flex";
+    const matches = quickMatches();
+    el.innerHTML = matches.length === 0
+      ? `<div class="text-xs text-muted" style="padding:0.5rem">Sin resultados para “${esc(quickSearch)}”</div>`
+      : matches.map((p) => {
+          const qty = getStockQty(p.id);
+          const isOut = qty <= 0;
+          return `
+            <button class="btn btn-ghost btn-sm" data-quick-add="${esc(p.id)}" ${isOut ? 'disabled' : ''} style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;width:100%">
+              <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left">${esc(p.name)}</span>
+              <span style="flex-shrink:0;font-size:0.75rem;color:var(--text-muted)">${formatMoney(p.salePrice, "USD")} · ${isOut ? 'agotado' : `stock ${qty}`}</span>
+            </button>
+          `;
+        }).join("");
+    el.querySelectorAll("[data-quick-add]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        quickSearch = "";
+        addProduct(btn.dataset.quickAdd); // render() completo: el carrito cambió
+        const re = container.querySelector("#quick-search");
+        if (re) re.focus();
+      });
+    });
+  }
+
+  function paintTopSellers() {
+    const zone = container.querySelector("[data-top-sellers-zone]");
+    if (!zone) return;
+    zone.innerHTML = renderTopSellers();
+    zone.querySelectorAll("[data-top-add]").forEach((btn) => {
+      btn.addEventListener("click", () => addProduct(btn.dataset.topAdd));
+    });
+  }
+
+  // Textos de stock de las líneas del carrito (el precio es el fijado al añadir)
+  function paintCartStock() {
+    container.querySelectorAll("[data-cart-stock]").forEach((el) => {
+      const item = cart.find((i) => i.productId === el.dataset.cartStock);
+      if (item) el.textContent = String(getStockQty(item.productId) + item.quantity);
+    });
+  }
+
+  function paintCatalogBadge() {
+    const el = container.querySelector("[data-catalog-badge]");
+    if (el) el.textContent = `${products.filter((p) => getStockQty(p.id) > 0).length} disponibles`;
+  }
+
+  function paintWholesaleStock() {
+    const sel = container.querySelector("#wholesale-product-select");
+    if (sel) {
+      sel.querySelectorAll("option").forEach((opt) => {
+        const p = products.find((x) => x.id === opt.value);
+        if (!p || !p.unitsPerBox) return;
+        const qty = getStockQty(p.id);
+        opt.textContent = `${p.name} · ${p.unitsPerBox} pomos/caja · Stock: ${qty} (${Math.floor(qty / p.unitsPerBox)} cajas)`;
+      });
+    }
+    const stockEl = container.querySelector("[data-ws-stock]");
+    if (stockEl && wholesaleProduct) {
+      const qty = getStockQty(wholesaleProduct.id);
+      const maxBoxes = wholesaleProduct.unitsPerBox ? Math.floor(qty / wholesaleProduct.unitsPerBox) : 0;
+      stockEl.textContent = `${qty} pomos · ${maxBoxes} cajas`;
+      const boxesInput = container.querySelector("#wholesale-boxes");
+      if (boxesInput) boxesInput.max = String(maxBoxes);
+    }
+  }
+
+  // Una sola puerta para las suscripciones: repinta lo que depende de datos.
+  function refreshLiveData() {
+    paintHeaderBadges();
+    paintQuickResults();
+    paintTopSellers();
+    paintCartStock();
+    paintCatalogBadge();
+    paintWholesaleStock();
   }
 
   // ===== v5.8 (móvil): barra de cobro pegajosa =====
@@ -523,10 +713,7 @@ export function mountSalesView(container, navigate) {
       <!-- Gestor -->
       <div>
         <label class="label">Gestor que refirió (opcional)</label>
-        <select class="select" id="manager-code">
-          <option value="">— Sin gestor —</option>
-          ${managers.filter((m) => m.active !== false).sort((a, b) => (a.name || "").localeCompare(b.name || "")).map((m) => `<option value="${esc(m.id)}" ${selectedManager?.id === m.id ? 'selected' : ''}>${esc(m.name)}${m.code ? ` (${esc(m.code)})` : ''}</option>`).join("")}
-        </select>
+        <select class="select" id="manager-code">${managerOptionsHtml()}</select>
         ${selectedManager ? `<p class="text-xs text-muted mt-1">${esc(selectedManager.name)}${selectedManager.code ? ` · Código: ${esc(selectedManager.code)}` : ''}${selectedManager.phone ? ` · ${esc(selectedManager.phone)}` : ''}</p>` : ''}
       </div>
 
@@ -552,7 +739,7 @@ export function mountSalesView(container, navigate) {
             </div>
             <div class="text-right">
               <div class="text-xs text-muted">Stock disponible</div>
-              <div class="font-bold">${stockQty} pomos · ${maxBoxes} cajas</div>
+              <div class="font-bold" data-ws-stock>${stockQty} pomos · ${maxBoxes} cajas</div>
             </div>
           </div>
 
@@ -714,13 +901,14 @@ export function mountSalesView(container, navigate) {
     if (addMoreBtn) addMoreBtn.addEventListener("click", () => { catalogOpen = true; renderCatalogModal(); });
 
     // v5.4.0: búsqueda rápida — filtra al escribir; Enter añade el primer resultado
+    // v5.19.0: cada tecla repinta SOLO la lista de resultados — el input no se
+    // recrea y el foco/cursor quedan donde estaban (se quitó el parche de
+    // devolver el foco a mano).
     const quickSearchInput = container.querySelector("#quick-search");
     if (quickSearchInput) {
       quickSearchInput.addEventListener("input", (e) => {
         quickSearch = e.target.value;
-        render();
-        const re = container.querySelector("#quick-search");
-        if (re) { re.focus(); re.selectionStart = re.selectionEnd = re.value.length; }
+        paintQuickResults();
       });
       quickSearchInput.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
@@ -740,33 +928,22 @@ export function mountSalesView(container, navigate) {
     }
     const scanSaleBtn = container.querySelector("#scan-sale-btn");
     if (scanSaleBtn) scanSaleBtn.addEventListener("click", openSaleScanner);
-    container.querySelectorAll("[data-top-add]").forEach((btn) => {
-      btn.addEventListener("click", () => addProduct(btn.dataset.topAdd));
-    });
-    container.querySelectorAll("[data-quick-add]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        addProduct(btn.dataset.quickAdd);
-        quickSearch = "";
-        render();
-        const re = container.querySelector("#quick-search");
-        if (re) re.focus();
-      });
-    });
+    // v5.19.0: los chips «Más vendidos» y los resultados rápidos los une su
+    // pintor (paintTopSellers / paintQuickResults), que es quien los redibuja.
 
     // v5.4.0: calculadora de vuelto (actualiza solo la línea, sin re-render)
+    // v5.18.0: helpers compartidos — el teclado de billetes usa los mismos
     const paidWithInput = container.querySelector("#paid-with");
     if (paidWithInput) {
       paidWithInput.addEventListener("input", (e) => {
         paidWith = parseFloat(e.target.value) || 0;
-        const el = container.querySelector("#change-due");
-        if (!el) return;
-        const t = changeTotal();
-        el.textContent = paidWith > 0
-          ? (paidWith >= t ? `Vuelto: ${formatMoney(paidWith - t, selectedCurrency)}` : `Faltan ${formatMoney(t - paidWith, selectedCurrency)}`)
-          : `Total: ${formatMoney(t, selectedCurrency)}`;
-        el.style.color = paidWith >= t && paidWith > 0 ? "var(--primary)" : "var(--text-muted)";
+        updateChangeDue();
       });
     }
+    // v5.18.0: teclado rápido de billetes — un toque llena el campo completo
+    container.querySelectorAll("[data-bill]").forEach((btn) => {
+      btn.addEventListener("click", () => setPaidWith(btn.dataset.bill, { focusInput: true }));
+    });
 
     // Cart actions
     container.querySelectorAll("[data-action]").forEach((btn) => {
@@ -776,7 +953,7 @@ export function mountSalesView(container, navigate) {
         if (action === "inc") {
           const item = cart[idx];
           const stockQty = getStockQty(item.productId);
-          if (item.quantity >= stockQty) { toast("Sin stock suficiente", "warning"); return; }
+          if (item.quantity >= stockQty) { toast(`Sin stock suficiente: quedan ${stockQty}`, "warning"); return; }
           item.quantity++;
           item.subtotal = item.quantity * item.unitPrice;
           render();
@@ -795,13 +972,40 @@ export function mountSalesView(container, navigate) {
       });
     });
 
+    // v5.17: cantidad editable en el carrito (change, no input, para no
+    // re-dibujar en cada tecla ni perder el foco)
+    container.querySelectorAll("[data-qty-edit]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const idx = parseInt(input.dataset.qtyEdit);
+        const item = cart[idx];
+        if (!item) return;
+        const stockQty = getStockQty(item.productId);
+        let v = parseInt(input.value);
+        if (!Number.isFinite(v) || v < 1) v = 1;
+        if (v > stockQty) {
+          v = Math.max(1, stockQty);
+          toast(`Sin stock suficiente: quedan ${getStockQty(item.productId)}`, "warning");
+        }
+        item.quantity = v;
+        item.subtotal = item.quantity * item.unitPrice;
+        render();
+        const re = container.querySelector(`[data-qty-edit="${idx}"]`);
+        if (re) { re.focus(); re.select(); }
+      });
+    });
+
     // Nota
+    let noteDraftTimer = null;
     const noteInput = container.querySelector("#note-input");
     if (noteInput) {
       noteInput.addEventListener("input", (e) => {
         note = e.target.value;
         const counter = container.querySelector("#note-counter");
         if (counter) counter.textContent = `${note.length}/500`;
+        // v5.19.0: el borrador se guarda mientras escribes (con un pequeño
+        // descanso), no solo al hacer otra acción que redibuje
+        clearTimeout(noteDraftTimer);
+        noteDraftTimer = setTimeout(saveDraft, 400);
       });
     }
 
@@ -826,6 +1030,7 @@ export function mountSalesView(container, navigate) {
       input.addEventListener("input", (e) => {
         const curr = e.target.dataset.multiCurrency;
         multiPayments[curr] = parseFloat(e.target.value) || 0;
+        e.target.classList.remove("field-error"); // v5.18.0: al editar se limpia la marca
         refreshMultiStatus();
       });
     });
@@ -847,7 +1052,11 @@ export function mountSalesView(container, navigate) {
     // Card select
     const cardSelect = container.querySelector("#card-select");
     if (cardSelect) {
-      cardSelect.addEventListener("change", (e) => { selectedCardId = e.target.value; });
+      cardSelect.addEventListener("change", (e) => {
+        selectedCardId = e.target.value;
+        // v5.18.0: elegida la tarjeta, se quita la marca de error
+        cardSelect.classList.remove("field-error");
+      });
     }
     const transferInput = container.querySelector("#transfer-amount");
     if (transferInput) {
@@ -963,13 +1172,14 @@ export function mountSalesView(container, navigate) {
               ${catFilter || brandFilter || search ? `<button type="button" class="btn btn-outline btn-sm" data-catalog-clear>Quitar filtros</button>` : ""}
             </div>
           </div>`;
-      } else list.innerHTML = filtered.map((p) => {
-        const qty = getStockQty(p.id);
-        const inCart = cart.find((i) => i.productId === p.id)?.quantity || 0;
-        const isOut = qty <= 0;
-        const minStock = p.minStock || 5;
-        const isLow = !isOut && qty <= minStock;
-        return `
+      } else {
+        const rowHtml = (p) => {
+          const qty = getStockQty(p.id);
+          const inCart = cart.find((i) => i.productId === p.id)?.quantity || 0;
+          const isOut = qty <= 0;
+          const minStock = p.minStock || 5;
+          const isLow = !isOut && qty <= minStock;
+          return `
           <div class="catalog-item ${isOut ? "opacity-50" : ""}" data-product-id="${esc(p.id)}" style="display:flex;align-items:center;gap:0.625rem;padding:0.625rem;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--bg-elevated)">
             <div style="width:3rem;height:3rem;border-radius:var(--radius);overflow:hidden;background:var(--bg-soft);display:flex;align-items:center;justify-content:center;flex-shrink:0">
               ${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="${esc(p.name)}" style="width:100%;height:100%;object-fit:cover" />` : icon("boxes", 20)}
@@ -982,13 +1192,33 @@ export function mountSalesView(container, navigate) {
               </div>
             </div>
             <div class="flex items-center gap-1" style="flex-shrink:0">
-              <button class="btn btn-outline btn-icon btn-sm" data-qty-dec="${esc(p.id)}" ${inCart <= 0 ? 'disabled' : ''}>${icon("minus", 12)}</button>
+              <button class="btn btn-outline btn-icon btn-sm" data-qty-dec="${esc(p.id)}" ${inCart <= 0 ? 'disabled' : ''} aria-label="Quitar una unidad de ${esc(p.name)}">${icon("minus", 12)}</button>
               <span style="width:2rem;text-align:center;font-weight:700;font-size:0.875rem" data-qty-display="${esc(p.id)}">${inCart}</span>
-              <button class="btn btn-outline btn-icon btn-sm" data-qty-inc="${esc(p.id)}" ${isOut || inCart >= qty ? 'disabled' : ''}>${icon("plus", 12)}</button>
+              <button class="btn btn-outline btn-icon btn-sm" data-qty-inc="${esc(p.id)}" ${isOut || inCart >= qty ? 'disabled' : ''} aria-label="Añadir una unidad de ${esc(p.name)}${qty ? `, quedan ${qty}` : ""}">${icon("plus", 12)}</button>
             </div>
           </div>
         `;
-      }).join("");
+        };
+        // v5.18.0: favoritos del almacén primero — los productos que MÁS se
+        // venden en este punto (con stock) al abrir el catálogo sin filtros.
+        const noFilters = !search.trim() && !catFilter && !brandFilter;
+        const favs = noFilters
+          ? topSellerIds
+              .map((id) => products.find((p) => p.id === id))
+              .filter((p) => p && getStockQty(p.id) > 0)
+              .slice(0, 8)
+          : [];
+        const favIds = new Set(favs.map((p) => p.id));
+        const rest = filtered.filter((p) => !favIds.has(p.id));
+        list.innerHTML = `
+          ${favs.length ? `
+            <div class="catalog-fav-header">${icon("flame", 13)} Favoritos de este almacén</div>
+            ${favs.map(rowHtml).join("")}
+            <div class="catalog-fav-header catalog-fav-header--rest">${icon("boxes", 13)} Todos los productos</div>
+          ` : ""}
+          ${rest.map(rowHtml).join("")}
+        `;
+      }
 
       // Update summary
       const summary = document.querySelector("#catalog-summary");
@@ -1021,6 +1251,8 @@ export function mountSalesView(container, navigate) {
               vendorCommissionCurrency: p.vendorCommissionCurrency ?? "MN",
             });
           }
+          // v5.18.0: confirmación táctil al añadir desde el catálogo
+          try { navigator.vibrate?.(30); } catch {}
           renderCatalogList();
         });
       });
@@ -1170,7 +1402,11 @@ export function mountSalesView(container, navigate) {
         vendorCommissionCurrency: p.vendorCommissionCurrency ?? "MN",
       });
     }
-    if (!silent) toast(`${p.name} agregado`, "success");
+    if (!silent) {
+      // v5.18.0: confirmación táctil al añadir (el escáner ya vibra solo)
+      try { navigator.vibrate?.(30); } catch {}
+      toast(`${p.name} agregado`, "success");
+    }
     render();
     return true;
   }
@@ -1198,46 +1434,86 @@ export function mountSalesView(container, navigate) {
     return lines.join("\n");
   }
 
-  function showTicketModal(sale) {
+  function showTicketModal(sale, undoSnapshot = null) {
     const text = buildTicketText(sale);
+    // v5.17: «Deshacer» mientras la venta SIGA en la cola de este equipo y
+    // no esté subiéndose. Si ya se subió, no se ofrece (habría que anularla
+    // desde Historial con su motivo).
+    // v5.18.0: la ventana es corta y SE VE — «Deshacer · 10 s» con cuenta
+    // atrás; el botón se deshabilita en cuanto la venta empieza a subirse.
+    const UNDO_WINDOW_MS = 10000;
+    const undoDeadline = Date.now() + UNDO_WINDOW_MS;
+    let undoTicker = null;
+    function stopUndoTicker() {
+      if (undoTicker) { clearInterval(undoTicker); undoTicker = null; }
+    }
+    function undoStillQueued() {
+      const p = getPendingSales().find((s) => s.clientRef === sale.clientRef);
+      return !!p && !p.uploading && !p.blockedReason;
+    }
+    const pending = getPendingSales().find((s) => s.clientRef === sale.clientRef);
+    const canUndo = !!undoSnapshot && !!pending && !pending.uploading && !pending.blockedReason;
     const close = showModal({
       title: `${icon("check", 16)} Venta ${sale.code} registrada`,
       body: `
         <div style="display:flex;flex-direction:column;gap:0.75rem">
           ${navigator.onLine === false ? `<div class="pending-sync-note ticket-pending">${icon("clock", 14)} <span><strong>Pendiente de subir:</strong> guardada en este equipo. Se sube sola a <strong>${esc(sale.warehouseName || sale.warehouseCode || "")}</strong> cuando vuelva internet.</span></div>` : ""}
           <pre style="margin:0;padding:0.875rem;background:var(--bg-soft);border:1px dashed var(--border);border-radius:var(--radius);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.75rem;white-space:pre-wrap;overflow-x:auto">${esc(text)}</pre>
-          <p class="text-xs text-muted" style="margin:0">Compártelo con el cliente (WhatsApp/SMS) o cópialo al portapapeles.</p>
+          <p class="text-xs text-muted" style="margin:0">Cópialo al portapapeles si necesitas pasárselo al cliente.</p>
         </div>
       `,
       footer: `
+        ${canUndo ? `<button class="btn btn-ghost text-danger" id="ticket-undo">${icon("arrowLeft", 14)} Deshacer · ${Math.ceil(UNDO_WINDOW_MS / 1000)} s</button>` : ""}
         <button class="btn btn-outline" id="ticket-copy">${icon("receipt", 14)} Copiar</button>
-        <button class="btn btn-primary" id="ticket-share">${icon("zap", 14)} Compartir</button>
-        <button class="btn btn-ghost" id="ticket-close">Cerrar</button>
+        <button class="btn btn-primary" id="ticket-close">${icon("plus", 14)} Nueva venta</button>
       `,
+      onClose: stopUndoTicker,
     });
+    if (canUndo) {
+      const undoBtn = document.querySelector("#ticket-undo");
+      const paintUndoBtn = () => {
+        if (!undoBtn) return false;
+        const ok = undoStillQueued();
+        const left = Math.ceil((undoDeadline - Date.now()) / 1000);
+        undoBtn.disabled = !ok;
+        undoBtn.innerHTML = ok && left > 0
+          ? `${icon("arrowLeft", 14)} Deshacer · ${left} s`
+          : `${icon("arrowLeft", 14)} Deshacer`;
+        undoBtn.title = ok
+          ? "La venta sigue en este equipo: se retira y vuelves a editarla"
+          : "La venta ya se está subiendo o se subió: anúlala desde Historial si hace falta";
+        return ok;
+      };
+      paintUndoBtn();
+      undoTicker = setInterval(() => {
+        if (!paintUndoBtn()) stopUndoTicker();
+      }, 250);
+    }
     document.querySelector("#ticket-close").addEventListener("click", close);
+    document.querySelector("#ticket-undo")?.addEventListener("click", () => {
+        const still = getPendingSales().find((s) => s.clientRef === sale.clientRef);
+        if (!still || still.uploading) {
+          toast("La venta ya se está subiendo o se subió: anúlala desde Historial si hace falta", "warning", 5000);
+          close();
+          return;
+        }
+        if (!discardQueuedSale(sale.id)) {
+          toast("No se pudo deshacer: la venta ya no está en espera", "warning");
+          close();
+          return;
+        }
+        // Restaurar la venta tal como estaba (carrito, nota, gestor, pago…)
+        undoSnapshot.restore();
+        close();
+        render();
+        toast(`Venta ${sale.code} deshecha: sigue editándola`, "info", 3500);
+      });
     document.querySelector("#ticket-copy").addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(text);
         toast("Ticket copiado al portapapeles", "success");
       } catch {
         toast("No se pudo copiar automáticamente", "warning");
-      }
-    });
-    document.querySelector("#ticket-share").addEventListener("click", async () => {
-      if (navigator.share) {
-        try {
-          await navigator.share({ title: `Venta ${sale.code} · MANNOL`, text });
-        } catch (err) {
-          if (err?.name !== "AbortError") toast("No se pudo compartir", "warning");
-        }
-      } else {
-        try {
-          await navigator.clipboard.writeText(text);
-          toast("Compartir no disponible · Ticket copiado", "info");
-        } catch {
-          toast("Compartir no disponible en este navegador", "warning");
-        }
       }
     });
   }
@@ -1303,10 +1579,21 @@ export function mountSalesView(container, navigate) {
       paymentLines = [{ currency: selectedCurrency, amount: native, amountUSD: total, exchangeRate: rateUSD(selectedCurrency, rates) }];
     } else {
       const sum = summarizeMultiPayment(multiPayments, total, rates);
-      if (sum.missingRates.length) { toast(`No hay tasa de cambio para ${sum.missingRates.join(", ")}`, "error", 6000); return; }
+      // v5.18.0: además del aviso, marcar en rojo el campo concreto
+      if (sum.missingRates.length) {
+        sum.missingRates.forEach((c) => flagField(`[data-multi-currency="${c}"]`, false));
+        toast(`No hay tasa de cambio para ${sum.missingRates.join(", ")}`, "error", 6000);
+        return;
+      }
       if (sum.lines.length === 0) { toast("Ingresa los montos del pago", "error"); return; }
       if (sum.missingUSD > 0) { toast(`Falta cobrar ${formatMoney(sum.missingUSD, "USD")}`, "error"); return; }
-      if (sum.overUSD > 0) { toast(`Sobra ${formatMoney(sum.overUSD, "USD")}: ajusta los montos`, "error"); return; }
+      if (sum.overUSD > 0) {
+        Object.keys(multiPayments).forEach((c) => {
+          if ((multiPayments[c] || 0) > 0) flagField(`[data-multi-currency="${c}"]`, false);
+        });
+        toast(`Sobra ${formatMoney(sum.overUSD, "USD")}: ajusta los montos`, "error");
+        return;
+      }
       paymentLines = sum.lines;
     }
     for (const l of paymentLines) {
@@ -1316,6 +1603,8 @@ export function mountSalesView(container, navigate) {
       else if (l.currency === "TRANSFERENCIA") paidTransfer = l.amount;
     }
     if (paidTransfer > 0 && !selectedCardId) {
+      // v5.18.0: el foco salta a la tarjeta que falta elegir
+      flagField("#card-select");
       toast("Selecciona la tarjeta de transferencia", "error");
       return;
     }
@@ -1422,7 +1711,10 @@ export function mountSalesView(container, navigate) {
       paidUSD, paidMN, paidEUR, paidTransfer,
       paymentMethod: (selectedCurrency === "TRANSFERENCIA" || paidTransfer > 0) ? "TRANSFERENCIA" : "EFECTIVO",
       cardId: selectedCard?.id || null,
-      cardNumber: selectedCard?.number || null,
+      // v5.17: solo los ÚLTIMOS 4 dígitos se guardan (la revisión detectó el
+      // número completo de tarjeta en cada venta; en la base también se
+      // recortan los históricos con migration-v5.17-seguridad.sql)
+      cardNumber: selectedCard ? (selectedCard.last4 || String(selectedCard.number || "").replace(/\D/g, "").slice(-4) || null) : null,
       cardName: selectedCard?.name || null,
       transferAmount: paidTransfer || transferAmount || 0,
       note: note.trim() || null,
@@ -1457,6 +1749,9 @@ export function mountSalesView(container, navigate) {
       toast("No se pudo guardar la venta en este equipo (sin espacio). Sube las ventas pendientes y vuelve a intentarlo.", "error", 8000);
       return;
     }
+    // v5.18.0: cobraste con esta moneda → la próxima venta de este almacén
+    // abre ya con ella preseleccionada.
+    savePayPreference();
     const online = navigator.onLine !== false;
     toast(
       online
@@ -1464,7 +1759,41 @@ export function mountSalesView(container, navigate) {
         : `Venta ${sale.code} guardada sin conexión · se subirá sola al volver internet`,
       online ? "success" : "info",
     );
-    showTicketModal(sale);
+    // v5.17: copia del estado para «Deshacer» en el ticket (mientras la
+    // venta siga en la cola de este equipo, se restaura todo y se retira).
+    const cartBefore = cart.map((i) => ({ ...i }));
+    const noteBefore = note;
+    const managerCodeBefore = selectedManagerCode;
+    const managerBefore = selectedManager;
+    const multiBefore = { ...multiPayments };
+    const transferAmountBefore = transferAmount;
+    const selectedCardIdBefore = selectedCardId;
+    const paidWithBefore = paidWith;
+    const wholesaleProductBefore = wholesaleProduct;
+    const wholesaleBoxesBefore = wholesaleBoxes;
+    const wholesalePricePerBoxBefore = wholesalePricePerBox;
+    const wholesaleVendorCommissionBefore = wholesaleVendorCommissionPerBox;
+    const wholesaleGestorCommissionBefore = wholesaleGestorCommissionPerBox;
+    const undoSnapshot = {
+      restore() {
+        cart = cartBefore.map((i) => ({ ...i }));
+        note = noteBefore;
+        selectedManagerCode = managerCodeBefore;
+        selectedManager = managerBefore;
+        multiPayments = { ...multiBefore };
+        transferAmount = transferAmountBefore;
+        selectedCardId = selectedCardIdBefore;
+        paidWith = paidWithBefore;
+        quickSearch = "";
+        wholesaleProduct = wholesaleProductBefore;
+        wholesaleBoxes = wholesaleBoxesBefore;
+        wholesalePricePerBox = wholesalePricePerBoxBefore;
+        wholesaleVendorCommissionPerBox = wholesaleVendorCommissionBefore;
+        wholesaleGestorCommissionPerBox = wholesaleGestorCommissionBefore;
+        saveDraft();
+      },
+    };
+    showTicketModal(sale, undoSnapshot);
     // Limpiar
     cart = [];
     note = "";

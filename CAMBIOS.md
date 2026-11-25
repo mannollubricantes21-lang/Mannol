@@ -1,5 +1,174 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.19.0 (2026-11-25) — Escribir ya no se corta: el formulario no se redibuja solo
+
+La vista de ventas se redibujaba COMPLETA cada vez que llegaban datos nuevos
+(stock actualizado, productos, cola de subida). Si en ese instante estabas
+escribiendo la nota, el vuelto o un monto del pago mixto, el campo se recreaba
+y se perdía el foco (y el cursor). Es el refactor que estaba en la lista desde
+v5.18: el render se divide en paneles y las actualizaciones automáticas ya no
+tocan el formulario.
+
+- **Datos en vivo sin redibujar**: las suscripciones (productos, stock, gestores
+  y tarjetas, más vendidos, cola de subida) repintan SOLO los fragmentos que
+  cambian — insignias del encabezado («En línea», «N por subir»), chips «Más
+  vendidos», resultados de la búsqueda rápida, textos de stock del carrito y
+  del producto mayorista. La nota, los montos y los inputs del pago no se
+  recrean: lo que escribes sigue ahí, con el cursor donde estaba.
+- **Búsqueda rápida más ligera**: cada tecla repinta únicamente la lista de
+  resultados (antes re-renderizaba toda la venta y había que devolver el foco
+  a mano — parche que desaparece).
+- **La nota se guarda sola**: el borrador de la venta a medias se guarda
+  mientras escribes (con un pequeño descanso), no solo al hacer otra acción.
+- Todo lo demás queda igual: carrito, pago mixto, vuelto, teclado de billetes,
+  validaciones, deshacer, catálogo. Verificado en navegador: escribir sin perder
+  el foco, añadir desde resultados y chips, borrador al escribir, pago mixto con
+  «Resto», cancelar con confirmación, pestaña mayorista — sin errores.
+
+## v5.18.1 (2026-11-25) — El ticket ya no se comparte por WhatsApp
+
+A petición del dueño: fuera el envío del ticket por WhatsApp/SMS.
+
+- **Sin «Compartir» en el ticket**: al registrar la venta, el ticket se muestra con su
+  texto y los botones «Copiar» (portapapeles) y «Nueva venta». Nada se manda a WhatsApp
+  ni SMS; si el cliente lo pide, se pega a mano donde haga falta. La nota bajo el ticket
+  ya no menciona WhatsApp.
+- El «Compartir» de la tarjeta «Cierre de hoy» del dashboard sigue igual: es del cierre,
+  no de la venta.
+
+## v5.18.0 (2026-11-25) — Cobro más rápido y «¿ya se subió mi venta?» en una pantalla
+
+Mejoras de uso diario en el mostrador y de visibilidad del estado del equipo.
+Nada de flujo nuevo de venta: mismas pantallas, mismos pasos, menos toques.
+Sin migración de base de datos (solo si ya instalaste v5.17, sigue igual de válido).
+
+### En el cobro (Ventas)
+
+- **Teclado rápido de billetes**: bajo «¿Con cuánto paga el cliente?» hay chips con los
+  billetes comunes ($5/10/20/50/100, €5/10/20/50, ₱500/1000/2000/5000) y «Exacto» con el
+  total convertido a la moneda elegida. Un toque llena el campo completo — se acabó
+  teclear cifras en el teléfono.
+- **Moneda de cobro por defecto**: la app recuerda la última moneda/método que se usó en
+  cada almacén y la próxima venta abre ya preseleccionada (pago mixto incluido). Se guarda
+  por almacén en este equipo; cancelar la venta no la cambia.
+- **El error se ve en su campo**: si falta la tasa de una moneda o el pago mixto se pasa
+  del total, el input concreto queda marcado en rojo (y se limpia solo al corregirlo). Si
+  falta elegir la tarjeta de la transferencia, el foco salta al selector.
+- **Deshacer con cuenta atrás**: el ticket ahora dice «Deshacer · 10 s» y va contando;
+  el botón se deshabilita en cuanto la venta empieza a subirse (antes daba error al tocar).
+- **Vibración al añadir** productos (desde chips, catálogo y búsqueda): confirmación
+  táctil de que entró a la venta.
+
+### En el catálogo
+
+- **Favoritos del almacén**: al abrir el catálogo sin filtros, la primera fila son los 8
+  productos que más se venden en ESE punto (con stock), y debajo «Todos los productos».
+
+### Estado del equipo (nuevo en el menú)
+
+- **Nueva vista «Estado del equipo»**: responde de un vistazo «¿ya se subió mi venta?».
+  Muestra si hay conexión o está subiendo, cuándo fue la última subida correcta, el
+  último error (con código, motivo y venta) y TODAS las ventas guardadas en este equipo
+  agrupadas por almacén, cada una con su estado (en espera / subiendo / error / para
+  revisar). Botones «Subir ahora» y «Ver detalle» (la lista clásica con copiar/descartar).
+  Está en el menú lateral para todos los roles y en la búsqueda Ctrl+K; se actualiza viva.
+  El banner de siempre sigue funcionando; esta vista es el cuadro completo.
+
+### Dashboard
+
+- **Cierre de hoy con un toque**: tarjeta nueva con el total del día por moneda (los
+  mismos números del cierre de caja), ventas y unidades, y botón para compartirlo por
+  WhatsApp (o copiarlo). Solo aparece si hubo ventas hoy.
+
+### Admin (accesibilidad)
+
+- Los botones de solo ícono de las tablas (desactivar usuario, stock, eliminar producto,
+  revelar PIN, añadir/ajustar stock) ahora tienen `aria-label` descriptivo además del
+  tooltip: los lectores de pantalla ya no leen «botón» a secas.
+
+### Interno
+
+- `payment-utils.js`: `billPresetsFor()` y `normalizePaymentPreference()` (puras,
+  testeadas). `offline-queue.js`: `groupPendingByWarehouse()` (pura; la usan la vista
+  nueva y el modal «Ventas en espera»). Nueva vista `js/views/team-status.js` en el
+  precache del SW. Cache del SW → v40 (fuerza actualización en los teléfonos).
+
+## v5.17.0 (2026-11-25) — Seguridad del PIN y de las tarjetas, sincronización a prueba de atascos y cobro más rápido
+
+Punto de partida: la revisión externa de v5.15.0 (bugs, seguridad y diseño). Parte de eso ya
+estaba en v5.16.0; esta versión cierra el resto, empezando por lo urgente.
+
+**MIGRACIÓN OBLIGATORIA**: ejecutar una vez `supabase/migration-v5.17-seguridad.sql`
+(re-ejecutable). Sin ella, el acceso por PIN sigue funcionando por compatibilidad, pero la
+fuga de seguridad no queda cerrada. Instalaciones nuevas ya lo llevan todo en
+`schema.sql` + `policies.sql`.
+
+### Seguridad (lo más urgente del informe)
+
+- **El PIN se valida en el SERVIDOR.** Antes la app comparaba el PIN contra la columna `pin`
+  leída con la clave pública (cualquiera con la anon key obtenía todos los PIN de almacenes y
+  el PIN global de Ajustes). Ahora:
+  - Nueva RPC `verify_warehouse_pin(código, pin)`: valida en la nube (PIN propio del almacén
+    o, si no tiene, el PIN global, igual que hacía la app) y devuelve solo los datos públicos
+    del almacén. El PIN en claro nunca sale de la base de datos.
+  - Límite de intentos en el SERVIDOR: 5 PIN incorrectos por almacén en 10 minutos → la RPC
+    rechaza y dice cuánto esperar. El límite del navegador era localStorage: se saltaba.
+  - Para poder entrar SIN conexión, el login correcto guarda un **hash** (SHA-256 con sal) en
+    el equipo y la app revalida con WebCrypto. Sin el PIN correcto nadie obtiene el hash.
+  - `anon` pierde el permiso de leer `pin`, `pin_code`, `pin_salt` y `pin_hash` (grants por
+    columna). El admin sigue viendo/editando los PIN en sus paneles.
+- **Tarjetas: solo los últimos 4 dígitos.** Nueva columna `last4` (calculada sola); `anon`
+  ya no puede leer el número completo. Las ventas guardan solo los 4 últimos y la migración
+  recorta los números completos de las ventas antiguas. El admin conserva el número completo
+  para editar la tarjeta; las pantallas de vendedor muestran `···· 4567`.
+- **`deduct_sale_stock` ya no se ejecuta desde anon** (cualquiera podía restar stock). Se
+  revoca cuando existe `register_sale` (migration-v5.13), que es la RPC que usa la cola.
+- **Las ventas insertadas desde anon exigen `warehouse_id`** (antes `with check (true)`).
+- Queda documentado (nota en la migración): la LECTURA de ventas/stock por anon es el modo
+  offline-first de la app; cerrarla del todo exige sesiones en el servidor (trabajo futuro).
+
+### Sincronización (bugs de la revisión)
+
+- **El movimiento de tarjeta ya no se pierde**: iba dentro de un `catch {}` vacío; ahora se
+  reintenta 3 veces y, si sigue fallando, aparece en el error de sincronización del banner.
+- **Stock descontado en falso, arreglado**: en la ruta antigua, un fallo que no era de red al
+  descontar marcaba el producto como hecho igualmente. Ahora el error sube y se reintenta.
+- **Los errores no-red ya no se reintentan para siempre**: tras 10 intentos la venta pasa a
+  «para revisar» con el motivo visible (`sync_failed`), en vez de reintentar cada 60 s eternamente.
+- **«Deshacer» una venta en espera**: el ticket tras cobrar tiene «Deshacer» mientras la venta
+  siga en la cola de este equipo (la retira y devuelve el carrito, la nota y el pago tal
+  cual estaban) y el botón principal pasa a «Nueva venta». Si ya se está subiendo, avisa y
+  sugiere anularla desde Historial.
+- **Actualización sin sustos**: el service worker nuevo ya NO toma el control solo al
+  instalar (antes `skipWaiting` + recarga automática podía borrar una venta a medias).
+  Espera a que la persona toque «Actualizar» en el banner. El borrador del carrito de v5.16
+  queda como segunda red de seguridad.
+
+### Cobro e interfaz
+
+- **Cantidad editable en el carrito**: se toca el número y se escribe la cantidad (con tope
+  de stock y aviso «Sin stock suficiente: quedan N»), en vez de dar «+» diez veces.
+- **«Stock guardado de hace X min»**: cuando no hay conexión, el banner (y el de Ventas)
+  dice la antigüedad de los datos que se ven; el service worker sirve la copia guardada y
+  antes eso era invisible. Nuevo módulo `js/data-freshness.js`.
+- **Accesibilidad**: `aria-label` en los botones de solo ícono del carrito y del catálogo
+  (añadir/quitar unidad), y más separación entre «+», «−» y «quitar» en pantallas táctiles.
+- **El drawer del dashboard se cierra con Escape** (pendiente del REVIEW.md).
+- **Código muerto eliminado**: `setup-wizard-v5.0.2.js` (55 KB idénticos a `setup-wizard.js`);
+  `setup.html` carga directamente el canónico.
+
+### Notas técnicas
+
+- `listWarehouses()` / `getSettings()` / `listCards()` usan listas de columnas seguras (con
+  `select *` darían error de permiso tras la migración). Variantes nuevas solo-admin:
+  `listWarehousesAdmin()`, `getSettingsAdmin()`, `listCardsAdmin()` y
+  `listCardsWithBalances({ includeNumber: true })`.
+- El login por PIN guarda `mannol-pin-meta-<código>` (sal, hash y longitud) para el modo sin
+  conexión y el auto-envío al completar los dígitos.
+- `maskCard()` ahora también formatea valores ya recortados (`···· 4567`).
+- Pruebas nuevas: hash/verificación de PIN, frescura de datos, bloqueo por intentos y
+  «deshacer» de la cola (se detalla al final de esta sección en el repositorio).
+
 ## v5.15.0 (2026-11-23) — Barra flotante en el teléfono y nuevo formulario de producto
 
 - **Barra superior en el teléfono**: en v5.13.2 solo se arregló en PC. En el teléfono y la tableta

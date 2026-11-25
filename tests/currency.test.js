@@ -63,8 +63,11 @@ describe("maskCard", () => {
     expect(maskCard(null)).toBe("****");
   });
 
-  it("devuelve **** para string corto", () => {
-    expect(maskCard("123")).toBe("****");
+  it("muestra los 4 dígitos de un valor YA recortado (v5.17)", () => {
+    // Desde v5.17 las ventas/tarjetas guardan solo los últimos 4; para un
+    // valor corto se muestran con prefijo de máscara, no se ocultan del todo.
+    expect(maskCard("4567")).toBe("···· 4567");
+    expect(maskCard("123")).toBe("···· 123");
   });
 
   it("maneja guiones", () => {

@@ -2799,3 +2799,39 @@ h1, h2, h3, .card-title { overflow-wrap: anywhere; }
   color: color-mix(in oklab, var(--warning) 65%, var(--text));
 }
 .qty-pill.out { background: color-mix(in oklab, var(--danger) 16%, transparent); color: var(--danger); }
+
+/* =====================================================
+   v5.18.0 — Cobro más rápido y errores visibles
+   ===================================================== */
+
+/* Teclado rápido de billetes (bajo «¿Con cuánto paga el cliente?») */
+.pay-bills {
+  display: flex; flex-wrap: wrap; gap: 0.375rem; margin-top: 0.5rem;
+}
+.pay-bill-chip {
+  min-height: 2.5rem; padding: 0.25rem 0.875rem;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-elevated); color: var(--text);
+  font-weight: 700; font-size: 0.8125rem; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  transition: transform 0.06s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.pay-bill-chip:active { transform: scale(0.94); }
+.pay-bill-chip:hover { border-color: var(--primary); background: var(--primary-tint); }
+
+/* Error junto al campo: el input concreto se marca en rojo */
+.field-error,
+.field-error:focus {
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 1px var(--danger) inset;
+}
+select.field-error { border-width: 2px; }
+
+/* Encabezados de secciones del catálogo (favoritos / todos) */
+.catalog-fav-header {
+  display: flex; align-items: center; gap: 0.375rem;
+  font-size: 0.6875rem; font-weight: 800; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-muted);
+  padding: 0.25rem 0.125rem 0;
+}
+.catalog-fav-header--rest { margin-top: 0.5rem; border-top: 1px dashed var(--border); padding-top: 0.5rem; }

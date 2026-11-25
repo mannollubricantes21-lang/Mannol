@@ -574,3 +574,212 @@ create policy "pin_attempts_read_admin" on public.pin_attempts
 --   deactivate_user(uuid)            — admin desactiva usuario
 --   sync_user_warehouse_denorm()     — trigger automático (NUEVO, antes en migration-v2)
 -- =====================================================
+
+-- =====================================================
+-- 19. Seguridad v5.17 — PIN en el servidor y privacidad por columna
+-- =====================================================
+-- Igual que supabase/migration-v5.17-seguridad.sql, para instalaciones nuevas.
+-- · El PIN (warehouses.pin / settings.pin_code) se valida en el SERVIDOR con
+--   verify_warehouse_pin(); anon ya no puede leer esas columnas.
+-- · La app recibe solo un hash (SHA-256+sal) para revalidar SIN conexión.
+-- · Las tarjetas exponen a anon solo los últimos 4 dígitos (last4).
+-- · Límite en servidor: 5 intentos fallidos por almacén en 10 minutos.
+
+create extension if not exists pgcrypto;
+
+-- Trigger: recalcular pin_salt/pin_hash cuando cambia el PIN.
+create or replace function public.recompute_pin_hash()
+returns trigger as $$
+declare
+  v_pin text;
+  v_salt text;
+begin
+  if tg_table_name = 'warehouses' then
+    v_pin := nullif(trim(new.pin), '');
+  else
+    v_pin := nullif(trim(new.pin_code), '');
+  end if;
+  v_salt := nullif(new.pin_salt, '');
+  if v_pin is null then
+    new.pin_salt := null;
+    new.pin_hash := null;
+  else
+    if v_salt is null then
+      v_salt := encode(gen_random_bytes(8), 'hex');
+    end if;
+    new.pin_salt := v_salt;
+    new.pin_hash := encode(digest(v_pin || v_salt, 'sha256'), 'hex');
+  end if;
+  return new;
+end;
+$$ language plpgsql security definer;
+
+drop trigger if exists trg_warehouses_pin_hash on public.warehouses;
+create trigger trg_warehouses_pin_hash
+  before insert or update of pin, pin_salt on public.warehouses
+  for each row execute function public.recompute_pin_hash();
+
+drop trigger if exists trg_settings_pin_hash on public.settings;
+create trigger trg_settings_pin_hash
+  before insert or update of pin_code, pin_salt on public.settings
+  for each row execute function public.recompute_pin_hash();
+
+-- RPC segura: validar el PIN del almacén (con fallback al PIN global).
+create or replace function public.verify_warehouse_pin(p_code text, p_pin text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  wh public.warehouses%rowtype;
+  v_pin text;
+  v_source text;
+  v_salt text;
+  v_hash text;
+  v_ok boolean := false;
+  v_fails int := 0;
+  v_retry_sec int := 0;
+begin
+  if p_code is null or p_pin is null or btrim(p_pin) = '' then
+    return jsonb_build_object('ok', false, 'reason', 'wrong_pin');
+  end if;
+
+  select * into wh
+    from public.warehouses
+    where lower(code) = lower(btrim(p_code))
+    limit 1;
+  if wh.id is null then
+    return jsonb_build_object('ok', false, 'reason', 'warehouse_not_found');
+  end if;
+
+  -- Rate limit en servidor (el del navegador ya no basta)
+  select count(*) into v_fails
+    from public.pin_attempts
+    where warehouse_id = wh.id
+      and ok = false
+      and attempted_at > now() - interval '10 minutes';
+  if v_fails >= 5 then
+    select greatest(600 - extract(epoch from (now() - max(attempted_at)))::int, 1)
+      into v_retry_sec
+      from public.pin_attempts
+      where warehouse_id = wh.id and ok = false
+        and attempted_at > now() - interval '10 minutes';
+    return jsonb_build_object('ok', false, 'reason', 'rate_limited',
+      'retryAfterSec', greatest(v_retry_sec, 1));
+  end if;
+
+  v_pin := nullif(btrim(coalesce(wh.pin, '')), '');
+  v_source := 'warehouse';
+  v_salt := wh.pin_salt;
+  v_hash := wh.pin_hash;
+  if v_pin is null then
+    select nullif(btrim(coalesce(pin_code, '')), ''), pin_salt, pin_hash
+      into v_pin, v_salt, v_hash
+      from public.settings where id = 'global';
+    v_source := 'global';
+  end if;
+  if v_pin is null then
+    return jsonb_build_object('ok', false, 'reason', 'no_pin_configured');
+  end if;
+
+  if v_hash is not null and v_salt is not null then
+    v_ok := (v_hash = encode(digest(btrim(p_pin) || v_salt, 'sha256'), 'hex'));
+  else
+    v_ok := (btrim(p_pin) = v_pin);
+  end if;
+
+  insert into public.pin_attempts (warehouse_id, warehouse_code, ok, device)
+    values (wh.id, wh.code, v_ok, null);
+
+  if not v_ok then
+    return jsonb_build_object('ok', false, 'reason', 'wrong_pin');
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'pinSource', v_source,
+    'pinLength', length(v_pin),
+    'pinSalt', v_salt,
+    'pinHash', v_hash,
+    'warehouse', jsonb_build_object(
+      'id', wh.id,
+      'name', wh.name,
+      'code', wh.code,
+      'address', wh.address,
+      'phone', wh.phone,
+      'active', wh.active,
+      'seller_commission_percent', wh.seller_commission_percent,
+      'seller_commission_currency', wh.seller_commission_currency,
+      'seller_weekend_split', wh.seller_weekend_split,
+      'seller_name', wh.seller_name,
+      'seller_weekend_name', wh.seller_weekend_name,
+      'created_at', wh.created_at
+    )
+  );
+end;
+$$;
+
+grant execute on function public.verify_warehouse_pin(text, text) to anon, authenticated;
+
+-- Privacidad por columna: anon (sesiones PIN + clave pública) ya no puede
+-- leer los PIN ni el número completo de las tarjetas. La app usa listas de
+-- columnas seguras en js/db.js (listWarehouses/getSettings/listCards…).
+-- Si alguna columna extendida aún no existe (migración v5.14 pendiente),
+-- el grant cae a la lista base.
+revoke select on table public.warehouses from anon;
+do $$
+begin
+  grant select (
+    id, name, code, address, phone, active,
+    seller_commission_percent, seller_commission_currency,
+    seller_weekend_split, seller_name, seller_weekend_name, created_at
+  ) on table public.warehouses to anon;
+exception
+  when undefined_object then
+    grant select (
+      id, name, code, address, phone, active,
+      seller_commission_percent, seller_commission_currency, created_at
+    ) on table public.warehouses to anon;
+end $$;
+
+revoke select on table public.settings from anon;
+do $$
+begin
+  grant select (
+    id, el_toque_enabled, el_toque_markup, business_name, last_rate_sync,
+    weekend_warehouse_id, weekend_redirect_enabled
+  ) on table public.settings to anon;
+exception
+  when undefined_object then
+    grant select (
+      id, el_toque_enabled, el_toque_markup, business_name, last_rate_sync
+    ) on table public.settings to anon;
+end $$;
+
+revoke select on table public.cards from anon;
+do $$
+begin
+  grant select (
+    id, name, bank, active, created_at, initial_balance, balance_currency, last4
+  ) on table public.cards to anon;
+exception
+  when undefined_object then
+    grant select (id, name, bank, active, created_at, last4)
+      on table public.cards to anon;
+end $$;
+
+-- deduct_sale_stock solo se usa desde el servidor (register_sale).
+-- Se revoca a anon si esa RPC ya existe (migration-v5.13).
+do $$
+begin
+  if to_regprocedure('public.register_sale(jsonb)') is not null then
+    revoke execute on function public.deduct_sale_stock(uuid, jsonb, text, text, uuid, text) from anon;
+  end if;
+end $$;
+
+-- Ventas insertadas desde anon: siempre con almacén válido.
+drop policy if exists "sales_insert_pin" on public.sales;
+create policy "sales_insert_pin" on public.sales
+  for insert to anon
+  with check (warehouse_id is not null);

@@ -158,11 +158,12 @@ export function generateId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-// Mask card number (keep last 4)
+// Mask card number (keep last 4). v5.17: también acepta un valor YA recortado
+// a los últimos 4 (las ventas y tarjetas ya no guardan/muestran el completo).
 export function maskCard(num) {
   if (!num) return "****";
   const digits = String(num).replace(/\D/g, "");
-  if (digits.length <= 4) return "****";
+  if (digits.length <= 4) return digits ? `···· ${digits}` : "****";
   return `**** ${digits.slice(-4)}`;
 }
 
