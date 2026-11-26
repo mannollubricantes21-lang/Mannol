@@ -1,5 +1,44 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.27.0 (2026-11-25) — Más simple: una sola navegación y botones en relieve
+
+> Sin SQL. Revisado por tres revisores independientes (uso, botones, «qué sobra»):
+> el problema no eran las funciones, sino que cada una salía en 2–4 sitios.
+> No se quitó ninguna función: lo que no está a la vista pasó a «Más».
+
+- **Dentro del almacén, una sola barra**: Hoy · Inventario · **Vender** · Caja · Más.
+  Se quitaron las pestañas de arriba, el ☰ y los iconos de la barra superior.
+- **Cabecera** con el color del almacén: nombre, quién vende y si hay conexión.
+- **«Más»**: Historial, ¿Se subieron mis ventas?, Tabla de inventario, Buscar,
+  Actualizar datos, Modo oscuro, Apariencia, Pantalla completa, Salir del almacén.
+- **Cada cosa en un solo sitio**: Hoy = lo vendido y las ventas del día (con un
+  aviso «N productos por pedir → Ver»); Inventario = stock y pedido sugerido;
+  Caja = contar y cerrar, y lo que llevas ganado.
+- **Caja con un solo botón**: «Cerrar caja de hoy». Ya cerrada, lo principal es
+  «Enviar cierre por WhatsApp» (Corregir y Copiar quedan debajo).
+- **Venta en dos pasos** (teléfono): 1) productos, 2) «Cobrar →» en su propia
+  pantalla, con «Cambiar» para volver. En el catálogo el «+» añade directo
+  (el botón de abajo ahora es «Listo»).
+- **Botones en relieve** (principal, secundario, texto, peligro): canto duro
+  abajo y se hunden al tocar. **Tarjetas también en relieve** (sombra suave y
+  borde), con cabecera marcada y cada dato en su casilla, para ver bien dónde
+  empieza y termina cada apartado.
+- **Cabecera sobria**: fondo claro, el color del almacén solo en la etiqueta
+  del código (VIB).
+- **Pantalla de venta**: **«Abrir catálogo»** y **«Escanear»** arriba, mitad y
+  mitad, en color (escanear el código añade el producto a la venta); debajo
+  la búsqueda rápida y los más vendidos (un toque = +1). Los productos se ven al
+  abrir el catálogo. «En la venta» queda debajo para cambiar cantidades o quitar.
+- **Ver el catálogo como** (Apariencia, al estilo del menú «Ver» de Windows):
+  iconos muy grandes, grandes, medianos, pequeños o detalles. Cada opción
+  tiene su dibujo y debajo se ve «Así se verá el catálogo» con productos de
+  ejemplo. (Lista → Detalles y Tarjetas → Iconos medianos al actualizar.)
+- **Mayorista renovado**: el producto se elige en tarjetas (pomos por caja,
+  cajas disponibles, «desde $X/caja»), las cajas con − n +, los tramos de
+  precio a la vista con el que aplica marcado, «Usar precio del tramo», las
+  comisiones plegadas y el total grande. El gestor pasa a «Gestor y nota». Cifras en letra condensada (incluida en la
+  app, funciona sin red). Transferencia en ámbar para no confundirla con MN.
+
 ## v5.26.0 (2026-11-25) — Comisión por venta y dos vendedores con su PIN
 
 > ⚠️ Ejecuta una vez en Supabase `vendedores-v5.26.sql` (es la sección 9 de

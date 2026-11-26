@@ -7,8 +7,12 @@ describe("normalizeAppearance", () => {
     expect(normalizeAppearance({ accent: "x", font: 3, background: "neon", catalogView: "grid" })).toEqual(DEFAULT_APPEARANCE);
   });
   it("conserva valores válidos", () => {
-    expect(normalizeAppearance({ accent: "dorado", background: "dark", font: "lg", catalogView: "cards" }))
-      .toEqual({ accent: "dorado", background: "dark", font: "lg", catalogView: "cards" });
+    expect(normalizeAppearance({ accent: "dorado", background: "dark", font: "lg", catalogView: "large" }))
+      .toEqual({ accent: "dorado", background: "dark", font: "lg", catalogView: "large" });
+  });
+  it("convierte las vistas de antes (lista / tarjetas)", () => {
+    expect(normalizeAppearance({ catalogView: "list" }).catalogView).toBe("details");
+    expect(normalizeAppearance({ catalogView: "cards" }).catalogView).toBe("medium");
   });
 });
 

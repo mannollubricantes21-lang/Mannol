@@ -2164,3 +2164,588 @@ html[data-font-scale] body { font-size: 1rem; }
 .seller-pick-sub { font-size: .75rem; color: var(--muted-foreground, var(--text-muted)); }
 .vrule-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
 @media (max-width: 480px) { .vrule-grid { grid-template-columns: 1fr 1fr; } }
+
+/* ============================================================
+   v5.27.0 — Interior del almacén, diseño «etiqueta de taller»
+   Cifras en Barlow Condensed (incluida en /fonts, funciona sin red),
+   cabecera con el color del almacén y un color fijo por moneda.
+   Todo dentro de .wi-v2: el resto de la app no cambia.
+   ============================================================ */
+@font-face { font-family: "Barlow Condensed"; font-weight: 700; font-style: normal; font-display: swap;
+  src: url("../fonts/barlow-condensed-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 800; font-style: normal; font-display: swap;
+  src: url("../fonts/barlow-condensed-latin-800-normal.woff2") format("woff2"); }
+
+.wi-v2 {
+  --cond: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+  --accent-transfer: #c98a0b;             /* transferencia: ámbar (antes cian, se confundía con MN) */
+  --wi2-ink: #15201c;
+  --wi2-card: var(--bg-elevated);
+  --wi2-line: var(--border);
+}
+
+/* Cabecera del almacén */
+.wi-v2 > .wi2-head {
+  background: var(--wh, var(--primary)); color: #fff; border: 0; box-shadow: none;
+  border-radius: 1.125rem; padding: 0.75rem 0.75rem 0; overflow: hidden;
+}
+.wi2-head-row { display: flex; align-items: center; gap: 0.5rem; }
+.wi2-title { flex: 1; min-width: 0; padding-left: 0.25rem; }
+.wi2-name { margin: 0; font-family: var(--cond); font-weight: 800; font-size: 1.875rem; line-height: 1; color: #fff; letter-spacing: 0.01em; }
+.wi-v2 .wi2-meta { color: rgb(255 255 255 / 0.85); font-size: 0.8125rem; margin-top: 0.25rem; gap: 0 0.75rem; }
+.wi2-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.wi2-iconbtn {
+  width: 2.75rem; height: 2.75rem; flex: none; border: 0; border-radius: 0.75rem; cursor: pointer;
+  background: rgb(255 255 255 / 0.16); color: #fff; display: grid; place-items: center;
+}
+.wi2-iconbtn:hover { background: rgb(255 255 255 / 0.26); }
+.wi2-iconbtn:focus-visible { outline: 3px solid #fff; outline-offset: 1px; }
+.wi-v2 .wi2-tabs {
+  position: static; background: transparent; border: 0; border-radius: 0; padding: 0; margin-top: 0.75rem; gap: 0.25rem;
+}
+.wi-v2 .wi2-tabs .wi-tab {
+  border-radius: 0.75rem 0.75rem 0 0; color: #fff; font-size: 0.9375rem; font-weight: 700; min-height: 2.875rem; padding: 0 0.25rem;
+  background: rgb(0 0 0 / 0.12);
+}
+.wi-v2 .wi2-tabs .wi-tab.on { background: var(--bg); color: var(--text); box-shadow: none; }
+.wi-v2 .wi2-tabs .wi-tab:focus-visible { outline: 3px solid #fff; outline-offset: -3px; }
+.wi-v2 .wi-tab-n { background: #f2b31b; color: #2b1d00; }
+.wi-v2 .wi-tab-dot { background: #f2b31b; box-shadow: 0 0 0 2px rgb(0 0 0 / 0.15); }
+@media (min-width: 1280px) { .wi-v2 > .wi2-head { padding-bottom: 0.875rem; } .wi-v2 .wi2-tabs { display: none; } }
+
+/* Resumen: el total grande */
+.wi-v2 .card.wi2-sum {
+  background: #15201c; color: #f4f6f5; border: 0; border-radius: 1.125rem;
+  box-shadow: none; padding: 1rem; display: flex; flex-direction: column; gap: 0.875rem;
+}
+.wi-v2 .wi2-seg { align-self: flex-start; background: transparent; border: 0; gap: 0.375rem; padding: 0; }
+.wi-v2 .wi2-seg .seg { min-height: 2.25rem; padding: 0 0.875rem; border-radius: 999px; background: #24332d; color: #c9d4cf; font-size: 0.875rem; font-weight: 600; }
+.wi-v2 .wi2-seg .seg-on { background: #f4f6f5; color: #15201c; font-weight: 800; }
+.wi2-sum-main { display: flex; align-items: flex-end; justify-content: space-between; gap: 0.75rem; }
+.wi2-sum-label { font-size: 0.875rem; color: #a9b8b1; }
+.wi2-big { font-family: var(--cond); font-weight: 800; font-size: clamp(2.75rem, 14vw, 4rem); line-height: 0.95; color: #fff; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wi2-sum-side { display: flex; flex-direction: column; align-items: flex-end; font-size: 0.875rem; color: #c9d4cf; line-height: 1.5; white-space: nowrap; }
+.wi2-sum-side strong { color: #fff; }
+.wi2-bar { display: flex; height: 0.625rem; border-radius: 99px; overflow: hidden; gap: 2px; background: #24332d; }
+.wi2-currs { display: flex; flex-wrap: wrap; gap: 0.375rem 1rem; font-size: 0.875rem; }
+.wi2-currs span { display: inline-flex; align-items: center; gap: 0.375rem; }
+.wi2-currs i { width: 0.625rem; height: 0.625rem; border-radius: 50%; flex: none; }
+.wi2-currs em { font-style: normal; color: #8fa29a; font-size: 0.75rem; }
+.wi2-zero { font-size: 0.8125rem; color: #8fa29a; }
+.wi2-empty { font-size: 0.875rem; color: #c9d4cf; display: flex; align-items: center; gap: 0.375rem; flex-wrap: wrap; }
+
+/* Tarjetas: más planas, bordes claros, títulos condensados */
+.wi-v2 > .card, .wi-v2 > .wi-ganado > .card {
+  border-radius: 1.125rem; box-shadow: none; border: 1px solid var(--wi2-line);
+}
+.wi-v2 .card-title { font-family: var(--cond); font-weight: 800; font-size: 1.25rem; letter-spacing: 0.01em; }
+.wi-v2 .card-title svg { display: none; }
+.wi2-h { margin: 0.25rem 0 0.5rem; font-family: var(--cond); font-weight: 800; font-size: 1.375rem; }
+
+/* Lo que llevas ganado */
+.wi-v2 .earn-amount { font-family: var(--cond); font-weight: 800; font-size: 2.5rem; line-height: 1; color: var(--primary); }
+.wi-v2 .earn-card--split .earn-amount { font-size: 1.875rem; }
+.wi-v2 .earn-head { border-bottom: 0; padding-bottom: 0; }
+.wi-v2 .earn-shift { border-radius: 0.875rem; }
+
+/* Pedido sugerido: el ámbar solo avisa */
+.wi-v2 > .card.wi-pedido { background: #fff4da; border-color: transparent; color: #3d2900; }
+.wi-v2 .wi-pedido .card-header { border-bottom: 0; }
+.wi-v2 .wi-pedido .card-title { color: #5c3d00; }
+.wi-v2 .wi-pedido .text-muted { color: #6b5a3a !important; }
+.wi-v2 .wi-pedido .badge-warning { background: #f2b31b; color: #2b1d00; }
+.wi-v2 .restock-row { background: #fff; border: 0; border-radius: 0.75rem; padding: 0.5rem 0.625rem; }
+.wi-v2 .restock-qty { font-family: var(--cond); font-weight: 800; font-size: 1.5rem; background: none; color: #8a5a00; }
+.wi-v2 .wi-pedido .btn-whatsapp { min-height: 2.75rem; font-size: 0.9375rem; border-radius: 0.75rem; }
+[data-theme="dark"] .wi-v2 > .card.wi-pedido { background: #3a2c0c; color: #ffe9b8; }
+[data-theme="dark"] .wi-v2 .wi-pedido .card-title { color: #ffd77a; }
+[data-theme="dark"] .wi-v2 .wi-pedido .text-muted { color: #d8c18e !important; }
+[data-theme="dark"] .wi-v2 .restock-row { background: #2a2009; }
+[data-theme="dark"] .wi-v2 .restock-qty { color: #ffc94a; }
+
+/* Ventas recientes: una fila por venta, la cifra a la derecha */
+.wi2-recent-list { display: flex; flex-direction: column; gap: 0.5rem; max-height: 26rem; overflow-y: auto; }
+.wi2-sale {
+  display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0.875rem;
+  background: var(--wi2-card); border: 1px solid var(--wi2-line); border-radius: 0.875rem;
+}
+.wi2-sale-mark { width: 0.375rem; align-self: stretch; border-radius: 99px; flex: none; }
+.wi2-sale-txt { flex: 1; min-width: 0; font-size: 0.9375rem; line-height: 1.35; }
+.wi2-sale-txt > div:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wi2-sale-sub { font-size: 0.8125rem; color: var(--text-muted); }
+.wi2-sale-amt { font-family: var(--cond); font-weight: 800; font-size: 1.5rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Inventario: cantidades en grande */
+.wi-v2 .qty-pill { font-family: var(--cond); font-weight: 800; font-size: 1.25rem; min-width: 2.5rem; }
+.wi-v2 .stock-row { border-radius: 0.75rem; padding: 0.5rem 0.625rem; }
+.wi-v2 .stock-row .text-xs.font-semibold { font-size: 0.875rem; }
+
+/* Caja: pasos numerados y cifras condensadas */
+.wi-v2 .cash-title { font-size: 1rem; }
+.wi-v2 .cash-title .sale-step-n { width: 1.75rem; height: 1.75rem; font-size: 0.875rem; background: var(--text); color: var(--bg); }
+.wi-v2 .wi-cierre .kpi-value, .wi-v2 .cash-row strong { font-family: var(--cond); font-weight: 800; }
+
+/* ============================================================
+   v5.27.0 — MÁS SIMPLE: una navegación, botones en relieve,
+   tarjetas planas. Regla: SI TIENE RELIEVE, SE TOCA; si es plano,
+   es información (o una opción para elegir).
+   ============================================================ */
+
+/* --- 1. Botones: 4 tipos (principal, secundario, texto, peligro) --- */
+:root {
+  --btn-edge-p: color-mix(in oklab, var(--primary) 62%, black);
+  --btn-edge-s: oklch(0.72 0.012 220);
+  --btn-line-s: oklch(0.8 0.012 220);
+}
+[data-theme="dark"] {
+  --btn-edge-s: oklch(0.1 0.01 220);
+  --btn-line-s: oklch(0.38 0.015 220);
+}
+.btn {
+  min-height: 2.75rem; border-radius: 0.875rem; font-weight: 650; font-size: 0.9375rem;
+  padding: 0.5rem 1.125rem; transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.12s ease;
+}
+.btn:active:not(:disabled) { transform: translateY(2px); }
+.btn:focus-visible { outline: 3px solid color-mix(in oklab, var(--primary) 45%, transparent); outline-offset: 2px; }
+.btn:disabled { box-shadow: none !important; transform: none; }
+.btn-lg { min-height: 3.25rem; font-size: 1.0625rem; font-weight: 750; border-radius: 1rem; }
+@media (pointer: fine) { .btn-sm { min-height: 2.25rem; font-size: 0.8125rem; padding: 0.25rem 0.875rem; } }
+
+/* Principal: uno por pantalla */
+.btn-primary {
+  background: var(--primary); color: var(--primary-foreground);
+  border-color: color-mix(in oklab, var(--primary) 82%, black);
+  box-shadow: 0 3px 0 var(--btn-edge-p), 0 6px 14px -6px color-mix(in oklab, var(--primary) 60%, transparent), inset 0 1px 0 rgb(255 255 255 / 0.18);
+}
+.btn-primary:active:not(:disabled) { box-shadow: 0 1px 0 var(--btn-edge-p), inset 0 1px 0 rgb(255 255 255 / 0.12); }
+
+/* Secundario (también los antiguos «outline» y WhatsApp) */
+.btn-secondary, .btn-outline {
+  background: var(--bg-elevated); color: var(--text);
+  border: 1px solid var(--btn-line-s);
+  box-shadow: 0 3px 0 var(--btn-edge-s), 0 4px 10px -6px oklch(0 0 0 / 0.25);
+}
+.btn-secondary:hover:not(:disabled), .btn-outline:hover:not(:disabled) { background: var(--bg-soft); }
+.btn-secondary:active:not(:disabled), .btn-outline:active:not(:disabled) { box-shadow: 0 1px 0 var(--btn-edge-s); }
+.btn-whatsapp {
+  background: #168a4f; border-color: #0f6b3d; color: #fff;
+  box-shadow: 0 3px 0 #0b5530, 0 6px 14px -6px rgb(11 85 48 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.18);
+}
+.btn-whatsapp:active:not(:disabled) { box-shadow: 0 1px 0 #0b5530; }
+
+/* Texto: Cancelar, Ver más, Volver — sin relieve */
+.btn-text, .btn-ghost { background: transparent; box-shadow: none; border-color: transparent; }
+.btn-text { color: var(--primary); padding-inline: 0.5rem; }
+.btn-text:hover:not(:disabled) { text-decoration: underline; }
+
+/* Peligro */
+.btn-danger {
+  background: var(--danger); color: var(--danger-foreground);
+  box-shadow: 0 3px 0 color-mix(in oklab, var(--danger) 60%, black);
+}
+.btn-danger:active:not(:disabled) { box-shadow: 0 1px 0 color-mix(in oklab, var(--danger) 60%, black); }
+
+/* El teclado del PIN y el botón Vender siguen el mismo lenguaje */
+.pin-key { box-shadow: 0 3px 0 var(--btn-edge-s); border-color: var(--btn-line-s); background: var(--bg-elevated); }
+.pin-key:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--btn-edge-s); }
+.pin-key-ghost { box-shadow: none; background: transparent; border-color: transparent; }
+.pin-key-ok { box-shadow: 0 3px 0 var(--btn-edge-p); }
+
+/* --- 2. Tarjetas PLANAS (antes flotaban y parecían botones) --- */
+.card, .premium-card, .premium-rate-tile, .stat-card, .sale-form-panel, .wh-hero {
+  box-shadow: none !important;
+}
+.stock-row, .cart-item, .catalog-item, .payment-card, .card .card { box-shadow: none; }
+
+/* --- 3. Cabecera del almacén (acceso por PIN): nombre + quién vende + red --- */
+.app-header--wh { background: var(--wh, var(--primary)); color: #fff; border: 0; box-shadow: none; }
+.app-header--wh .app-header-inner { display: flex; align-items: center; gap: 0.75rem; min-height: 3.75rem; }
+.whh-title { flex: 1; min-width: 0; }
+.whh-name {
+  margin: 0; font-family: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+  font-weight: 800; font-size: 1.75rem; line-height: 1; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.whh-sub { margin: 0.125rem 0 0; font-size: 0.8125rem; color: rgb(255 255 255 / 0.88); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.whh-net {
+  flex: none; display: inline-flex; align-items: center; gap: 0.375rem;
+  font-size: 0.75rem; font-weight: 700; padding: 0.3rem 0.625rem; border-radius: 999px;
+  background: rgb(0 0 0 / 0.2); color: #fff;
+}
+.whh-net i { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: #5ee0a0; }
+.whh-net.is-off i { background: #ffb020; }
+.is-pin .app-header-section { display: none; }
+
+/* --- 4. Barra de abajo: Hoy · Inventario · [Vender] · Caja · Más --- */
+.fab { box-shadow: 0 4px 0 var(--btn-edge-p), 0 10px 22px -8px color-mix(in oklab, var(--primary) 70%, transparent) !important; }
+.fab:active { transform: translate(-50%, 3px) !important; box-shadow: 0 1px 0 var(--btn-edge-p) !important; }
+.is-pin .fab { flex-direction: column; gap: 0; }
+.fab-label { font-size: 0.625rem; font-weight: 800; line-height: 1; margin-top: 0.125rem; }
+.nav-btn { position: relative; }
+.nav-badge {
+  position: absolute; top: 0.25rem; left: calc(50% + 0.5rem);
+  min-width: 1.125rem; height: 1.125rem; padding: 0 0.25rem; border-radius: 99px;
+  background: #f2b31b; color: #2b1d00; font-size: 0.6875rem; font-weight: 800; line-height: 1.125rem; text-align: center;
+}
+.nav-badge--dot { min-width: 0.625rem; width: 0.625rem; height: 0.625rem; padding: 0; top: 0.375rem; }
+
+/* --- 5. Interior del almacén: sin pestañas (la barra de abajo manda) --- */
+.wi-v2 .wi-tabs { display: none !important; }
+.wi2-alert {
+  display: flex; align-items: center; gap: 0.625rem; width: 100%;
+  padding: 0.75rem 0.875rem; border-radius: 0.875rem; border: 1px solid #f0d48a;
+  background: #fff4da; color: #5c3d00; font-size: 0.9375rem; font-weight: 600; text-align: left; cursor: pointer;
+  box-shadow: 0 3px 0 #e2c06a;
+}
+.wi2-alert:active { transform: translateY(2px); box-shadow: 0 1px 0 #e2c06a; }
+.wi2-alert > span:first-of-type { flex: 1; }
+.wi2-alert-go { display: inline-flex; align-items: center; gap: 0.125rem; font-weight: 800; }
+[data-theme="dark"] .wi2-alert { background: #3a2c0c; border-color: #5c4614; color: #ffe2a0; box-shadow: 0 3px 0 #1f1705; }
+.wi2-h-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.wi2-h-row .wi2-h { margin: 0.25rem 0 0.5rem; }
+.cash-total { display: flex; justify-content: space-between; align-items: baseline; font-size: 0.9375rem; color: var(--text-soft); }
+.cash-total strong { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 1.75rem; color: var(--text); }
+.wi-v2 .closure-share { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+/* Títulos de sección: letra normal (la condensada solo para cifras) */
+.wi-v2 .card-title, .wi2-h { font-family: inherit; font-weight: 800; font-size: 1.0625rem; letter-spacing: 0; }
+
+/* --- 6. Venta en dos pasos (teléfono): 1) productos  2) cobrar --- */
+.sale-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.25rem 0.5rem; }
+.sale-head [data-header-badges] { margin-left: auto; }
+.sale-title { margin: 0; width: 100%; font-size: 1.375rem; font-weight: 800; line-height: 1.15; }
+.sale-title-wh { font-weight: 600; color: var(--text-muted); font-size: 1rem; }
+.is-pin .sale-title-wh, .is-pin [data-header-badges] { display: none; }
+.sale-back, .sale-back-cart { margin-left: -0.5rem; }
+.sale-back-cart { display: none; }
+.sale-pay-summary {
+  display: none; align-items: center; gap: 0.75rem; width: 100%; text-align: left; cursor: pointer;
+  padding: 0.875rem 1rem; border-radius: 0.875rem; border: 1px solid var(--border); background: var(--bg-soft); color: var(--text);
+}
+.sale-pay-summary span:first-child { flex: 1; color: var(--text-soft); font-size: 0.9375rem; }
+.sale-pay-summary strong { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 1.75rem; }
+.sale-pay-change { color: var(--primary); font-weight: 700; font-size: 0.875rem; }
+@media (max-width: 1023.98px) {
+  .sale-form-panel[data-step="cart"] .sale-pay-part { display: none !important; }
+  .sale-form-panel[data-step="pay"] .sale-cart-part { display: none !important; }
+  .sale-form-panel[data-step="pay"] .sale-pay-summary { display: flex; }
+  .sale-form-panel[data-step="pay"] .sale-back { display: none; }
+  .sale-form-panel[data-step="pay"] .sale-back-cart { display: inline-flex; }
+  .sale-form-panel[data-step="pay"] ~ .checkout-bar { display: none !important; }
+  .sale-form-panel[data-step="cart"] ~ .checkout-bar.is-hidden { display: flex !important; opacity: 1; transform: none; pointer-events: auto; }
+}
+/* Caja: primero contar y cerrar; lo ganado después */
+@media (max-width: 1279.98px) {
+  .wi-layout[data-sec-active="caja"] > .wi-cierre { order: 1; }
+  .wi-layout[data-sec-active="caja"] > .wi-ganado { order: 2; }
+}
+@media (max-width: 1023.98px) {
+  .sale-form-panel[data-step="pay"] #payment-section > .sale-step { display: none; }
+}
+.app-header--wh .whh-name { font-size: 1.75rem !important; }
+.app-header--wh .whh-sub { font-size: 0.8125rem !important; }
+
+/* ============================================================
+   v5.27.0 (2) — Más detalle: cabecera sobria, tarjetas en relieve
+   con límites claros entre apartados. Los BOTONES siguen teniendo
+   un canto duro abajo (se hunden al tocar); las tarjetas, una sombra
+   suave y un borde: así se distinguen.
+   ============================================================ */
+:root {
+  --page-bg: oklch(0.945 0.008 220);
+  --card-line: oklch(0.85 0.012 220);
+  --card-head: oklch(0.975 0.005 220);
+  --card-raise:
+    inset 0 1px 0 rgb(255 255 255 / 0.9),
+    0 1px 2px oklch(0.3 0.02 220 / 0.10),
+    0 2px 0 oklch(0.86 0.01 220),
+    0 14px 26px -16px oklch(0.25 0.03 220 / 0.40);
+  --cell-bg: oklch(0.975 0.004 220);
+}
+[data-theme="dark"] {
+  --page-bg: oklch(0.14 0.012 220);
+  --card-line: oklch(0.32 0.015 220);
+  --card-head: oklch(0.235 0.016 220);
+  --card-raise:
+    inset 0 1px 0 rgb(255 255 255 / 0.05),
+    0 2px 0 oklch(0.09 0.01 220),
+    0 16px 30px -16px rgb(0 0 0 / 0.8);
+  --cell-bg: oklch(0.19 0.014 220);
+}
+.is-pin { background: var(--page-bg); }
+.is-pin .bg-diagonal { display: none; }
+
+/* Cabecera del almacén: sobria; el color del almacén solo en la etiqueta */
+.app-header--wh {
+  background: var(--bg-elevated) !important; color: var(--text) !important;
+  border-bottom: 1px solid var(--card-line) !important;
+  box-shadow: 0 6px 16px -12px oklch(0.25 0.03 220 / 0.35) !important;
+}
+.app-header--wh .app-header-inner { min-height: 3.5rem; gap: 0.625rem; }
+.whh-code {
+  flex: none; min-width: 2.75rem; height: 2.25rem; padding: 0 0.5rem; border-radius: 0.625rem;
+  display: grid; place-items: center; font-weight: 800; font-size: 0.8125rem; letter-spacing: 0.02em;
+  background: color-mix(in oklab, var(--wh, var(--primary)) 14%, var(--bg-elevated));
+  color: color-mix(in oklab, var(--wh, var(--primary)) 85%, var(--text));
+  border: 1px solid color-mix(in oklab, var(--wh, var(--primary)) 35%, transparent);
+}
+.app-header--wh .whh-name { color: var(--text); font-size: 1.5rem !important; }
+.app-header--wh .whh-sub { color: var(--text-muted); }
+.whh-net { background: var(--bg-soft); color: var(--text-soft); border: 1px solid var(--card-line); }
+.whh-net i { background: #1fa66a; }
+.whh-net.is-off { background: #fff4da; color: #6b4a00; border-color: #f0d48a; }
+.whh-net.is-off i { background: #e0a000; }
+[data-theme="dark"] .whh-net.is-off { background: #3a2c0c; color: #ffe2a0; border-color: #5c4614; }
+
+/* Tarjetas en relieve, con cabecera marcada */
+.card, .premium-card, .premium-rate-tile, .stat-card, .sale-form-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--card-line) !important;
+  box-shadow: var(--card-raise) !important;
+}
+.wi-v2 > .card, .wi-v2 > .wi-ganado > .card { border-radius: 1.125rem; }
+.card-header {
+  background: var(--card-head);
+  border-bottom: 1px solid var(--card-line);
+}
+.wi-v2 .card-header { padding: 0.75rem 1rem; }
+.wi-v2 .card-title { display: flex; align-items: center; gap: 0.5rem; }
+.wi-v2 .card-title::before {
+  content: ""; width: 0.25rem; height: 1.125rem; border-radius: 99px; background: var(--primary); flex: none;
+}
+.card .card { box-shadow: none !important; }
+
+/* Casillas: cada dato en su celda, con borde y fondo propio */
+.stock-row, .cart-item, .restock-row, .wi2-sale, .earn-shift, .cash-float, .cash-brand, .kpi-cell {
+  background: var(--cell-bg);
+  border: 1px solid var(--card-line);
+  box-shadow: 0 1px 0 var(--card-line);
+}
+.wi-v2 .stock-row { background: var(--bg-elevated); }
+.cash-block {
+  background: var(--cell-bg); border: 1px solid var(--card-line); border-radius: 0.875rem; padding: 0.75rem;
+}
+.cash-block + .cash-block { border-top: 1px solid var(--card-line); padding-top: 0.75rem; }
+.cash-row:not(.cash-head) { border-top: 1px dashed var(--card-line); padding-top: 0.375rem; }
+
+/* «Ventas de hoy» como tarjeta con su cabecera */
+.wi-v2 > .card.wi2-recent { padding: 0; }
+.wi2-recent .wi2-h-row { background: var(--card-head); border-bottom: 1px solid var(--card-line); padding: 0.5rem 0.75rem 0.5rem 1rem; }
+.wi2-recent .wi2-h-row .wi2-h { margin: 0; display: flex; align-items: center; gap: 0.5rem; }
+.wi2-recent .wi2-h-row .wi2-h::before { content: ""; width: 0.25rem; height: 1.125rem; border-radius: 99px; background: var(--primary); }
+.wi2-recent .wi2-recent-list { padding: 0.75rem; }
+
+/* El resumen oscuro: con relieve y un filo superior de color */
+.wi-v2 .card.wi2-sum {
+  border: 1px solid #0b1411 !important;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 2px 0 #0b1411, 0 16px 30px -14px rgb(0 0 0 / 0.55) !important;
+  background: linear-gradient(180deg, #1c2925 0%, #141e1b 100%);
+}
+/* Stock / Otros almacenes: es una opción para elegir → plano (no botón) */
+.wi-v2 [data-inv-tab] {
+  box-shadow: none !important; transform: none !important; min-height: 2.5rem;
+  background: var(--cell-bg) !important; color: var(--text-soft) !important; border: 1px solid var(--card-line) !important;
+}
+.wi-v2 [data-inv-tab].btn-primary {
+  background: color-mix(in oklab, var(--primary) 14%, var(--bg-elevated)) !important;
+  color: var(--text) !important; border: 2px solid var(--primary) !important;
+}
+.wi-v2 > .card.wi-pedido .card-header { background: transparent; border-bottom-color: #f0d48a; }
+[data-theme="dark"] .wi-v2 > .card.wi-pedido .card-header { border-bottom-color: #5c4614; }
+.wi-v2 > .card.wi-pedido { border-color: #f0d48a !important; }
+[data-theme="dark"] .wi-v2 > .card.wi-pedido { border-color: #5c4614 !important; }
+
+/* ============================================================
+   v5.27.0 (3) — Pantalla de venta: productos a la vista
+   ============================================================ */
+/* En el teléfono la venta no va dentro de otra tarjeta: cada apartado es la suya */
+@media (max-width: 1023.98px) {
+  .sale-form-panel { background: transparent !important; border: 0 !important; box-shadow: none !important; padding: 0 !important; gap: 0.875rem !important; }
+}
+.sale-head { gap: 0.25rem 0.5rem; }
+.sale-title { font-size: 1.5rem; }
+/* Por unidad / Por caja: opción para elegir (plana, la elegida marcada) */
+.sale-form-panel > .tabs-list {
+  background: var(--cell-bg); border: 1px solid var(--card-line); padding: 0.25rem; border-radius: 0.875rem;
+}
+.sale-form-panel > .tabs-list .tabs-trigger { min-height: 2.75rem; border-radius: 0.625rem; font-weight: 700; color: var(--text-soft); border: 2px solid transparent; }
+.sale-form-panel > .tabs-list .tabs-trigger.active {
+  background: var(--bg-elevated); color: var(--text); border-color: var(--primary);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.12);
+}
+.sale-retail { display: flex; flex-direction: column; gap: 0.875rem; }
+.sp-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.625rem 0.75rem 0.625rem 1rem !important; }
+.sp-head .card-title { margin: 0; display: flex; align-items: center; gap: 0.5rem; font-size: 1.0625rem; font-weight: 800; }
+.sp-head .card-title::before { content: ""; width: 0.25rem; height: 1.125rem; border-radius: 99px; background: var(--primary); }
+.sp-head-meta { font-size: 0.9375rem; color: var(--text-soft); }
+.sp-head-meta strong { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 1.375rem; color: var(--text); }
+.sp-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.625rem; }
+.sp-chips { display: flex; gap: 0.375rem; overflow-x: auto; scrollbar-width: none; padding-bottom: 0.125rem; }
+.sp-chips::-webkit-scrollbar { display: none; }
+.sp-chip {
+  flex: none; min-height: 2.25rem; padding: 0 0.875rem; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--card-line); background: var(--cell-bg); color: var(--text-soft); font-weight: 700; font-size: 0.875rem;
+}
+.sp-chip.on { background: var(--text); color: var(--bg-elevated); border-color: var(--text); }
+.sale-plist { display: flex; flex-direction: column; gap: 0.5rem; }
+.sp-row {
+  display: flex; align-items: center; gap: 0.625rem; padding: 0.625rem 0.625rem 0.625rem 0.75rem;
+  background: var(--cell-bg); border: 1px solid var(--card-line); border-radius: 0.875rem;
+  box-shadow: 0 1px 0 var(--card-line);
+}
+.sp-row.in-cart { border: 2px solid var(--primary); background: color-mix(in oklab, var(--primary) 7%, var(--bg-elevated)); padding: calc(0.625rem - 1px) calc(0.625rem - 1px) calc(0.625rem - 1px) calc(0.75rem - 1px); }
+.sp-row.is-out { opacity: 0.55; }
+.sp-info { flex: 1; min-width: 0; }
+.sp-name { font-weight: 700; font-size: 0.9375rem; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.sp-top { color: #d99a00; margin-right: 0.25rem; }
+.sp-sub { font-size: 0.8125rem; color: var(--text-muted); margin-top: 0.125rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-low { color: #a86a00; font-weight: 700; }
+.sp-out { color: var(--danger); font-weight: 700; }
+[data-theme="dark"] .sp-low { color: #ffc94a; }
+.sp-price { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 1.375rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sp-add { width: 2.75rem; min-width: 2.75rem; height: 2.75rem; padding: 0; color: var(--primary) !important; }
+.sp-step { display: flex; align-items: center; gap: 0.25rem; }
+.sp-step .btn-icon { width: 2.5rem; min-width: 2.5rem; height: 2.5rem; min-height: 2.5rem; padding: 0; }
+.sp-qty { min-width: 1.5rem; text-align: center; font-weight: 800; font-size: 1.0625rem; }
+.sp-empty { padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.9375rem; }
+.sale-incart-list { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.sale-incart .cart-item { border-radius: 0.875rem; }
+.sale-extras { background: var(--bg-elevated); border: 1px solid var(--card-line); box-shadow: var(--card-raise); border-radius: 1rem; padding: 0.75rem 1rem; }
+@media (max-width: 380px) { .sp-price { font-size: 1.1875rem; } }
+/* Cabecera de la venta en una fila: ← Nueva venta */
+.sale-head { flex-wrap: nowrap !important; align-items: center; }
+.sale-head .sale-title { width: auto; flex: 1; min-width: 0; margin: 0; }
+.sale-back, .sale-back-cart { margin-left: 0 !important; width: 2.75rem; min-width: 2.75rem; height: 2.75rem; padding: 0 !important; flex: none; }
+/* Fila con el producto ya en la venta: nombre entero arriba, precio y − n + abajo */
+.sp-row.in-cart { flex-wrap: wrap; row-gap: 0.5rem; }
+.sp-row.in-cart .sp-info { flex-basis: 100%; }
+.sp-row.in-cart .sp-price { flex: 1; }
+.sp-sub { white-space: normal; }
+
+/* ============================================================
+   v5.27.0 (4) — Catálogo con vistas tipo Windows + mayorista
+   ============================================================ */
+.sp-catalog-btn { justify-content: space-between !important; }
+.sp-catalog-n { font-size: 0.8125rem; font-weight: 700; color: var(--text-soft); background: var(--cell-bg); border: 1px solid var(--card-line); border-radius: 999px; padding: 0.125rem 0.625rem; }
+
+/* Vistas de iconos: columnas y tamaños */
+#catalog-list.as-cards, .ap-preview .catalog-list.as-cards { display: grid; gap: 0.625rem; }
+.catalog-list.view-xlarge { grid-template-columns: minmax(0, 1fr) !important; }
+.catalog-list.view-large  { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+.catalog-list.view-medium { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+.catalog-list.view-small  { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; gap: 0.5rem !important; }
+@media (min-width: 640px) {
+  .catalog-list.view-large  { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+  .catalog-list.view-medium { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+  .catalog-list.view-small  { grid-template-columns: repeat(6, minmax(0, 1fr)) !important; }
+  .catalog-list.view-xlarge { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
+.catalog-list .catalog-fav-header { grid-column: 1 / -1; }
+.catalog-tile { background: var(--bg-elevated); border: 1px solid var(--card-line); box-shadow: 0 1px 0 var(--card-line), 0 8px 16px -12px oklch(0.3 0.03 220 / 0.35); }
+/* Muy grandes: foto ancha, nombre y precio grandes */
+.view-xlarge .catalog-tile .ct-pic { aspect-ratio: 16 / 9; }
+.view-xlarge .ct-name { font-size: 1.1875rem; -webkit-line-clamp: 2; }
+.view-xlarge .ct-sub { font-size: 0.875rem; }
+.view-xlarge .ct-price { font-size: 1.875rem; }
+.view-xlarge .ct-add, .view-xlarge .ct-stepper { min-height: 3rem; font-size: 1rem; }
+/* Grandes: foto cuadrada */
+.view-large .catalog-tile .ct-pic { aspect-ratio: 1 / 1; }
+.view-large .ct-name { font-size: 1rem; }
+.view-large .ct-price { font-size: 1.5rem; }
+/* Pequeños: solo foto, nombre corto y precio; «+» compacto */
+.view-small .catalog-tile .ct-pic { aspect-ratio: 1 / 1; }
+.view-small .ct-flag { font-size: 0.5625rem; padding: 0.125rem 0.3125rem; top: 0.25rem; }
+.view-small .ct-flag.ct-fav { display: none; }
+.view-small .ct-body { padding: 0.375rem 0.5rem 0; }
+.view-small .ct-name { font-size: 0.75rem; font-weight: 700; -webkit-line-clamp: 2; }
+.view-small .ct-sub { display: none; }
+.view-small .ct-price { font-size: 1.0625rem; padding: 0.125rem 0.5rem 0.25rem; }
+.view-small .ct-add { margin: 0 0.375rem 0.375rem; min-height: 2.25rem; font-size: 1.125rem; }
+.view-small .ct-stepper { margin: 0 0.25rem 0.375rem; gap: 0.125rem; }
+.view-small .ct-stepper .btn-icon { min-width: 2rem !important; min-height: 2rem !important; width: 2rem; height: 2rem; padding: 0; }
+
+/* Selector «Ver» del diálogo de apariencia */
+.ap-views { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.375rem; }
+@media (max-width: 420px) { .ap-views { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.ap-view {
+  display: flex; flex-direction: column; align-items: center; gap: 0.375rem; padding: 0.5rem 0.25rem; cursor: pointer;
+  border: 2px solid var(--card-line); border-radius: 0.75rem; background: var(--cell-bg); color: var(--text);
+}
+.ap-view.on { border-color: var(--primary); background: color-mix(in oklab, var(--primary) 10%, var(--bg-elevated)); }
+.ap-view-label { font-size: 0.6875rem; font-weight: 700; line-height: 1.15; text-align: center; }
+.ap-mini { width: 3.25rem; height: 3.25rem; display: grid; gap: 2px; padding: 3px; border-radius: 6px; background: var(--bg-elevated); border: 1px solid var(--card-line); }
+.ap-mini i { display: flex; flex-direction: column; gap: 1px; min-width: 0; min-height: 0; }
+.ap-mini b { flex: 1; border-radius: 2px; background: color-mix(in oklab, var(--primary) 55%, var(--card-line)); }
+.ap-mini s { height: 2px; border-radius: 1px; background: var(--text-muted); text-decoration: none; }
+.ap-mini--xlarge { grid-template-columns: 1fr; }
+.ap-mini--large { grid-template-columns: 1fr 1fr; }
+.ap-mini--medium { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.ap-mini--small { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); }
+.ap-mini--details { grid-template-rows: repeat(4, 1fr); }
+.ap-mini--details i { flex-direction: row; align-items: center; gap: 2px; }
+.ap-mini--details b { flex: none; width: 0.5rem; height: 0.5rem; }
+.ap-mini--details s { flex: 1; }
+.ap-preview { border: 1px dashed var(--card-line); border-radius: 0.875rem; padding: 0.5rem; background: var(--cell-bg); max-height: 19rem; overflow: auto; }
+.ap-preview .catalog-list:not(.as-cards) { display: flex; flex-direction: column; gap: 0.375rem; }
+.ap-preview .catalog-row .cr-price { font-weight: 800; white-space: nowrap; }
+.ap-preview .catalog-list.view-medium { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+.ap-preview .catalog-list.view-small { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+.ap-preview .catalog-list.view-large { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+.ap-preview .catalog-list.view-xlarge { grid-template-columns: minmax(0, 1fr) !important; }
+
+/* Mayorista */
+.ws-pick-list { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.ws-pick {
+  display: flex; align-items: center; gap: 0.75rem; width: 100%; text-align: left; cursor: pointer;
+  padding: 0.75rem 0.875rem; border-radius: 0.875rem; color: var(--text);
+  background: var(--bg-elevated); border: 1px solid var(--btn-line-s, var(--card-line));
+  box-shadow: 0 3px 0 var(--btn-edge-s, var(--card-line));
+}
+.ws-pick:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 1px 0 var(--btn-edge-s, var(--card-line)); }
+.ws-pick:disabled { opacity: 0.55; box-shadow: none; cursor: not-allowed; }
+.ws-pick-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.125rem; }
+.ws-pick-name { font-weight: 800; font-size: 0.9375rem; line-height: 1.25; }
+.ws-pick-sub { font-size: 0.8125rem; color: var(--text-muted); }
+.ws-pick-price { display: flex; flex-direction: column; align-items: flex-end; font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 1.375rem; line-height: 1; }
+.ws-pick-price small { font-family: inherit; font-size: 0.6875rem; font-weight: 600; color: var(--text-muted); }
+.ws-body { padding: 0.875rem; display: flex; flex-direction: column; gap: 0.875rem; }
+.ws-facts { display: flex; flex-wrap: wrap; gap: 0.375rem 1rem; font-size: 0.875rem; color: var(--text-soft); }
+.ws-boxes { display: flex; align-items: center; gap: 0.75rem; background: var(--cell-bg); border: 1px solid var(--card-line); border-radius: 0.875rem; padding: 0.625rem 0.75rem; }
+.ws-boxes-label { font-weight: 800; }
+.ws-boxes-ctrl { display: flex; align-items: center; gap: 0.375rem; }
+.ws-boxes-ctrl .btn-icon { width: 2.75rem; height: 2.75rem; min-width: 2.75rem; padding: 0; }
+.ws-boxes-input { width: 4rem; text-align: center; font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 1.5rem !important; padding: 0.25rem; }
+.ws-boxes-units { margin-left: auto; font-size: 0.875rem; color: var(--text-muted); white-space: nowrap; }
+.ws-tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: 0.5rem; }
+.ws-tier { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.25rem; padding: 0.5rem 0.625rem; border-radius: 0.75rem; border: 1px solid var(--card-line); background: var(--bg-elevated); }
+.ws-tier.on { border: 2px solid var(--primary); background: color-mix(in oklab, var(--primary) 9%, var(--bg-elevated)); }
+.ws-tier-range { flex-basis: 100%; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); }
+.ws-tier strong { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 1.375rem; }
+.ws-tier-unit { font-size: 0.75rem; color: var(--text-muted); }
+.ws-tier-note { flex-basis: 100%; font-size: 0.75rem; color: var(--primary); font-weight: 700; }
+.ws-price { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0.25rem 0.5rem; font-weight: 700; font-size: 0.875rem; }
+.ws-price > span { grid-column: 1 / -1; }
+.ws-price small { color: var(--text-muted); font-weight: 600; }
+.ws-comm { border: 1px solid var(--card-line); border-radius: 0.875rem; padding: 0.625rem 0.75rem; background: var(--cell-bg); }
+.ws-comm > summary { cursor: pointer; font-weight: 700; font-size: 0.875rem; display: flex; justify-content: space-between; gap: 0.5rem; list-style: none; }
+.ws-comm > summary::-webkit-details-marker { display: none; }
+.ws-comm > summary span { font-weight: 600; color: var(--text-muted); font-size: 0.8125rem; text-align: right; }
+.ws-total { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; padding-top: 0.75rem; border-top: 2px dashed var(--card-line); color: var(--text-soft); }
+.ws-total strong { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 2.25rem; line-height: 1; color: var(--text); }
+.sp-head .card-title { flex: 1; min-width: 0; }
+.sp-head .card-title .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.catalog-tile .ct-pic { background: var(--cell-bg) !important; border-bottom: 1px solid var(--card-line); color: var(--text-muted); }
+.view-small .catalog-tile .ct-pic { aspect-ratio: 4 / 3; }
+.view-medium .catalog-tile .ct-pic { aspect-ratio: 4 / 3; }
+.sp-catalog-btn .sp-catalog-n { background: rgb(255 255 255 / 0.2); border-color: transparent; color: inherit; }
+.sale-products .top-sellers { margin-top: 0; }
+/* Catálogo | Escanear, mitad y mitad */
+.sp-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.625rem; }
+.sp-actions.has-scan { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.sp-actions .btn { width: 100%; }
+.sp-actions.has-scan .sp-catalog-btn, .sp-scan-btn {
+  flex-direction: column; justify-content: center !important; gap: 0.25rem;
+  min-height: 4.75rem; padding: 0.5rem; white-space: normal; text-align: center; line-height: 1.15;
+}
+.sp-actions.has-scan .sp-catalog-btn > span:first-child { flex-direction: column; gap: 0.25rem; }
+.sp-actions.has-scan .sp-catalog-n { font-size: 0.75rem; padding: 0.0625rem 0.5rem; }
+.sp-scan-btn svg { width: 1.625rem; height: 1.625rem; }

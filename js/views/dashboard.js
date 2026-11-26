@@ -24,7 +24,8 @@ import { mountSettingsView } from "./settings.js";
 import { mountSalesHistoryView } from "./sales-history.js";
 import { mountTeamStatusView } from "./team-status.js"; // v5.18.0: «¿ya se subió mi venta?»
 import { mountManagersView } from "./managers.js";
-import { mountWarehouseInterior } from "./warehouse-interior.js";
+import { mountWarehouseInterior, exitWarehouse } from "./warehouse-interior.js";
+import { warehouseColor } from "../ui.js";
 import { createSyncBanner } from "../components/sync-banner.js";
 
 
@@ -44,6 +45,17 @@ const NAV_ITEMS = [
   // «Vender de nuevo»); «Estado del equipo» sigue en el menú ☰.
   { id: "history", label: "Historial", icon: "receipt" },
 ];
+// v5.27.0: dentro del almacén (acceso por PIN) UNA sola navegación:
+// Hoy · Inventario · [Vender] · Caja · Más. Las secciones del almacén son
+// vistas «wi-*» que pintan el interior en esa sección.
+const PIN_NAV_ITEMS = [
+  { id: "dashboard", label: "Hoy", icon: "home" },
+  { id: "wi-inv", label: "Inventario", icon: "boxes" },
+  { id: "wi-caja", label: "Caja", icon: "wallet" },
+  { id: "more", label: "Más", icon: "more" },
+];
+const WI_SECTION = { dashboard: "hoy", "wi-inv": "inv", "wi-caja": "caja" };
+const isPinUser = (u) => u?.role === "empleado_pin";
 const navItemsFor = (role) => NAV_ITEMS.filter((item) =>
   (!item.hideForRoles || !item.hideForRoles.includes(role)) &&
   (!item.onlyForRoles || item.onlyForRoles.includes(role)));
@@ -70,6 +82,8 @@ const DRAWER_ADMIN_ITEMS = [
 
 // Título de la sección actual (en PC la barra superior muestra la sección; el logo ya está en el menú)
 function sectionLabel(id) {
+  if (id === "wi-inv") return "Inventario";
+  if (id === "wi-caja") return "Caja";
   return [...DRAWER_ITEMS, ...DRAWER_ADMIN_ITEMS].find((i) => i.id === id)?.label || "Inicio";
 }
 
@@ -111,10 +125,27 @@ export function mountDashboardView(container, navigate) {
 
     const warehouse = state.currentWarehouse;
 
-    container.innerHTML = `
-      <div class="mobile-shell">
-        <div class="bg-diagonal"></div>
+    const pin = isPinUser(user) && !!warehouse;
+    const navList = pin ? PIN_NAV_ITEMS : navItemsFor(user.role);
+    const navBtn = (item) => `
+                <button class="nav-btn ${activeView === item.id ? 'active' : ''}" data-nav="${item.id}" aria-label="${item.label}" aria-current="${activeView === item.id ? 'page' : 'false'}">${icon(item.icon, 20)}<span class="nav-btn-label">${item.label}</span></button>`;
+    const pinHeader = pin ? `
+        <header class="app-header app-header--wh" style="--wh:${warehouseColor(warehouse)}">
+          <div class="app-header-inner">
+            <span class="whh-code" aria-hidden="true">${esc(warehouse.code || "")}</span>
+            <div class="whh-title">
+              <h1 class="whh-name">${esc(warehouse.name)}</h1>
+              <p class="whh-sub">${[user.sellerName, warehouse.address].filter(Boolean).map(esc).join(" · ") || "Acceso por PIN"}</p>
+            </div>
+            <span class="whh-net" id="whh-net" role="status"></span>
+          </div>
+        </header>` : "";
 
+    container.innerHTML = `
+      <div class="mobile-shell${pin ? " is-pin" : ""}">
+        <div class="bg-diagonal"></div>
+        ${pinHeader}
+        ${pin ? "" : `
         <header class="app-header">
           <div class="app-header-inner">
             <div class="flex items-center gap-2">
@@ -134,7 +165,7 @@ export function mountDashboardView(container, navigate) {
               <button class="btn btn-ghost btn-icon" id="theme-btn" aria-label="Cambiar tema claro/oscuro" title="Tema">${state.theme === 'dark' ? icon("sun", 18) : icon("moon", 18)}</button>
             </div>
           </div>
-        </header>
+        </header>`}
 
         <main class="mobile-main">
           <div id="sync-banner-mount"></div>
@@ -143,19 +174,11 @@ export function mountDashboardView(container, navigate) {
 
         <nav class="bottom-nav" aria-label="Navegación principal">
           <div style="position:relative">
-            ${user.role !== "admin" ? `<button class="fab" id="fab-sell" aria-label="Registrar nueva venta" title="Registrar venta">${icon("cart", 24)}</button>` : ''}
+            ${user.role !== "admin" ? `<button class="fab" id="fab-sell" aria-label="Registrar nueva venta" title="Registrar venta">${icon("cart", 24)}${pin ? `<span class="fab-label">Vender</span>` : ""}</button>` : ''}
             <div class="bottom-nav-bar">
-              ${navItemsFor(user.role)
-                .slice(0, 2)
-                .map((item) => `
-                <button class="nav-btn ${activeView === item.id ? 'active' : ''}" data-nav="${item.id}" aria-label="${item.label}" aria-current="${activeView === item.id ? 'page' : 'false'}">${icon(item.icon, 20)}<span class="nav-btn-label">${item.label}</span></button>
-              `).join('')}
+              ${navList.slice(0, 2).map(navBtn).join('')}
               <div class="flex items-center justify-center"></div>
-              ${navItemsFor(user.role)
-                .slice(2)
-                .map((item) => `
-                <button class="nav-btn ${activeView === item.id ? 'active' : ''}" data-nav="${item.id}" aria-label="${item.label}" aria-current="${activeView === item.id ? 'page' : 'false'}">${icon(item.icon, 20)}<span class="nav-btn-label">${item.label}</span></button>
-              `).join('')}
+              ${navList.slice(2).map(navBtn).join('')}
             </div>
           </div>
         </nav>
@@ -173,28 +196,17 @@ export function mountDashboardView(container, navigate) {
     });
 
     container.querySelector("#fab-sell")?.addEventListener("click", () => goTo("sales"));
-    container.querySelector("#open-drawer-btn").addEventListener("click", openDrawer);
-    container.querySelector("#refresh-btn").addEventListener("click", () => {
+    container.querySelector("#open-drawer-btn")?.addEventListener("click", openDrawer);
+    container.querySelector("#refresh-btn")?.addEventListener("click", () => {
       const btn = container.querySelector("#refresh-btn");
       btn.innerHTML = `<div class="spinner spinner-sm"></div>`;
       setTimeout(() => { btn.innerHTML = icon("refresh", 18); if (cleanup) try { cleanup(); } catch {} renderActiveView(); }, 500);
     });
-    container.querySelector("#search-trigger-btn").addEventListener("click", () => {
+    container.querySelector("#search-trigger-btn")?.addEventListener("click", () => {
       if (window.__openGlobalSearch) window.__openGlobalSearch();
     });
-    container.querySelector("#theme-btn").addEventListener("click", () => {
-      const current = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : store.getState().theme;
-      const next = current === 'dark' ? 'light' : 'dark';
-      store.setTheme(next);
-      // v5.25.0: si el almacén fija su fondo, el botón lo cambia y lo recuerda
-      const wh = store.getState().currentWarehouse;
-      if (wh) {
-        const ap = getAppearance(wh.id);
-        if (ap.background !== "app") saveAppearance(wh.id, { ...ap, background: next });
-        applyAppearance(getAppearance(wh.id), applyTheme, next);
-      }
-      renderShell();
-    });
+    if (pin) syncNetDot();
+    container.querySelector("#theme-btn")?.addEventListener("click", toggleTheme);
 
     renderActiveView();
 
@@ -209,11 +221,53 @@ export function mountDashboardView(container, navigate) {
     renderDrawer(); // en PC queda fijo a la izquierda
   }
 
+  // Tema claro/oscuro (barra superior o, en el almacén, el menú «Más»)
+  function toggleTheme() {
+    const current = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : store.getState().theme;
+    const next = current === 'dark' ? 'light' : 'dark';
+    store.setTheme(next);
+    // v5.25.0: si el almacén fija su fondo, el botón lo cambia y lo recuerda
+    const wh = store.getState().currentWarehouse;
+    if (wh) {
+      const ap = getAppearance(wh.id);
+      if (ap.background !== "app") saveAppearance(wh.id, { ...ap, background: next });
+      applyAppearance(getAppearance(wh.id), applyTheme, next);
+    }
+    renderShell();
+  }
+
+  // v5.27.0: punto de conexión en la cabecera del almacén (sustituye a ⟳)
+  function syncNetDot() {
+    const el = container.querySelector("#whh-net");
+    if (!el) return;
+    const on = navigator.onLine !== false;
+    el.className = `whh-net ${on ? "is-on" : "is-off"}`;
+    el.innerHTML = `<i></i>${on ? "En línea" : "Sin red"}`;
+  }
+
   // v5.20.0: cambiar de sección dejando rastro en el historial, para que el
   // botón «atrás» del teléfono vuelva a Inicio en vez de salir de la app.
   // Inicio ⇄ sección: una entrada; sección → sección: se reemplaza.
   function goTo(view) {
     if (!view) return;
+    // v5.27.0: secciones del almacén (Hoy / Inventario / Caja) sin recargar
+    const pinNow = isPinUser(store.getState().currentUser);
+    if (pinNow && WI_SECTION[view]) {
+      try { sessionStorage.setItem("mannol-wi-section", WI_SECTION[view]); } catch {}
+      if (WI_SECTION[activeView] && view !== activeView) {
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.set("view", "dashboard");
+          if (view === "dashboard") url.searchParams.delete("tab"); else url.searchParams.set("tab", view);
+          window.history.replaceState(view === "dashboard" ? {} : { mannolTab: view }, "", url.toString());
+        } catch {}
+        activeView = view;
+        window.dispatchEvent(new CustomEvent("mannol:wi-section", { detail: { section: WI_SECTION[view] } }));
+        try { window.scrollTo({ top: 0 }); } catch {}
+        updateNavActive();
+        return;
+      }
+    }
     const pushed = !!window.history.state?.mannolTab;
     if (view === "dashboard" && pushed) {
       window.history.back(); // el popstate (mannol:tab) pinta Inicio
@@ -270,7 +324,22 @@ export function mountDashboardView(container, navigate) {
     if (shellEl) shellEl.classList.toggle("has-dock", docked);
     if (!drawerOpen && !docked) { dc.innerHTML = ""; return; }
     const warehouse = state.currentWarehouse;
-    const allowedDrawer = DRAWER_ITEMS.filter((i) => i.roles.includes(user.role));
+    const pinMode = isPinUser(user) && !!warehouse;
+    // v5.27.0: en el almacén el menú es «Más»: solo lo que NO está en la barra
+    // de abajo (en PC, sin barra, lleva también las secciones y «Vender»).
+    const allowedDrawer = pinMode
+      ? [
+          ...(docked ? [
+            { id: "dashboard", label: "Hoy", icon: "home" },
+            { id: "wi-inv", label: "Inventario", icon: "boxes" },
+            { id: "wi-caja", label: "Caja", icon: "wallet" },
+            { id: "sales", label: "Vender", icon: "cart" },
+          ] : []),
+          { id: "history", label: "Historial de ventas", icon: "clock" },
+          { id: "team-status", label: "¿Se subieron mis ventas?", icon: "activity" },
+          { id: "stock", label: "Tabla de inventario", icon: "listTree" },
+        ]
+      : DRAWER_ITEMS.filter((i) => i.roles.includes(user.role));
     const allowedAdmin = DRAWER_ADMIN_ITEMS.filter((i) => i.roles.includes(user.role));
 
     dc.innerHTML = `
@@ -285,14 +354,14 @@ export function mountDashboardView(container, navigate) {
           ${docked ? "" : `<button class="btn btn-ghost btn-icon" id="close-drawer" aria-label="Cerrar menú" title="Cerrar">${icon("x", 18)}</button>`}
         </div>
         <div class="drawer-body">
-          <div class="card-dark" style="background: var(--bg-soft); color: var(--text); border-color: var(--border); border-radius: var(--radius-lg); padding: 0.75rem; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.75rem;">
+          ${pinMode ? "" : `<div class="card-dark" style="background: var(--bg-soft); color: var(--text); border-color: var(--border); border-radius: var(--radius-lg); padding: 0.75rem; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.75rem;">
             <div class="brand-logo" style="background: var(--primary-tint); color: var(--primary)">${user.role === 'admin' ? icon("shield", 18) : icon("store", 18)}</div>
             <div style="flex:1; min-width: 0;">
               <p class="text-sm font-semibold truncate" style="margin:0">${user.displayName}</p>
               <p class="text-xs text-muted" style="margin:0">${user.role === 'admin' ? 'Administrador' : (warehouse?.code || 'Local')}</p>
             </div>
             <span class="badge badge-outline" style="font-size: 0.5625rem">${user.role.toUpperCase()}</span>
-          </div>
+          </div>`}
           <div style="display:flex;flex-direction:column;gap:0.25rem">
             ${allowedDrawer.map((item) => `<button class="drawer-item ${activeView === item.id ? 'active' : ''}" data-drawer-nav="${item.id}"${activeView === item.id ? ' aria-current="page"' : ''}>${icon(item.icon, 16)}<span style="flex:1;text-align:left">${item.label}</span></button>`).join('')}
           </div>
@@ -305,11 +374,15 @@ export function mountDashboardView(container, navigate) {
           ` : ''}
         </div>
         <div class="drawer-footer">
+          ${pinMode ? `
+            <button class="drawer-item" id="pin-search-btn" style="margin-bottom:0.25rem">${icon("search", 16)}<span style="flex:1;text-align:left">Buscar</span></button>
+            <button class="drawer-item" id="pin-refresh-btn" style="margin-bottom:0.25rem">${icon("refresh", 16)}<span style="flex:1;text-align:left">Actualizar datos</span></button>
+            <button class="drawer-item" id="pin-theme-btn" style="margin-bottom:0.25rem">${state.theme === "dark" ? icon("sun", 16) : icon("moon", 16)}<span style="flex:1;text-align:left">${state.theme === "dark" ? "Modo claro" : "Modo oscuro"}</span></button>` : ""}
           ${warehouse ? `<button class="drawer-item" id="appearance-btn" style="margin-bottom:0.25rem">${icon("palette", 16)}<span style="flex:1;text-align:left">Apariencia de ${esc(warehouse.name)}</span></button>` : ""}
           ${canFullscreen() ? `<button class="drawer-item" id="fullscreen-btn" style="margin-bottom:0.25rem">${icon("smartphone", 16)}<span style="flex:1;text-align:left">${document.fullscreenElement ? "Salir de pantalla completa" : "Pantalla completa (kiosko)"}</span></button>` : ""}
-          <button class="btn btn-ghost btn-block" id="logout-btn" aria-label="Cerrar sesión" style="justify-content:flex-start;color:var(--danger)">${icon("logout", 14)} Cerrar sesión</button>
-          <p class="text-xs text-muted text-center mt-2" style="margin-top:0.5rem">${esc(APP_LABEL)} · Acceso por PIN de almacén</p>
-          <div class="drawer-shortcuts" style="margin-top:0.75rem;padding:0.5rem 0.75rem;background:var(--bg-soft);border-radius:var(--radius);font-size:0.625rem;color:var(--text-muted);display:flex;flex-direction:column;gap:0.25rem">
+          <button class="btn btn-ghost btn-block" id="logout-btn" aria-label="${pinMode ? "Salir del almacén" : "Cerrar sesión"}" style="justify-content:flex-start;color:var(--danger)">${icon("logout", 14)} ${pinMode ? "Salir del almacén" : "Cerrar sesión"}</button>
+          <p class="text-xs text-muted text-center mt-2" style="margin-top:0.5rem">${esc(APP_LABEL)}${pinMode ? "" : " · Acceso por PIN de almacén"}</p>
+          ${pinMode && !docked ? "" : `<div class="drawer-shortcuts" style="margin-top:0.75rem;padding:0.5rem 0.75rem;background:var(--bg-soft);border-radius:var(--radius);font-size:0.625rem;color:var(--text-muted);display:flex;flex-direction:column;gap:0.25rem">
             <div style="font-weight:600;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.25rem">Atajos</div>
             <div style="display:flex;justify-content:space-between"><span>Buscar</span><span><kbd>Ctrl</kbd>+<kbd>K</kbd></span></div>
             <div style="display:flex;justify-content:space-between"><span>Nueva venta</span><kbd>N</kbd></div>
@@ -317,7 +390,7 @@ export function mountDashboardView(container, navigate) {
             <div style="display:flex;justify-content:space-between"><span>Inventario</span><kbd>I</kbd></div>
             <div style="display:flex;justify-content:space-between"><span>Historial</span><kbd>V</kbd></div>
             <div style="display:flex;justify-content:space-between"><span>Gestores</span><kbd>G</kbd></div>
-          </div>
+          </div>`}
         </div>
       </aside>
     `;
@@ -332,7 +405,16 @@ export function mountDashboardView(container, navigate) {
     });
     dc.querySelector("#drawer-overlay")?.addEventListener("click", closeDrawer);
     dc.querySelector("#close-drawer")?.addEventListener("click", closeDrawer);
+    dc.querySelector("#pin-search-btn")?.addEventListener("click", () => { closeDrawer(); window.__openGlobalSearch?.(); });
+    dc.querySelector("#pin-refresh-btn")?.addEventListener("click", () => {
+      closeDrawer();
+      if (cleanup) try { cleanup(); } catch {}
+      renderActiveView();
+      toast("Datos actualizados", "success");
+    });
+    dc.querySelector("#pin-theme-btn")?.addEventListener("click", () => { drawerOpen = false; toggleTheme(); });
     dc.querySelector("#logout-btn").addEventListener("click", async () => {
+      if (pinMode) { closeDrawer(); exitWarehouse(store, store.getState().currentWarehouse, navigate); return; }
       await logout();
       toast("Sesión cerrada", "info");
       navigate("home");
@@ -358,7 +440,11 @@ export function mountDashboardView(container, navigate) {
       // Si es empleado_pin, mostrar interior del almacén en lugar del overview
       const user = store.getState().currentUser;
       const isPinEmployee = user?.role === "empleado_pin";
-      const viewToRender = (activeView === "dashboard" && isPinEmployee) ? "warehouse-interior" : activeView;
+      const isWiView = activeView === "dashboard" || !!WI_SECTION[activeView];
+      if (isPinEmployee && WI_SECTION[activeView]) {
+        try { sessionStorage.setItem("mannol-wi-section", WI_SECTION[activeView]); } catch {}
+      }
+      const viewToRender = (isWiView && isPinEmployee) ? "warehouse-interior" : activeView;
 
       switch (viewToRender) {
         case "dashboard": cleanup = mountOverview(content, navigate); break;
@@ -741,6 +827,8 @@ export function mountDashboardView(container, navigate) {
   const onNavRequest = (e) => goTo(e.detail?.view || "dashboard");
   window.addEventListener("mannol:tab", onTabPop);
   window.addEventListener("mannol:nav", onNavRequest);
+  window.addEventListener("online", syncNetDot);
+  window.addEventListener("offline", syncNetDot);
 
   // PC ↔ móvil (redimensionar ventana / girar tablet): fijar o soltar el menú
   const desktopMq = typeof matchMedia === "function" ? matchMedia(DESKTOP_MQ) : null;
@@ -753,6 +841,8 @@ export function mountDashboardView(container, navigate) {
     document.removeEventListener("keydown", onKeydown);
     window.removeEventListener("mannol:tab", onTabPop);
     window.removeEventListener("mannol:nav", onNavRequest);
+    window.removeEventListener("online", syncNetDot);
+    window.removeEventListener("offline", syncNetDot);
     desktopMq?.removeEventListener?.("change", onDesktopChange);
   };
 }

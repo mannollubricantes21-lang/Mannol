@@ -74,16 +74,24 @@ describe("menú lateral en PC", () => {
     // Un empleado con PIN solo ve sus secciones (los permisos no cambian).
     // v5.18.0: se añade «team-status» (Estado del equipo), permitida para todos.
     // v5.21.0: el acceso por PIN también ve el Historial (sin anular ventas)
+    // v5.27.0: en PC (sin barra de abajo) el menú lleva las secciones del
+    // almacén + Vender, y luego lo que en el teléfono está en «Más».
     const items = [...el.querySelectorAll(".drawer-item[data-drawer-nav]")].map((b) => b.dataset.drawerNav);
-    expect(items).toEqual(["dashboard", "sales", "stock", "team-status", "history"]);
+    expect(items).toEqual(["dashboard", "wi-inv", "wi-caja", "sales", "history", "team-status", "stock"]);
     expect(el.querySelector('.drawer-item.active').dataset.drawerNav).toBe("dashboard");
   });
 
-  it("en el móvil no cambia nada: sin menú hasta tocar ☰, y sin reservar espacio", () => {
+  it("en el móvil: sin menú hasta tocar «Más», y sin reservar espacio", () => {
     const el = mount();
     expect(el.querySelector(".drawer")).toBeNull();
     expect(el.querySelector(".mobile-shell").classList.contains("has-dock")).toBe(false);
-    el.querySelector("#open-drawer-btn").click();
+    // v5.27.0: una sola navegación — sin ☰ ni iconos arriba; «Más» abajo
+    expect(el.querySelector("#open-drawer-btn")).toBeNull();
+    const nav = [...el.querySelectorAll(".nav-btn[data-nav]")].map((b) => b.dataset.nav);
+    expect(nav).toEqual(["dashboard", "wi-inv", "wi-caja", "more"]);
+    el.querySelector('.nav-btn[data-nav="more"]').click();
+    const more = [...el.querySelectorAll(".drawer-item[data-drawer-nav]")].map((b) => b.dataset.drawerNav);
+    expect(more).toEqual(["history", "team-status", "stock"]); // nada repetido con la barra
     const drawer = el.querySelector(".drawer");
     expect(drawer).toBeTruthy();
     expect(drawer.classList.contains("drawer--docked")).toBe(false);
@@ -95,13 +103,12 @@ describe("menú lateral en PC", () => {
   it("al navegar desde el menú fijo sigue abierto, marca la sección y la barra muestra su nombre", () => {
     setDesktop(true);
     const el = mount();
-    expect(el.querySelector("#app-header-section").textContent).toBe("Inicio");
+    expect(el.querySelector(".whh-name").textContent).toBe("Víbora"); // cabecera del almacén
     el.querySelector('.drawer-item[data-drawer-nav="stock"]').click();
     expect(el.querySelector(".drawer.drawer--docked")).toBeTruthy();
     const active = el.querySelector(".drawer-item.active");
     expect(active.dataset.drawerNav).toBe("stock");
     expect(active.getAttribute("aria-current")).toBe("page");
-    expect(el.querySelector("#app-header-section").textContent).toBe("Inventario");
   });
 
   it("los atajos de teclado también actualizan el menú fijo y el título", () => {
@@ -109,7 +116,6 @@ describe("menú lateral en PC", () => {
     const el = mount();
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "n" }));
     expect(el.querySelector(".drawer-item.active").dataset.drawerNav).toBe("sales");
-    expect(el.querySelector("#app-header-section").textContent).toBe("Ventas");
   });
 
   it("al pasar de PC a móvil el menú se suelta (y vuelve al pasar a PC)", () => {
@@ -129,5 +135,15 @@ describe("menú lateral en PC", () => {
     expect(listeners.size).toBe(1);
     unmount(); unmount = null;
     expect(listeners.size).toBe(0);
+  });
+
+  it("fuera del acceso por PIN la barra superior sigue con su título de sección", () => {
+    setDesktop(true);
+    getStore().setUser({ id: "u-v", role: "vendedor", displayName: "Ana" });
+    window.history.replaceState({}, "", "/"); // sin ?tab= de la prueba anterior
+    const el = mount();
+    expect(el.querySelector("#app-header-section").textContent).toBe("Inicio");
+    el.querySelector('.drawer-item[data-drawer-nav="history"]').click();
+    expect(el.querySelector("#app-header-section").textContent).toBe("Historial");
   });
 });

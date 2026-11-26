@@ -3,6 +3,7 @@
 // Flujo: Gestor → Productos → Nota → Pago → Registrar
 // =====================================================
 
+import { normalizeAppearance, isIconView } from "../appearance.js";
 import { applyVendorRuleToItems } from "../vendor-rule.js";
 import { getStore } from "../store.js";
 import { subscribeProducts, subscribeStock, subscribeCategories, subscribeBrands, listCards, listManagers, listSales, isUuid, getWholesaleTier, getSuggestedPricePerBox, getSuggestedVendorCommissionPerBox, getSuggestedGestorCommissionPerBox, isWholesaleProduct, listWarehouses, resolveEffectiveWarehouse, sumCartCommissions } from "../db.js";
@@ -68,6 +69,9 @@ export function mountSalesView(container, navigate) {
   const DRAFT_TTL_MS = 12 * 3600 * 1000;
   let pendingReprice = false;
   let extrasOpen = false; // v5.23.0: «Gestor y nota» desplegado
+  // v5.27.0 (teléfono): la venta en dos pasos — 1) armar el carrito, 2) cobrar
+  let payStep = false;
+  let plistBrand = ""; // v5.27.0: filtro por marca de la lista de productos
   const draftWh = store.getState().currentWarehouse;
   const draftKey = draftWh ? `mannol-cart-draft-${draftWh.id}` : null;
   function saveDraft() {
@@ -240,7 +244,7 @@ export function mountSalesView(container, navigate) {
     const inp = container.querySelector("#paid-with");
     if (inp) inp.value = paidWith > 0 ? String(paidWith) : "";
     updateChangeDue();
-    if (focusInput && inp) { inp.focus(); inp.selectionStart = inp.selectionEnd = inp.value.length; }
+    if (focusInput && inp) { inp.focus(); try { inp.selectionStart = inp.selectionEnd = inp.value.length; } catch {} }
   }
 
   // v5.18.0: marcar el campo concreto que falta (borde rojo + foco) —
@@ -386,16 +390,16 @@ export function mountSalesView(container, navigate) {
       return;
     }
 
+    if (!hasCheckoutItems()) payStep = false;
     saveDraft();
     autoFillMN(); // v5.20.0: el resto en MN sigue al total y a lo cobrado en USD
     container.innerHTML = `
-      <div class="sale-form-panel" style="display:flex;flex-direction:column;gap:1rem">
-        <div class="flex items-center justify-between">
-          <div>
-            <!-- v5.20.0: botón para volver sin tener que tocar «Inicio» -->
-            <button type="button" class="btn btn-ghost btn-sm" id="sales-back-btn" aria-label="Volver" style="margin:0 0 0.25rem -0.5rem;padding-left:0.25rem">${icon("arrowLeft", 16)} Volver</button>
-            <h1 class="text-xl font-bold flex items-center gap-2">${icon("cart", 20)} Venta en ${esc(wh.name)} (${esc(wh.code)})</h1>
-          </div>
+      <div class="sale-form-panel" data-step="${payStep && hasCheckoutItems() ? "pay" : "cart"}" style="display:flex;flex-direction:column;gap:1rem">
+        <div class="sale-head">
+          <!-- v5.20.0: volver sin tener que tocar «Inicio» · v5.27.0: en el paso de cobro vuelve al carrito -->
+          <button type="button" class="btn btn-secondary btn-icon sale-back" id="sales-back-btn" aria-label="Volver" title="Volver">${icon("arrowLeft", 18)}</button>
+          <button type="button" class="btn btn-secondary btn-icon sale-back-cart" id="sale-back-cart" aria-label="Volver a los productos" title="Volver a los productos">${icon("arrowLeft", 18)}</button>
+          <h1 class="sale-title">${payStep && hasCheckoutItems() ? "Cobrar" : "Nueva venta"} <span class="sale-title-wh">${esc(wh.name)}</span></h1>
           <div class="flex items-center gap-2" data-header-badges></div>
         </div>
 
@@ -409,8 +413,15 @@ export function mountSalesView(container, navigate) {
           </div>
         ` : ''}
 
+        <!-- v5.27.0 (paso 2): resumen de lo que se cobra, con «Cambiar» -->
+        <button type="button" class="sale-pay-summary sale-pay-part" id="sale-pay-summary">
+          <span>${checkoutCountLabel()}</span>
+          <strong>${formatMoney(cartTotal(), "USD")}</strong>
+          <span class="sale-pay-change">Cambiar</span>
+        </button>
+
         <!-- Toggle Retail / Mayorista -->
-        <div class="tabs-list" style="grid-template-columns: 1fr 1fr;margin-bottom:0">
+        <div class="tabs-list sale-cart-part" style="grid-template-columns: 1fr 1fr;margin-bottom:0">
           <button class="tabs-trigger ${saleType === 'RETAIL' ? 'active' : ''}" data-sale-type="RETAIL">
             ${icon("cart", 14)} Por unidad
           </button>
@@ -419,27 +430,43 @@ export function mountSalesView(container, navigate) {
           </button>
         </div>
 
-        ${saleType === "WHOLESALE" ? renderWholesaleSection() : `
-        <div>
-          <!-- v5.23.0: pasos numerados; el gestor y la nota van juntos más abajo (opcionales) -->
-          <div class="sale-step"><span class="sale-step-n">1</span><span>Productos</span>${cart.length ? `<span class="sale-step-meta">${cart.reduce((n, i) => n + i.quantity, 0)} u · ${formatMoney(cartTotal(), "USD")}</span>` : ""}</div>
-          <!-- v5.4.0: búsqueda rápida — filtra al escribir y añade con un toque (Enter = primer resultado) -->
-          <div class="${canUseCamera() ? "input-scan" : ""}" style="position:relative;margin-top:0.375rem">
+        ${saleType === "WHOLESALE" ? `<div class="sale-cart-part">${renderWholesaleSection()}</div>` : `
+        <div class="sale-cart-part sale-retail">
+          <!-- v5.27.0: catálogo (botón de color), búsqueda rápida y más vendidos -->
+          <section class="card sale-products" aria-label="Productos">
+            <div class="card-header sp-head">
+              <h3 class="card-title">Productos</h3>
+            </div>
+            <div class="sp-body">
+              <!-- v5.27.0: catálogo y escáner, mitad y mitad -->
+              <div class="sp-actions ${canUseCamera() ? "has-scan" : ""}">
+              <button type="button" class="btn btn-primary btn-lg sp-catalog-btn" id="open-catalog-btn">
+                <span class="flex items-center gap-2">${icon("boxes", 22)} Abrir catálogo</span>
+                <span class="sp-catalog-n" data-catalog-badge>${products.filter((p) => getStockQty(p.id) > 0).length} disponibles</span>
+              </button>
+                ${canUseCamera() ? `<button type="button" class="btn btn-primary btn-lg sp-scan-btn" id="scan-sale-btn" aria-label="Escanear código de barras">${icon("scan", 22)} Escanear</button>` : ""}
+              </div>
+          <div style="position:relative">
             <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--text-muted)">${icon("search", 14)}</span>
-            <input class="input" id="quick-search" placeholder="Buscar y añadir rápido (ej: 5W-30)…" value="${esc(quickSearch)}" style="padding-left:2.1rem" autocomplete="off" />
-            ${canUseCamera() ? `<button type="button" class="scan-btn" id="scan-sale-btn" aria-label="Escanear código de barras" title="Escanear código de barras">${icon("scan", 18)}</button>` : ""}
+            <input class="input" id="quick-search" placeholder="Buscar: 5W-30, grasa, filtro…" value="${esc(quickSearch)}" style="padding-left:2.1rem" autocomplete="off" />
+
             <!-- v5.19.0: contenedor fijo — los resultados los pinta paintQuickResults()
                  (antes cada tecla re-renderizaba TODO y había que devolver el foco a mano) -->
             <div id="quick-results" style="position:absolute;left:0;right:0;top:calc(100% + 0.25rem);z-index:30;display:none;flex-direction:column;gap:0.25rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);padding:0.375rem;box-shadow:var(--shadow-md);max-height:16rem;overflow-y:auto"></div>
           </div>
-          <div data-top-sellers-zone></div>
-          ${cart.length === 0 ? `
-            <button class="btn btn-primary btn-block btn-lg" id="open-catalog-btn" style="justify-content:space-between">
-              <span class="flex items-center gap-2">${icon("boxes", 18)} Abrir catálogo</span>
-              <span class="badge" data-catalog-badge>${products.filter(p => getStockQty(p.id) > 0).length} disponibles</span>
-            </button>
-          ` : `
-            <div style="display:flex;flex-direction:column;gap:0.5rem">
+              <!-- v5.27.0: los productos se ven al abrir el catálogo; aquí solo
+                   los más vendidos para añadir con un toque -->
+              <div data-top-sellers-zone></div>
+            </div>
+          </section>
+          <!-- v5.27.0: lo que va en la venta (cantidad editable, quitar) -->
+          ${cart.length ? `
+            <section class="card sale-incart" aria-label="En la venta">
+              <div class="card-header sp-head">
+                <h3 class="card-title">En la venta</h3>
+                <span class="sp-head-meta">${cart.reduce((n, i) => n + i.quantity, 0)} u · <strong>${formatMoney(cartTotal(), "USD")}</strong></span>
+              </div>
+              <div class="sale-incart-list">
               ${cart.map((item, i) => {
                 const p = products.find((x) => x.id === item.productId);
                 const stockQty = getStockQty(item.productId);
@@ -461,20 +488,19 @@ export function mountSalesView(container, navigate) {
                   </div>
                 `;
               }).join("")}
-              <button class="btn btn-outline btn-sm" id="add-more-btn">${icon("plus", 14)} Agregar más productos</button>
-            </div>
-          `}
+              </div>
+            </section>` : ""}
         </div>
         `}
 
         <!-- v5.23.0: opcionales plegados (gestor en menudeo + nota) para no distraer -->
-        <details class="sale-extras" data-sale-extras ${extrasOpen || note ? "open" : ""}>
+        <details class="sale-extras sale-cart-part" data-sale-extras ${extrasOpen || note ? "open" : ""}>
           <summary>
-            <span class="flex items-center gap-1">${icon("users", 14)} ${saleType === "WHOLESALE" ? "Nota" : "Gestor y nota"} <span class="text-muted" style="font-weight:500">(opcional)</span></span>
-            <span class="sale-extras-sum">${[saleType !== "WHOLESALE" && selectedManager ? esc(selectedManager.name) : "", note ? "con nota" : ""].filter(Boolean).join(" · ")}</span>
+            <span class="flex items-center gap-1">${icon("users", 14)} Gestor y nota <span class="text-muted" style="font-weight:500">(opcional)</span></span>
+            <span class="sale-extras-sum">${[selectedManager ? esc(selectedManager.name) : "", note ? "con nota" : ""].filter(Boolean).join(" · ")}</span>
           </summary>
           <div style="display:flex;flex-direction:column;gap:0.75rem;padding-top:0.625rem">
-            ${saleType === "WHOLESALE" ? "" : `
+            ${`
             <div>
               <label class="label" for="manager-code">Gestor que refirió</label>
               <select class="select" id="manager-code">${managerOptionsHtml()}</select>
@@ -490,7 +516,7 @@ export function mountSalesView(container, navigate) {
 
         ${(saleType === "WHOLESALE" ? wholesaleProduct : cart.length > 0) ? `
           <!-- Selector de modo de pago -->
-          <div id="payment-section">
+          <div id="payment-section" class="sale-pay-part">
             <div class="sale-step"><span class="sale-step-n">2</span><span>Cobro</span><span class="sale-step-meta">${formatMoney(cartTotal(), "USD")}</span></div>
             <div class="tabs-list" style="grid-template-columns: 1fr 1fr;margin-bottom:0.75rem">
               <button class="tabs-trigger ${paymentMode === 'SINGLE' ? 'active' : ''}" data-mode="SINGLE">Una moneda</button>
@@ -546,14 +572,14 @@ export function mountSalesView(container, navigate) {
           </div>
 
           <!-- Total -->
-          <div class="card" style="padding:1rem;display:flex;justify-content:space-between;align-items:center">
+          <div class="card sale-pay-part" style="padding:1rem;display:flex;justify-content:space-between;align-items:center">
             <span class="flex items-center gap-2 font-semibold">${icon("dollar", 18)} Total a cobrar</span>
             <span class="text-2xl font-bold" style="color:var(--primary)">${formatMoney(cartTotal(), "USD")}</span>
           </div>
 
           <!-- v5.4.0: calculadora de vuelto (efectivo en una sola moneda) -->
           ${paymentMode === "SINGLE" && selectedCurrency !== "TRANSFERENCIA" ? `
-            <div class="card" style="padding:0.875rem 1rem">
+            <div class="card sale-pay-part" style="padding:0.875rem 1rem">
               <label class="label label-xs flex items-center gap-1">${icon("receipt", 12)} Vuelto · ¿Con cuánto paga el cliente? (${selectedCurrency})</label>
               <input class="input" type="number" step="0.01" min="0" id="paid-with" value="${paidWith || ''}" placeholder="0.00" style="max-width:12rem" inputmode="decimal" />
               <!-- v5.18.0: teclado rápido de billetes — un toque = monto completo -->
@@ -569,7 +595,7 @@ export function mountSalesView(container, navigate) {
           ` : ''}
 
           <!-- Botones -->
-          <div style="display:flex;flex-direction:column;gap:0.5rem">
+          <div class="sale-pay-part" style="display:flex;flex-direction:column;gap:0.5rem">
             <button class="btn btn-primary btn-block btn-lg" id="register-sale-btn" style="font-size:1.125rem;font-weight:700" ${registerBtnState().disabled ? "disabled" : ""}>
               ${icon("check", 20)} ${registerBtnState().label}
             </button>
@@ -585,7 +611,7 @@ export function mountSalesView(container, navigate) {
             <span class="checkout-bar-total">${formatMoney(cartTotal(), "USD")}</span>
           </div>
           <button type="button" class="checkout-bar-btn" id="checkout-bar-btn">
-            Cobrar ${icon("arrowDown", 16)}
+            Cobrar ${icon("arrowRight", 16)}
           </button>
         </div>
       ` : ''}
@@ -595,6 +621,7 @@ export function mountSalesView(container, navigate) {
     paintHeaderBadges();
     paintQuickResults();
     paintTopSellers();
+    paintProductList();
     setupCheckoutBar();
   }
 
@@ -641,7 +668,7 @@ export function mountSalesView(container, navigate) {
   function paintQuickResults() {
     const el = container.querySelector("#quick-results");
     if (!el) return;
-    if (!quickSearch.trim()) {
+    if (!quickSearch.trim() || container.querySelector("#sale-plist")) { // v5.27.0: la lista ya filtra
       el.style.display = "none";
       el.innerHTML = "";
       return;
@@ -668,6 +695,78 @@ export function mountSalesView(container, navigate) {
         if (re) re.focus();
       });
     });
+  }
+
+  // v5.27.0: lista de productos a la vista (sustituye a «Más vendidos» +
+  // «Abrir catálogo»). Se repinta sola al escribir, sin perder el foco.
+  function plistMatches() {
+    const q = quickSearch.toLowerCase().trim();
+    const rank = new Map(topSellerIds.map((id, i) => [id, i]));
+    const list = products.filter((p) => {
+      if (plistBrand && (p.brand || "Sin marca") !== plistBrand) return false;
+      if (!q) return true;
+      return [p.name, p.brand, p.sku, p.viscosity].some((v) => String(v || "").toLowerCase().includes(q));
+    });
+    list.sort((a, b) => {
+      const ao = getStockQty(a.id) <= 0, bo = getStockQty(b.id) <= 0;
+      if (ao !== bo) return ao ? 1 : -1;
+      const ra = rank.has(a.id) ? rank.get(a.id) : 999, rb = rank.has(b.id) ? rank.get(b.id) : 999;
+      if (ra !== rb) return ra - rb;
+      return String(a.name).localeCompare(String(b.name), "es");
+    });
+    return list;
+  }
+  function paintProductList() {
+    const el = container.querySelector("#sale-plist");
+    if (!el) return;
+    const chipsEl = container.querySelector("#sp-chips");
+    if (chipsEl) {
+      const brands = [...new Set(products.map((p) => p.brand || "Sin marca"))].sort((a, b) => a.localeCompare(b, "es"));
+      chipsEl.hidden = brands.length < 2;
+      chipsEl.innerHTML = ["", ...brands].map((b) => `
+        <button type="button" class="sp-chip ${plistBrand === b ? "on" : ""}" data-plist-brand="${esc(b)}" aria-pressed="${plistBrand === b}">${b ? esc(b) : "Todas"}</button>`).join("");
+      chipsEl.querySelectorAll("[data-plist-brand]").forEach((btn) => btn.addEventListener("click", () => {
+        plistBrand = btn.dataset.plistBrand; paintProductList();
+      }));
+    }
+    const top = new Set(topSellerIds.slice(0, 6));
+    const list = plistMatches();
+    el.innerHTML = list.length === 0
+      ? `<div class="sp-empty">Sin resultados${quickSearch ? ` para «${esc(quickSearch)}»` : ""}.</div>`
+      : list.map((p) => {
+          const qty = getStockQty(p.id);
+          const inCart = cart.find((i) => i.productId === p.id)?.quantity || 0;
+          const left = qty - inCart;
+          const out = qty <= 0;
+          const low = !out && qty <= (p.minStock || 5);
+          const sub = [p.brand, p.viscosity, p.volumeLiters ? `${p.volumeLiters} L` : ""].filter(Boolean).join(" · ");
+          return `
+          <div class="sp-row ${inCart ? "in-cart" : ""} ${out ? "is-out" : ""}">
+            <div class="sp-info">
+              <div class="sp-name">${top.has(p.id) && !out ? `<span class="sp-top" title="Más vendido">★</span>` : ""}${esc(p.name)}</div>
+              <div class="sp-sub">${sub ? `${esc(sub)} · ` : ""}<span class="${out ? "sp-out" : low ? "sp-low" : ""}">${out ? "Agotado" : `quedan ${qty}`}</span></div>
+            </div>
+            <div class="sp-price">${formatMoney(p.salePrice, "USD")}</div>
+            ${inCart ? `
+              <div class="sp-step">
+                <button type="button" class="btn btn-secondary btn-icon" data-plist-dec="${esc(p.id)}" aria-label="Quitar uno de ${esc(p.name)}">${icon("minus", 16)}</button>
+                <span class="sp-qty" aria-label="${inCart} en la venta">${inCart}</span>
+                <button type="button" class="btn btn-primary btn-icon" data-plist-add="${esc(p.id)}" ${left <= 0 ? "disabled" : ""} aria-label="Añadir otro ${esc(p.name)}">${icon("plus", 16)}</button>
+              </div>` : `
+              <button type="button" class="btn btn-secondary btn-icon sp-add" data-plist-add="${esc(p.id)}" ${out ? "disabled" : ""} aria-label="Añadir ${esc(p.name)}">${icon("plus", 18)}</button>`}
+          </div>`;
+        }).join("");
+    el.querySelectorAll("[data-plist-add]").forEach((btn) => btn.addEventListener("click", () => {
+      try { navigator.vibrate?.(25); } catch {}
+      addProduct(btn.dataset.plistAdd, { silent: false, quiet: true });
+    }));
+    el.querySelectorAll("[data-plist-dec]").forEach((btn) => btn.addEventListener("click", () => {
+      const idx = cart.findIndex((i) => i.productId === btn.dataset.plistDec);
+      if (idx < 0) return;
+      const it = cart[idx];
+      if (it.quantity > 1) { it.quantity--; it.subtotal = it.quantity * it.unitPrice; } else cart.splice(idx, 1);
+      render();
+    }));
   }
 
   function paintTopSellers() {
@@ -717,6 +816,7 @@ export function mountSalesView(container, navigate) {
     paintHeaderBadges();
     paintQuickResults();
     paintTopSellers();
+    paintProductList();
     paintCartStock();
     paintCatalogBadge();
     paintWholesaleStock();
@@ -736,7 +836,7 @@ export function mountSalesView(container, navigate) {
       return `${wholesaleBoxes} caja${wholesaleBoxes === 1 ? "" : "s"} · mayorista`;
     }
     const units = cart.reduce((sum, i) => sum + i.quantity, 0);
-    return `${units} producto${units === 1 ? "" : "s"} · ${cart.length} línea${cart.length === 1 ? "" : "s"}`;
+    return `${units} producto${units === 1 ? "" : "s"}`;
   }
 
   function teardownCheckoutBar() {
@@ -768,6 +868,13 @@ export function mountSalesView(container, navigate) {
       checkoutObserver.observe(target);
     }
     bar.querySelector("#checkout-bar-btn")?.addEventListener("click", () => {
+      // v5.27.0 (teléfono): el cobro es un paso propio
+      if (window.matchMedia?.("(max-width: 1023.98px)").matches) {
+        payStep = true;
+        render();
+        try { window.scrollTo({ top: 0 }); } catch {}
+        return;
+      }
       const section = container.querySelector("#payment-section");
       if (!section) return;
       section.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -811,87 +918,94 @@ export function mountSalesView(container, navigate) {
     const tier = wholesaleProduct ? getWholesaleTier(wholesaleProduct, wholesaleBoxes) : null;
     const totalUnits = wholesaleProduct ? wholesaleBoxes * wholesaleProduct.unitsPerBox : 0;
     const total = wholesaleBoxes * wholesalePricePerBox;
+    // v5.27.0: elegir el producto en tarjetas (antes un desplegable largo) y
+    // las cajas con − n +; los tramos de precio a la vista; comisiones plegadas.
+    const tiers = wholesaleProduct ? [...(wholesaleProduct.wholesaleTiers || [])].sort((a, b) => a.minBoxes - b.minBoxes) : [];
+    const ppb = (t) => (Number(t.pricePerUnit) || 0) * (wholesaleProduct?.unitsPerBox || 0);
+    const suggested = wholesaleProduct ? (getSuggestedPricePerBox(wholesaleProduct, wholesaleBoxes) || 0) : 0;
+    const pickList = wholesaleProducts.map((p) => {
+      const q = getStockQty(p.id);
+      const boxes = p.unitsPerBox ? Math.floor(q / p.unitsPerBox) : 0;
+      const first = [...(p.wholesaleTiers || [])].sort((a, b) => a.minBoxes - b.minBoxes)[0];
+      const from = first ? (Number(first.pricePerUnit) || 0) * p.unitsPerBox : 0;
+      return `
+        <button type="button" class="ws-pick ${wholesaleProduct?.id === p.id ? "on" : ""}" data-ws-pick="${esc(p.id)}" ${boxes <= 0 ? "disabled" : ""} aria-pressed="${wholesaleProduct?.id === p.id}">
+          <span class="ws-pick-info">
+            <span class="ws-pick-name">${esc(p.name)}</span>
+            <span class="ws-pick-sub">${p.unitsPerBox} pomos por caja · ${boxes > 0 ? `<strong>${boxes} caja${boxes === 1 ? "" : "s"}</strong> disponibles` : `<span class="sp-out">sin cajas completas</span>`}</span>
+          </span>
+          ${from ? `<span class="ws-pick-price"><small>desde</small>${formatMoney(from, "USD")}<small>/caja</small></span>` : ""}
+        </button>`;
+    }).join("");
     return `
-      <!-- Gestor -->
-      <div>
-        <label class="label">Gestor que refirió (opcional)</label>
-        <select class="select" id="manager-code">${managerOptionsHtml()}</select>
-        ${selectedManager ? `<p class="text-xs text-muted mt-1">${esc(selectedManager.name)}${selectedManager.code ? ` · Código: ${esc(selectedManager.code)}` : ''}${selectedManager.phone ? ` · ${esc(selectedManager.phone)}` : ''}</p>` : ''}
-      </div>
-
-      <!-- Producto mayorista -->
-      <div>
-        <label class="label flex items-center gap-1">${icon("boxes", 14)} Producto mayorista</label>
-        <select class="select" id="wholesale-product-select">
-          <option value="">— Selecciona producto —</option>
-          ${wholesaleProducts.map((p) => `
-            <option value="${esc(p.id)}" ${wholesaleProduct?.id === p.id ? 'selected' : ''}>
-              ${esc(p.name)} · ${p.unitsPerBox} pomos/caja · Stock: ${getStockQty(p.id)} (${Math.floor(getStockQty(p.id) / p.unitsPerBox)} cajas)
-            </option>
-          `).join("")}
-        </select>
-      </div>
-
-      ${wholesaleProduct ? `
-        <div class="card" style="padding:1rem;display:flex;flex-direction:column;gap:0.75rem;background:var(--bg-elevated);border:2px solid var(--primary)">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <div>
-              <div class="font-semibold">${esc(wholesaleProduct.name)}</div>
-              <div class="text-xs text-muted">${esc(wholesaleProduct.brand)} · ${esc(wholesaleProduct.viscosity || '')} · ${wholesaleProduct.unitsPerBox} pomos por caja</div>
+      ${!wholesaleProduct ? `
+        <section class="card ws-card" aria-label="Producto por caja">
+          <div class="card-header sp-head"><h3 class="card-title">¿Qué producto se vende por caja?</h3></div>
+          <div class="ws-pick-list">${pickList}</div>
+        </section>
+      ` : `
+        <section class="card ws-card" aria-label="Venta por caja">
+          <div class="card-header sp-head">
+            <h3 class="card-title" style="min-width:0"><span class="truncate">${esc(wholesaleProduct.name)}</span></h3>
+            <button type="button" class="btn btn-text btn-sm" data-ws-change>Cambiar</button>
+          </div>
+          <div class="ws-body">
+            <div class="ws-facts">
+              <span><strong>${wholesaleProduct.unitsPerBox}</strong> pomos por caja</span>
+              <span data-ws-stock><strong>${maxBoxes}</strong> cajas disponibles (${stockQty} pomos)</span>
             </div>
-            <div class="text-right">
-              <div class="text-xs text-muted">Stock disponible</div>
-              <div class="font-bold" data-ws-stock>${stockQty} pomos · ${maxBoxes} cajas</div>
+
+            <div class="ws-boxes">
+              <span class="ws-boxes-label">Cajas</span>
+              <div class="ws-boxes-ctrl">
+                <button type="button" class="btn btn-secondary btn-icon" data-ws-step="-1" ${wholesaleBoxes <= 1 ? "disabled" : ""} aria-label="Una caja menos">${icon("minus", 18)}</button>
+                <input class="input ws-boxes-input" type="number" min="1" max="${maxBoxes}" id="wholesale-boxes" value="${wholesaleBoxes}" inputmode="numeric" aria-label="Cantidad de cajas" />
+                <button type="button" class="btn btn-primary btn-icon" data-ws-step="1" ${wholesaleBoxes >= maxBoxes ? "disabled" : ""} aria-label="Una caja más">${icon("plus", 18)}</button>
+              </div>
+              <span class="ws-boxes-units">${totalUnits} pomos</span>
+            </div>
+
+            ${tiers.length ? `
+              <div class="ws-tiers" role="list" aria-label="Precios por cantidad">
+                ${tiers.map((t) => {
+                  const on = tier && t.minBoxes === tier.minBoxes;
+                  return `
+                  <div class="ws-tier ${on ? "on" : ""}" role="listitem">
+                    <span class="ws-tier-range">${t.minBoxes}${t.maxBoxes ? `–${t.maxBoxes}` : "+"} cajas</span>
+                    <strong>${formatMoney(ppb(t), "USD")}</strong><span class="ws-tier-unit">/caja</span>
+                    ${Number(t.gestorCommissionPercent) > 0 ? `<span class="ws-tier-note">gestor ${t.gestorCommissionPercent}%</span>` : ""}
+                  </div>`;
+                }).join("")}
+              </div>` : ""}
+
+            <label class="ws-price">
+              <span>Precio por caja (USD)</span>
+              <input class="input" type="number" step="0.01" id="wholesale-price" value="${wholesalePricePerBox}" inputmode="decimal" />
+              ${suggested && Math.abs(suggested - wholesalePricePerBox) > 0.001 ? `<button type="button" class="btn btn-text btn-sm" data-ws-suggested="${suggested}">Usar ${formatMoney(suggested, "USD")}</button>` : `<small>Precio del tramo</small>`}
+            </label>
+
+            <details class="ws-comm">
+              <summary>Comisiones <span>vendedor ${formatMoney(wholesaleBoxes * wholesaleVendorCommissionPerBox, "USD")} · gestor ${formatMoney(wholesaleBoxes * wholesaleGestorCommissionPerBox, "USD")}</span></summary>
+              <div class="grid grid-cols-2 gap-2" style="padding-top:0.625rem">
+                <div>
+                  <label class="label label-xs" for="wholesale-vendor-commission">Vendedor por caja (USD)</label>
+                  <input class="input" type="number" step="0.01" id="wholesale-vendor-commission" value="${wholesaleVendorCommissionPerBox}" />
+                </div>
+                <div>
+                  <label class="label label-xs" for="wholesale-gestor-commission">Gestor por caja (USD)</label>
+                  <input class="input" type="number" step="0.01" id="wholesale-gestor-commission" value="${wholesaleGestorCommissionPerBox}" />
+                  ${Number(tier?.gestorCommissionPercent) > 0 ? `<div class="text-xs text-muted mt-1">${tier.gestorCommissionPercent}% del precio de la caja</div>` : ""}
+                </div>
+              </div>
+            </details>
+
+            <div class="ws-total">
+              <span>${wholesaleBoxes} caja${wholesaleBoxes === 1 ? "" : "s"} × ${formatMoney(wholesalePricePerBox, "USD")}</span>
+              <strong>${formatMoney(total, "USD")}</strong>
             </div>
           </div>
-
-          ${tier ? `
-            <div style="background:var(--primary-tint);padding:0.5rem 0.75rem;border-radius:var(--radius);font-size:0.75rem">
-              ${icon("trendingUp", 12)} <strong>Tier aplicable:</strong> ${tier.minBoxes}${tier.maxBoxes ? '-' + tier.maxBoxes : '+'} cajas
-              · Precio sugerido: <strong>${formatMoney(tier.pricePerUnit, "USD")}</strong>/pomo
-              · <strong>${formatMoney(tier.pricePerUnit * wholesaleProduct.unitsPerBox, "USD")}</strong>/caja
-            </div>
-          ` : ''}
-
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="label label-xs">Cantidad de cajas</label>
-              <input class="input" type="number" min="1" max="${maxBoxes}" id="wholesale-boxes" value="${wholesaleBoxes}" />
-              <div class="text-xs text-muted mt-1">${totalUnits} pomos totales</div>
-            </div>
-            <div>
-              <label class="label label-xs">Precio por caja (USD) *</label>
-              <input class="input" type="number" step="0.01" id="wholesale-price" value="${wholesalePricePerBox}" />
-              <div class="text-xs text-muted mt-1">Sugerido: ${formatMoney(getSuggestedPricePerBox(wholesaleProduct, wholesaleBoxes) || 0, "USD")}</div>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="label label-xs">Comisión vendedor /caja (USD)</label>
-              <input class="input" type="number" step="0.01" id="wholesale-vendor-commission" value="${wholesaleVendorCommissionPerBox}" />
-            </div>
-            <div>
-              <label class="label label-xs">Comisión gestor /caja (USD)</label>
-              <input class="input" type="number" step="0.01" id="wholesale-gestor-commission" value="${wholesaleGestorCommissionPerBox}" />
-              ${Number(tier?.gestorCommissionPercent) > 0 ? `<div class="text-xs text-muted mt-1">${tier.gestorCommissionPercent}% del precio de la caja</div>` : ""}
-            </div>
-          </div>
-
-          <div style="display:flex;justify-content:space-between;padding-top:0.5rem;border-top:1px solid var(--border)">
-            <span class="text-sm font-semibold">Total venta:</span>
-            <span class="text-xl font-bold" style="color:var(--primary)">${formatMoney(total, "USD")}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between">
-            <span class="text-xs text-muted">Comisión vendedor total:</span>
-            <span class="text-sm font-semibold">${formatMoney(wholesaleBoxes * wholesaleVendorCommissionPerBox, "USD")}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between">
-            <span class="text-xs text-muted">Comisión gestor total:</span>
-            <span class="text-sm font-semibold">${formatMoney(wholesaleBoxes * wholesaleGestorCommissionPerBox, "USD")}</span>
-          </div>
-        </div>
-      ` : ''}
+        </section>
+      `}
     `;
   }
 
@@ -933,6 +1047,36 @@ export function mountSalesView(container, navigate) {
         }, 50);
       });
     }
+
+    // v5.27.0: mayorista — elegir producto, cambiar, − / + cajas, precio sugerido
+    container.querySelectorAll("[data-ws-pick]").forEach((btn) => btn.addEventListener("click", () => {
+      wholesaleProduct = products.find((p) => p.id === btn.dataset.wsPick) || null;
+      wholesaleBoxes = 1;
+      wholesalePricePerBox = 0;
+      wholesaleVendorCommissionPerBox = 0;
+      wholesaleGestorCommissionPerBox = 0;
+      render();
+    }));
+    container.querySelector("[data-ws-change]")?.addEventListener("click", () => {
+      wholesaleProduct = null;
+      render();
+    });
+    container.querySelectorAll("[data-ws-step]").forEach((btn) => btn.addEventListener("click", () => {
+      const q = wholesaleProduct ? getStockQty(wholesaleProduct.id) : 0;
+      const maxB = wholesaleProduct?.unitsPerBox ? Math.floor(q / wholesaleProduct.unitsPerBox) : 1;
+      const next = Math.min(Math.max(1, wholesaleBoxes + Number(btn.dataset.wsStep)), Math.max(1, maxB));
+      if (next === wholesaleBoxes) return;
+      wholesaleBoxes = next;
+      wholesalePricePerBox = 0;
+      wholesaleVendorCommissionPerBox = 0;
+      wholesaleGestorCommissionPerBox = 0;
+      render();
+    }));
+    container.querySelector("[data-ws-suggested]")?.addEventListener("click", (e) => {
+      wholesalePricePerBox = Number(e.currentTarget.dataset.wsSuggested) || 0;
+      if (Number(getWholesaleTier(wholesaleProduct, wholesaleBoxes)?.gestorCommissionPercent) > 0) wholesaleGestorCommissionPerBox = 0;
+      render();
+    });
 
     // Mayorista: inputs
     const wsBoxes = container.querySelector("#wholesale-boxes");
@@ -1014,6 +1158,7 @@ export function mountSalesView(container, navigate) {
       quickSearchInput.addEventListener("input", (e) => {
         quickSearch = e.target.value;
         paintQuickResults();
+        paintProductList();
       });
       quickSearchInput.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
@@ -1181,6 +1326,9 @@ export function mountSalesView(container, navigate) {
     }
 
     container.querySelector("[data-sale-extras]")?.addEventListener("toggle", (e) => { extrasOpen = e.currentTarget.open; });
+    const backToCart = () => { payStep = false; render(); try { window.scrollTo({ top: 0 }); } catch {} };
+    container.querySelector("#sale-back-cart")?.addEventListener("click", backToCart);
+    container.querySelector("#sale-pay-summary")?.addEventListener("click", backToCart);
     container.querySelector("#sales-back-btn")?.addEventListener("click", () => {
       // El carrito a medias queda guardado (borrador) y se recupera al volver
       window.dispatchEvent(new CustomEvent("mannol:nav", { detail: { view: "dashboard" } }));
@@ -1236,12 +1384,12 @@ export function mountSalesView(container, navigate) {
       `,
       footer: `
         <div style="flex:1;display:flex;justify-content:space-between;align-items:center">
-          <span class="text-xs text-muted" id="catalog-summary">Seleccionados: Ninguno</span>
+          <span class="text-xs text-muted" id="catalog-summary">Toca + para añadir</span>
         </div>
-        <button class="btn btn-outline" id="catalog-cancel">Cancelar</button>
-        <button class="btn btn-primary" id="catalog-add">${icon("check", 14)} Agregar</button>
+        <button class="btn btn-primary" id="catalog-add">${icon("check", 14)} Listo</button>
       `,
-      onClose: () => { catalogOpen = false; catalogListRenderer = null; },
+      // v5.27.0: el «+» ya añade a la venta; al cerrar (como sea) se pinta la venta
+      onClose: () => { catalogOpen = false; catalogListRenderer = null; render(); },
     });
 
     // v5.12.0: chips de "Tipo" y "Marca" con cuántos productos hay en cada uno
@@ -1297,8 +1445,11 @@ export function mountSalesView(container, navigate) {
           </div>`;
       } else {
         // v5.25.0: vista elegida en «Apariencia» del almacén
-        const asCards = document.documentElement.getAttribute("data-catalog-view") === "cards";
+        // v5.27.0: vistas como el menú «Ver» de Windows (iconos muy grandes … detalles)
+        const view = normalizeAppearance({ catalogView: document.documentElement.getAttribute("data-catalog-view") }).catalogView;
+        const asCards = isIconView(view);
         list.classList.toggle("as-cards", asCards);
+        ["xlarge", "large", "medium", "small"].forEach((v) => list.classList.toggle(`view-${v}`, view === v));
         const favSet = new Set(topSellerIds.slice(0, 8));
         const rowHtml = (p) => {
           const qty = getStockQty(p.id);
@@ -1310,7 +1461,7 @@ export function mountSalesView(container, navigate) {
           ${asCards ? `
           <div class="catalog-item catalog-tile ${isOut ? "is-out" : ""} ${inCart > 0 ? "in-cart" : ""}" data-product-id="${esc(p.id)}">
             <div class="ct-pic cr-pic">
-              ${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="" loading="lazy" />` : icon("droplet", 30)}
+              ${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="" loading="lazy" />` : icon("droplet", view === "small" ? 20 : view === "xlarge" ? 44 : 30)}
               ${favSet.has(p.id) ? `<span class="ct-flag ct-fav">Más vendido</span>` : ""}
               ${isOut ? `<span class="ct-flag ct-stock ct-out">Agotado</span>` : isLow ? `<span class="ct-flag ct-stock">Quedan ${qty}</span>` : ""}
             </div>
@@ -1325,7 +1476,7 @@ export function mountSalesView(container, navigate) {
                 <span class="cr-qty" data-qty-display="${esc(p.id)}">${inCart}</span>
                 <button class="btn btn-primary btn-icon" data-qty-inc="${esc(p.id)}" ${inCart >= qty ? "disabled" : ""} aria-label="Añadir una unidad de ${esc(p.name)}">${icon("plus", 16)}</button>
               </div>` : `
-              <button class="ct-add" data-qty-inc="${esc(p.id)}" ${isOut ? "disabled" : ""} aria-label="Agregar ${esc(p.name)}">${isOut ? "Agotado" : "+ Agregar"}</button>`}
+              <button class="ct-add" data-qty-inc="${esc(p.id)}" ${isOut ? "disabled" : ""} aria-label="Agregar ${esc(p.name)}">${isOut ? "Agotado" : view === "small" ? "+" : "+ Agregar"}</button>`}
           </div>` : `
           <div class="catalog-item catalog-row ${isOut ? "is-out" : ""} ${inCart > 0 ? "in-cart" : ""}" data-product-id="${esc(p.id)}">
             <div class="cr-pic" aria-hidden="true">${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="" loading="lazy" />` : icon("boxes", 18)}</div>
@@ -1370,7 +1521,7 @@ export function mountSalesView(container, navigate) {
       if (summary) {
         const totalItems = cart.reduce((s, i) => s + i.quantity, 0);
         const totalAmount = cart.reduce((s, i) => s + i.subtotal, 0);
-        summary.textContent = totalItems > 0 ? `Seleccionados: ${totalItems} · ${formatMoney(totalAmount, "USD")}` : "Seleccionados: Ninguno";
+        summary.textContent = totalItems > 0 ? `En la venta: ${totalItems} · ${formatMoney(totalAmount, "USD")}` : "Toca + para añadir";
       }
 
       // Wire qty buttons
@@ -1453,12 +1604,7 @@ export function mountSalesView(container, navigate) {
     const list = document.querySelector("#catalog-list");
     catalogListRenderer = () => { if (document.querySelector("#catalog-list")) renderCatalogList(); };
 
-    document.querySelector("#catalog-cancel").addEventListener("click", close);
-    document.querySelector("#catalog-add").addEventListener("click", () => {
-      if (cart.length === 0) { toast("Selecciona al menos un producto", "warning"); return; }
-      close();
-      render();
-    });
+    document.querySelector("#catalog-add").addEventListener("click", () => close());
 
     renderCatalogList();
   }
@@ -1526,7 +1672,7 @@ export function mountSalesView(container, navigate) {
 
   // v5.10.0: devuelve true si añadió; también frena productos agotados que aún
   // no estaban en la venta (antes se añadían con stock 0). `silent`: sin toast.
-  function addProduct(productId, { silent = false } = {}) {
+  function addProduct(productId, { silent = false, quiet = false } = {}) {
     const p = products.find((x) => x.id === productId);
     if (!p) return false;
     const stockQty = getStockQty(productId);
@@ -1552,7 +1698,7 @@ export function mountSalesView(container, navigate) {
         vendorCommissionCurrency: p.vendorCommissionCurrency ?? "MN",
       });
     }
-    if (!silent) {
+    if (!silent && !quiet) {
       // v5.18.0: confirmación táctil al añadir (el escáner ya vibra solo)
       try { navigator.vibrate?.(30); } catch {}
       toast(`${p.name} agregado`, "success");

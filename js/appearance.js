@@ -20,9 +20,20 @@ export const ACCENTS = {
 export const FONT_SCALES = { sm: 0.92, md: 1, lg: 1.1, xl: 1.22 };
 export const FONT_LABELS = { sm: "Pequeña", md: "Normal", lg: "Grande", xl: "Muy grande" };
 export const BACKGROUNDS = { app: "Como la app", dark: "Oscuro", light: "Claro" };
-export const CATALOG_VIEWS = { list: "Lista compacta", cards: "Tarjetas" };
+// v5.27.0: vistas al estilo del menú «Ver» de Windows (de más grande a detalles)
+export const CATALOG_VIEWS = {
+  xlarge: "Iconos muy grandes",
+  large: "Iconos grandes",
+  medium: "Iconos medianos",
+  small: "Iconos pequeños",
+  details: "Detalles",
+};
+// Nombres de antes (v5.25–v5.26) → los de ahora
+const LEGACY_VIEWS = { list: "details", cards: "medium" };
+/** ¿La vista del catálogo es de iconos (rejilla) o de detalles (lista)? */
+export const isIconView = (v) => v === "xlarge" || v === "large" || v === "medium" || v === "small";
 
-export const DEFAULT_APPEARANCE = { accent: "mannol", background: "app", font: "md", catalogView: "list" };
+export const DEFAULT_APPEARANCE = { accent: "mannol", background: "app", font: "md", catalogView: "details" };
 
 /** Devuelve una apariencia válida (descarta valores desconocidos). */
 export function normalizeAppearance(raw) {
@@ -31,7 +42,8 @@ export function normalizeAppearance(raw) {
     accent: ACCENTS[a.accent] ? a.accent : DEFAULT_APPEARANCE.accent,
     background: BACKGROUNDS[a.background] ? a.background : DEFAULT_APPEARANCE.background,
     font: FONT_SCALES[a.font] ? a.font : DEFAULT_APPEARANCE.font,
-    catalogView: CATALOG_VIEWS[a.catalogView] ? a.catalogView : DEFAULT_APPEARANCE.catalogView,
+    catalogView: CATALOG_VIEWS[a.catalogView] ? a.catalogView
+      : LEGACY_VIEWS[a.catalogView] || DEFAULT_APPEARANCE.catalogView,
   };
 }
 
@@ -95,6 +107,6 @@ export function applyAppearance(appearance, applyTheme, appTheme) {
     root.removeAttribute("data-font-scale");
   }
   // Vista del catálogo
-  root.setAttribute("data-catalog-view", a ? a.catalogView : "list");
+  root.setAttribute("data-catalog-view", a ? a.catalogView : "details");
   root.setAttribute("data-accent", a ? a.accent : "mannol");
 }

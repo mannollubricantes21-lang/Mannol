@@ -5,9 +5,16 @@
 import { getStore, applyTheme } from "../store.js";
 import { showModal, icon, esc, toast } from "../ui.js";
 import {
-  ACCENTS, BACKGROUNDS, FONT_LABELS, CATALOG_VIEWS,
+  ACCENTS, BACKGROUNDS, FONT_LABELS, CATALOG_VIEWS, DEFAULT_APPEARANCE,
   getAppearance, saveAppearance, applyAppearance,
 } from "../appearance.js";
+
+const SAMPLE = [
+  { name: "Energy Formula 10W-40", sub: "MANNOL · 4 L", price: "$22.00", stock: 12 },
+  { name: "Grasa multiuso 400 g", sub: "MANNOL", price: "$7.00", stock: 3, flag: "Quedan 3" },
+  { name: "Refrigerante G12+", sub: "Royal · 1 L", price: "$6.00", stock: 15 },
+  { name: "Diesel Extra 15W-40", sub: "MANNOL · 5 L", price: "$30.00", stock: 6 },
+];
 
 export function openAppearanceDialog(warehouse, onSaved) {
   if (!warehouse) return;
@@ -34,20 +41,55 @@ export function openAppearanceDialog(warehouse, onSaved) {
 
       ${seg("Fondo", "background", BACKGROUNDS)}
       ${seg("Tamaño de letra", "font", FONT_LABELS)}
-      ${seg("Catálogo de ventas", "catalogView", CATALOG_VIEWS)}
 
-      <div class="ap-sample">
-        <div class="ap-sample-card">
-          <div class="ap-sample-pic">${icon("boxes", 22)}</div>
-          <div style="min-width:0;flex:1">
-            <div class="font-bold">MANNOL Energy 10W-40</div>
-            <div class="text-xs text-muted">4 L · Stock 12</div>
-          </div>
-          <strong class="ap-sample-price">$22.00</strong>
+      <!-- v5.27.0: «Ver» como en Windows — cada opción muestra cómo queda el catálogo -->
+      <div class="ap-group">
+        <div class="ap-label">Ver el catálogo como</div>
+        <div class="ap-views" role="radiogroup" aria-label="Ver el catálogo como">
+          ${Object.entries(CATALOG_VIEWS).map(([k, l]) => `
+            <button type="button" role="radio" class="ap-view ${draft.catalogView === k ? "on" : ""}" data-ap="catalogView" data-v="${k}" aria-checked="${draft.catalogView === k}">
+              <span class="ap-mini ap-mini--${k}" aria-hidden="true">${miniTiles(k)}</span>
+              <span class="ap-view-label">${esc(l)}</span>
+            </button>`).join("")}
         </div>
-        <button type="button" class="btn btn-primary btn-sm btn-block" tabindex="-1">${icon("cart", 14)} Así se ven los botones</button>
+      </div>
+
+      <div class="ap-group">
+        <div class="ap-label">Así se verá el catálogo</div>
+        <div class="ap-preview">
+          <div class="catalog-list ${draft.catalogView === "details" ? "" : `as-cards view-${draft.catalogView}`}" id="ap-preview-list">
+            ${SAMPLE.map((p) => sampleItem(p, draft.catalogView)).join("")}
+          </div>
+        </div>
       </div>
     </div>`;
+
+  // Miniatura esquemática de cada vista (cuadros = fotos, rayas = textos)
+  function miniTiles(view) {
+    const n = { xlarge: 1, large: 2, medium: 4, small: 9, details: 4 }[view] || 4;
+    return Array.from({ length: n }, () => view === "details"
+      ? `<i class="mr"><b></b><s></s></i>`
+      : `<i class="mt"><b></b><s></s></i>`).join("");
+  }
+  // Producto de ejemplo pintado igual que en el catálogo de verdad
+  function sampleItem(p, view) {
+    if (view === "details") {
+      return `
+        <div class="catalog-item catalog-row">
+          <div class="cr-pic">${icon("droplet", 18)}</div>
+          <div class="cr-body"><div class="cr-name">${esc(p.name)}</div><div class="cr-meta">${esc(p.sub)} · Stock ${p.stock}</div></div>
+          <div class="cr-price">${p.price}</div>
+          <button type="button" class="btn btn-secondary btn-icon" tabindex="-1" aria-hidden="true">${icon("plus", 14)}</button>
+        </div>`;
+    }
+    return `
+      <div class="catalog-item catalog-tile">
+        <div class="ct-pic">${icon("droplet", view === "small" ? 18 : 28)}${p.flag ? `<span class="ct-flag ct-stock">${esc(p.flag)}</span>` : ""}</div>
+        <div class="ct-body"><div class="ct-name">${esc(p.name)}</div><div class="ct-sub">${esc(p.sub)}</div></div>
+        <div class="ct-price">${p.price}</div>
+        <button type="button" class="ct-add" tabindex="-1" aria-hidden="true">${view === "small" ? "+" : "+ Agregar"}</button>
+      </div>`;
+  }
 
   function seg(label, key, options) {
     return `
@@ -85,7 +127,7 @@ export function openAppearanceDialog(warehouse, onSaved) {
 
   document.querySelector("#ap-cancel")?.addEventListener("click", () => close());
   document.querySelector("#ap-reset")?.addEventListener("click", () => {
-    draft = { accent: "mannol", background: "app", font: "md", catalogView: "list" };
+    draft = { ...DEFAULT_APPEARANCE };
     preview();
     const root = document.querySelector(".appearance-dialog");
     if (root) { root.outerHTML = body(); wire(); }

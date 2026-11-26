@@ -310,97 +310,58 @@ export function mountWarehouseInterior(container, navigate) {
       : [];
 
     container.innerHTML = `
-      <div class="wi-layout" data-sec-active="${section}" style="display:flex;flex-direction:column;gap:0.875rem">
-        <!-- Hero del almacén (v5.7.0) -->
-        <div class="wh-hero wi-hero">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem">
-            <div style="display:flex;align-items:center;gap:0.5rem;min-width:0">
-              <span class="wh-chip" style="--wh:${warehouseColor(warehouse)}">${icon("store", 11)} ${esc(warehouse.code)}</span>
-              <h2 class="text-lg font-bold" style="margin:0">${esc(warehouse.name)}</h2>
+      <div class="wi-layout wi-v2" data-sec-active="${section}" style="display:flex;flex-direction:column;gap:0.875rem">
+        <!-- v5.27.0: sin cabecera propia ni pestañas: el nombre va en la barra
+             de arriba y las secciones en la barra de abajo (Hoy · Inventario ·
+             Vender · Caja · Más). Apariencia y «Salir» están en «Más». -->
+        <!-- v5.27.0: resumen — el total grande, el resto al lado, barra por moneda -->
+        <div class="card wi-resumen wi2-sum" data-sec="hoy">
+          <div class="seg-group wi2-seg">
+            ${[["today", "Hoy"], ["week", "Semana"], ["month", "Mes"]].map(([p, lbl]) => `
+              <button class="seg ${period === p ? 'seg-on' : ''}" data-period="${p}">${lbl}</button>
+            `).join("")}
+          </div>
+          <div class="wi2-sum-main">
+            <div style="min-width:0">
+              <div class="wi2-sum-label">${period === "today" ? "Vendido hoy" : period === "week" ? "Vendido esta semana" : "Vendido este mes"}</div>
+              <div class="wi2-big">${formatMoney(stats.totalUSD, "USD")}</div>
             </div>
-            <div style="display:flex;gap:0.25rem;flex-shrink:0">
-              <button class="btn btn-ghost btn-sm btn-icon" data-appearance aria-label="Apariencia de este almacén" title="Apariencia">${icon("palette", 16)}</button>
-              <button class="btn btn-ghost btn-sm" data-nav-back>${icon("arrowLeft", 14)} Volver</button>
+            <div class="wi2-sum-side">
+              <span><strong>${stats.count}</strong> venta${stats.count === 1 ? "" : "s"}</span>
+              <span><strong>${stats.unitsSold}</strong> unidades</span>
+              <span>ticket <strong>${formatMoney(stats.count > 0 ? stats.totalUSD / stats.count : 0, "USD")}</strong></span>
             </div>
           </div>
-          ${warehouse.address || warehouse.phone ? `
-            <div class="wh-meta">
-              ${warehouse.address ? `<span>${icon("mapPin", 11)} ${esc(warehouse.address)}</span>` : ''}
-              ${warehouse.phone ? `<span>${icon("phone", 11)} ${esc(warehouse.phone)}</span>` : ''}
+          ${activeCurrs.length > 0 ? `
+            <div class="wi2-bar" aria-hidden="true">
+              ${activeCurrs.map((c) => `<span style="flex:${Math.max(stats.byCurrency[c].amount, 0.01)};background:${CURR_COLOR[c]}"></span>`).join("")}
             </div>
+            <div class="wi2-currs">
+              ${activeCurrs.map((c) => `
+                <span><i style="background:${CURR_COLOR[c]}"></i>${CURR_LABEL[c]} <strong>${formatMoney(stats.byCurrency[c].amount, CURR_FMT[c])}</strong> <em>${stats.byCurrency[c].count}</em></span>
+              `).join("")}
+            </div>
+          ` : ''}
+          ${zeroCurrs.length > 0 && activeCurrs.length > 0 ? `
+            <div class="wi2-zero">Sin movimiento: ${zeroCurrs.map((c) => CURR_LABEL[c]).join(", ")}</div>
+          ` : ''}
+          ${stats.count === 0 ? `
+            <div class="wi2-empty">Sin ventas en este período. Toca «Vender» abajo para registrar una.</div>
           ` : ''}
         </div>
 
-        <!-- v5.22.0: secciones (en el teléfono se ve una a la vez; en PC todo) -->
-        <div class="wi-tabs" role="tablist" aria-label="Secciones del almacén">
-          <button type="button" role="tab" class="wi-tab ${section === "hoy" ? "on" : ""}" aria-selected="${section === "hoy"}" data-sec-tab="hoy">${icon("activity", 15)} Hoy</button>
-          <button type="button" role="tab" class="wi-tab ${section === "inv" ? "on" : ""}" aria-selected="${section === "inv"}" data-sec-tab="inv">${icon("boxes", 15)} Inventario${lowStock + outOfStock > 0 ? `<span class="wi-tab-n">${lowStock + outOfStock}</span>` : ""}</button>
-          <button type="button" role="tab" class="wi-tab ${section === "caja" ? "on" : ""}" aria-selected="${section === "caja"}" data-sec-tab="caja">${icon("receipt", 15)} Caja${!todayClosed && (todayStats.salesCount > 0 || openingFloat) ? `<span class="wi-tab-dot" title="Caja pendiente de cerrar"></span>` : ""}</button>
-        </div>
-
-        <!-- Resumen con período integrado (v5.7.0) -->
-        <div class="card wi-resumen" data-sec="hoy">
-          <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;padding:0.625rem 0.75rem">
-            <h3 class="card-title flex items-center gap-1">${icon("activity", 14)} Resumen</h3>
-            <div class="seg-group">
-              ${[["today", "Hoy"], ["week", "Semana"], ["month", "Mes"]].map(([p, lbl]) => `
-                <button class="seg ${period === p ? 'seg-on' : ''}" data-period="${p}">${lbl}</button>
-              `).join("")}
-            </div>
-          </div>
-          <div class="card-content" style="padding:0.625rem 0.75rem 0.75rem">
-            <div class="kpi-grid">
-              <div class="kpi-cell">
-                <span class="kpi-label">Ventas</span>
-                <span class="kpi-value">${stats.count}</span>
-              </div>
-              <div class="kpi-cell">
-                <span class="kpi-label">Total (USD)</span>
-                <span class="kpi-value" style="color:var(--accent-usd)">${formatMoney(stats.totalUSD, "USD")}</span>
-              </div>
-              <div class="kpi-cell">
-                <span class="kpi-label">Unidades</span>
-                <span class="kpi-value">${stats.unitsSold}</span>
-              </div>
-              <div class="kpi-cell">
-                <span class="kpi-label">Ticket prom.</span>
-                <span class="kpi-value">${formatMoney(stats.count > 0 ? stats.totalUSD / stats.count : 0, "USD")}</span>
-              </div>
-            </div>
-
-            ${activeCurrs.length > 0 ? `
-              <div style="display:flex;flex-wrap:wrap;gap:0.375rem;margin-top:0.5625rem">
-                ${activeCurrs.map((c) => `
-                  <span class="curr-chip">
-                    <span class="curr-dot" style="background:${CURR_COLOR[c]}"></span>
-                    <strong class="text-xs" style="color:${CURR_COLOR[c]}">${CURR_LABEL[c]}</strong>
-                    <strong class="text-xs">${formatMoney(stats.byCurrency[c].amount, CURR_FMT[c])}</strong>
-                    <span class="text-muted" style="font-size:0.625rem">· ${stats.byCurrency[c].count}</span>
-                  </span>
-                `).join("")}
-              </div>
-            ` : ''}
-            ${zeroCurrs.length > 0 ? `
-              <div class="text-xs text-muted" style="margin-top:0.4375rem">
-                Sin movimiento: ${zeroCurrs.map((c) => CURR_LABEL[c]).join(" · ")}
-              </div>
-            ` : ''}
-
-            ${stats.count === 0 ? `
-              <div class="empty-state text-xs" style="padding:0.875rem 0 0.25rem">
-                <div class="empty-state-icon">${icon("cart", 20)}</div>
-                <p style="margin:0.25rem 0 0">Sin ventas en este período.</p>
-                <p class="text-muted" style="font-size:0.6875rem;margin:0.125rem 0 0">Toca el carrito ${icon("cart", 11)} de abajo para registrar una venta.</p>
-              </div>
-            ` : ''}
-          </div>
-        </div>
+        ${restock.length || outOfStock ? `
+          <button class="wi2-alert" data-sec="hoy" data-go="wi-inv">
+            ${icon("alertTriangle", 18)}
+            <span>${restock.length ? `${restock.length} producto${restock.length === 1 ? "" : "s"} por pedir` : ""}${restock.length && outOfStock ? " · " : ""}${outOfStock ? `${outOfStock} agotado${outOfStock === 1 ? "" : "s"}` : ""}</span>
+            <span class="wi2-alert-go">Ver ${icon("chevronRight", 16)}</span>
+          </button>` : ""}
 
         <!-- v5.20.0: se quitó el botón grande «Registrar venta» del centro —
              el botón 🛒 de la barra de abajo está siempre disponible. -->
 
         <!-- v5.14.0: lo que lleva ganado (comisión fija por producto) -->
-        <div class="wi-ganado" data-sec="hoy caja">${earningsHtml}</div>
+        <div class="wi-ganado" data-sec="caja">${earningsHtml}</div>
 
         <!-- Caja del día (v5.5.0 → v5.24.0: fondo inicial + arqueo + marcas) -->
         <div class="card wi-cierre" data-sec="caja">
@@ -437,11 +398,7 @@ export function mountWarehouseInterior(container, navigate) {
             <!-- 2 · Ventas del día -->
             <div class="cash-block">
               <div class="cash-title"><span class="sale-step-n">2</span> Ventas de hoy</div>
-              <div class="stat-row">
-                <div class="stat-cell"><div class="text-lg font-bold">${todayStats.salesCount}</div><div class="text-xs text-muted">Ventas</div></div>
-                <div class="stat-cell"><div class="text-lg font-bold" style="color:var(--accent-usd)">${formatMoney(todayStats.totalUSD, "USD")}</div><div class="text-xs text-muted">Total (USD)</div></div>
-                <div class="stat-cell"><div class="text-lg font-bold">${todayStats.unitsSold}</div><div class="text-xs text-muted">Unidades</div></div>
-              </div>
+              <div class="cash-total"><span>${todayStats.salesCount} venta${todayStats.salesCount === 1 ? "" : "s"} · ${todayStats.unitsSold} u</span><strong>${formatMoney(todayStats.totalUSD, "USD")}</strong></div>
               ${Object.entries(todayStats.byCurrency).filter(([_, v]) => v.count > 0).map(([curr, d]) => `
                 <div class="cash-line"><span class="text-muted">${curr === "TRANSFERENCIA" ? "Transferencia (a tarjeta)" : esc(curr)} · ${d.count} venta(s)</span><strong>${formatMoney(d.amount, curr === "TRANSFERENCIA" ? "USD" : curr)}</strong></div>
               `).join("")}
@@ -470,16 +427,16 @@ export function mountWarehouseInterior(container, navigate) {
               <textarea class="textarea" id="cash-note" maxlength="300" style="min-height:3rem" placeholder="Ej.: sobran $5 de una venta que no se registró · falta cambio de 200 MN">${esc(cashNote)}</textarea>
             </div>
 
-            <button class="btn ${!todayClosed && (todayStats.salesCount > 0 || openingFloat) ? 'btn-primary' : 'btn-outline'} btn-block" id="close-cash-btn">
-              ${icon("check", 14)} ${todayClosed ? 'Actualizar cierre de hoy' : 'Cerrar caja de hoy'}
-            </button>
-            ${todayStats.salesCount > 0 || todayClosed ? `
-              <!-- v5.10.0: enviar el resumen del día por WhatsApp -->
+            <!-- v5.27.0: UNA acción principal. Cerrada → compartir pasa a ser lo principal -->
+            ${todayClosed ? `
+              <button class="btn btn-primary btn-lg btn-block" id="share-closure-wa">${icon("whatsapp", 18)} Enviar cierre por WhatsApp</button>
               <div class="closure-share">
-                <button class="btn btn-whatsapp btn-sm" id="share-closure-wa">${icon("whatsapp", 16)} Enviar por WhatsApp</button>
-                <button class="btn btn-outline btn-sm" id="share-closure-copy" aria-label="Copiar el resumen del cierre" title="Copiar el resumen">${icon("copy", 14)} Copiar</button>
+                <button class="btn btn-secondary btn-sm" id="close-cash-btn">${icon("check", 14)} Corregir cierre</button>
+                <button class="btn btn-secondary btn-sm" id="share-closure-copy" aria-label="Copiar el resumen del cierre">${icon("copy", 14)} Copiar texto</button>
               </div>
-            ` : ''}
+            ` : `
+              <button class="btn btn-primary btn-lg btn-block" id="close-cash-btn">${icon("check", 16)} Cerrar caja de hoy</button>
+            `}
             ${recentClosures.filter((c) => c.closed !== false).length > 0 ? `
               <button class="btn btn-ghost btn-sm btn-block" data-toggle-closures>
                 Últimos cierres (${recentClosures.filter((c) => c.closed !== false).length}) ${closuresOpen ? '▲' : '▼'}
@@ -663,7 +620,7 @@ export function mountWarehouseInterior(container, navigate) {
 
         <!-- v5.21.0: Pedido sugerido -->
         ${restock.length ? `
-          <div class="card wi-pedido" data-sec="hoy inv">
+          <div class="card wi-pedido" data-sec="inv">
             <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
               <h3 class="card-title flex items-center gap-1">${icon("listTree", 14)} Pedido sugerido</h3>
               <span class="badge badge-warning" style="font-size:0.625rem">${restock.length} producto${restock.length === 1 ? "" : "s"}</span>
@@ -688,23 +645,21 @@ export function mountWarehouseInterior(container, navigate) {
 
         <!-- Ventas recientes -->
         ${periodSales.length > 0 ? `
-          <div class="card wi-recientes" data-sec="hoy caja">
-            <div class="card-header"><h3 class="card-title">Ventas recientes</h3></div>
-            <div class="card-content" style="padding:0.5rem">
-              <div style="max-height:14rem;overflow-y:auto;display:flex;flex-direction:column;gap:0.25rem">
-                ${periodSales.slice(0, 10).map((s) => `
-                  <div class="tile" style="display:flex;justify-content:space-between;align-items:center;padding:0.375rem 0.5rem;border:1px solid var(--border);border-radius:var(--radius);border-left:3px solid ${CURR_COLOR[s.currency] || 'var(--accent)'}">
-                    <div>
-                      <div class="text-xs font-medium">${esc(s.code)} · ${esc(s.managerName || s.userName || '—')}</div>
-                      <div class="text-xs text-muted">${s.items.length} items · ${formatDate(s.createdAt)}</div>
-                    </div>
-                    <div style="text-align:right">
-                      <div class="text-sm font-bold">${formatMoney(s.totalAmount, "USD")}</div>
-                      <span class="badge ${s.currency === 'TRANSFERENCIA' ? 'badge-warning' : 'badge-accent'}" style="font-size:0.5rem">${esc(s.currency || 'USD')}</span>
-                    </div>
+          <div class="card wi-recientes wi2-recent" data-sec="hoy">
+            <div class="wi2-h-row"><h3 class="wi2-h">Ventas ${period === "today" ? "de hoy" : "recientes"}</h3><button class="btn btn-text btn-sm" data-go="history">Ver historial</button></div>
+            <div class="wi2-recent-list">
+              ${periodSales.slice(0, 10).map((s) => {
+                const n = (s.items || []).reduce((a, it) => a + (Number(it.quantity) || 0), 0) || s.items.length;
+                return `
+                <div class="wi2-sale">
+                  <span class="wi2-sale-mark" style="background:${CURR_COLOR[s.currency] || 'var(--primary)'}"></span>
+                  <div class="wi2-sale-txt">
+                    <div><strong>${esc(s.code)}</strong> ${esc(s.managerName || s.userName || '')}</div>
+                    <div class="wi2-sale-sub">${n} producto${n === 1 ? "" : "s"} · ${formatDate(s.createdAt)} · ${CURR_LABEL[s.currency] || esc(s.currency || 'USD')}</div>
                   </div>
-                `).join("")}
-              </div>
+                  <span class="wi2-sale-amt">${formatMoney(s.totalAmount, "USD")}</span>
+                </div>`;
+              }).join("")}
             </div>
           </div>
         ` : ''}
@@ -915,6 +870,25 @@ export function mountWarehouseInterior(container, navigate) {
     container.querySelector("[data-appearance]")?.addEventListener("click", () => {
       import("./appearance-dialog.js").then((m) => m.openAppearanceDialog(warehouse, () => render()));
     });
+    // v5.27.0: atajos «Ver» → otra sección/vista (por la barra de abajo)
+    container.querySelectorAll("[data-go]").forEach((el) => {
+      el.addEventListener("click", () => window.dispatchEvent(new CustomEvent("mannol:nav", { detail: { view: el.dataset.go } })));
+    });
+    // Avisos en la barra de abajo: productos bajos/agotados y caja sin cerrar
+    try {
+      const invBtn = document.querySelector('.nav-btn[data-nav="wi-inv"]');
+      if (invBtn) {
+        invBtn.querySelector(".nav-badge")?.remove();
+        const n = lowStock + outOfStock;
+        if (n > 0) invBtn.insertAdjacentHTML("beforeend", `<span class="nav-badge" aria-label="${n} con poco stock">${n}</span>`);
+      }
+      const cajaBtn = document.querySelector('.nav-btn[data-nav="wi-caja"]');
+      if (cajaBtn) {
+        cajaBtn.querySelector(".nav-badge")?.remove();
+        if (!todayClosed && (todayStats.salesCount > 0 || openingFloat)) cajaBtn.insertAdjacentHTML("beforeend", `<span class="nav-badge nav-badge--dot" aria-label="Caja sin cerrar"></span>`);
+      }
+    } catch {}
+
     const backBtn = container.querySelector("[data-nav-back]");
     if (backBtn) backBtn.addEventListener("click", () => exitWarehouse(store, warehouse, navigate));
 
@@ -981,5 +955,14 @@ export function mountWarehouseInterior(container, navigate) {
   }
 
   render();
-  return () => { unsubSales(); unsubStock(); };
+  // v5.27.0: la barra de abajo cambia de sección sin volver a cargar datos
+  const onSection = (e) => {
+    const sec = e.detail?.section;
+    if (!["hoy", "inv", "caja"].includes(sec) || sec === section) return;
+    section = sec;
+    render();
+  };
+  window.addEventListener("mannol:wi-section", onSection);
+
+  return () => { unsubSales(); unsubStock(); window.removeEventListener("mannol:wi-section", onSection); };
 }
