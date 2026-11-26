@@ -5,11 +5,9 @@
 //  1. Producto — nombre, MARCA (todas las marcas como botones + «Otra marca»),
 //     tipo y viscosidad (salen solos del nombre), código de barras, se puede vender.
 //  2. Precio y stock — precio, costo (con la ganancia al momento), stock mínimo.
-//  3. Comisiones por unidad — primero la del vendedor (la que suma en
-//     «Lo que llevas ganado»), después la del gestor.
-//  4. Venta por caja — interruptor; precios «desde N cajas» en filas, con el
-//     total por caja calculado (antes había que escribir JSON a mano).
-//  5. Foto.
+//  3. Foto.
+//  v5.30.0: sin comisiones por producto (vendedor: regla por venta; gestor: su
+//  %) y sin venta por caja (ahora en Admin → Venta mayorista).
 // Los números aceptan coma o punto, y cada error sale debajo de su campo.
 // La lógica pura (y sus pruebas) está en ../product-form.js.
 // =====================================================
@@ -21,8 +19,7 @@ import { findProductByCode } from "../sales-stats.js";
 import { openScanner, canUseCamera } from "../barcode-scanner.js";
 import { detectViscosityFromName } from "../viscosity.js";
 import {
-  parseDecimal, numberToInput, money2, brandChoices, findBrand, tiersToRows, isBlankTierRow,
-  tierRangeLabel, tierPerBox, wholesaleSummary, marginInfo, validateProductForm,
+  parseDecimal, numberToInput, money2, brandChoices, findBrand, marginInfo, validateProductForm,
 } from "../product-form.js";
 
 function formatBytes(bytes) {
@@ -32,14 +29,6 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-const blankTier = (from = {}) => ({
-  minBoxes: "",
-  pricePerUnit: "",
-  vendorCommission: from.vendorCommission || "",
-  gestorCommission: from.gestorCommission || "",
-  extra: {},
-});
-
 // Campo del formulario → id del control (para marcar errores)
 const FIELD_IDS = {
   name: "p-name",
@@ -47,10 +36,6 @@ const FIELD_IDS = {
   price: "p-price",
   costPrice: "p-costPrice",
   minStock: "p-minStock",
-  vendorCommission: "p-vendorCommission",
-  gestorCommission: "p-gestorCommission",
-  unitsPerBox: "p-unitsPerBox",
-  tiers: "p-tiers",
 };
 
 /**
@@ -70,14 +55,11 @@ export function showProductDialog(product, categories = [], onSaved = () => {}, 
   let brandMode = brandValue ? "list" : (brandList.length ? "list" : "other");
   let brandTouched = !isNew;
 
-  const hasWholesale = !!(p.unitsPerBox || (Array.isArray(p.wholesaleTiers) && p.wholesaleTiers.length));
-  let rows = tiersToRows(p.wholesaleTiers);
-  if (!rows.length) rows = [blankTier()];
 
   const camera = canUseCamera();
-  const vendorCur = p.vendorCommissionCurrency === "MN" ? "MN" : "USD";
-  const gestorCur = (p.gestorCommissionCurrency ?? p.commissionCurrency) === "MN" ? "MN" : "USD";
-  const curOptions = (cur) => ["USD", "MN"].map((c) => `<option value="${c}"${cur === c ? " selected" : ""}>${c}</option>`).join("");
+  // v5.31.0: comisión fija propia (cargadores, breakers…), aparte de la regla
+  const ownOn = !!p.ownVendorCommission;
+  const ownCur = p.vendorCommissionCurrency === "MN" ? "MN" : "USD";
 
   const rootCats = sortCategories(categories.filter((c) => !c.parentId));
   const catOptions = `<option value="">Sin tipo</option>` + rootCats.map((c) => `
@@ -105,26 +87,6 @@ export function showProductDialog(product, categories = [], onSaved = () => {}, 
     const on = brandMode === "list" && name === brandValue;
     return `<button type="button" class="pf-chip${on ? " is-on" : ""}" data-brand="${esc(name)}" aria-pressed="${on}">${esc(name)}</button>`;
   };
-  const tierRowHtml = (row, i) => `
-    <div class="pf-tier" data-tier-row="${i}">
-      <div class="pf-tier-head">
-        <span class="pf-tier-range" data-tier-range></span>
-        ${i === 0
-          ? `<span class="pf-tier-tag">Precio base</span>`
-          : `<button type="button" class="btn btn-ghost btn-icon btn-sm pf-tier-del" data-tier-del="${i}" aria-label="Quitar este precio" title="Quitar">${icon("trash", 14)}</button>`}
-      </div>
-      <div class="pf-tier-grid">
-        ${i === 0
-          ? `<div class="pf-mini"><span>Desde</span><div class="pf-static">1 caja</div></div>`
-          : `<label class="pf-mini"><span>Desde (cajas)</span><input class="input" data-k="minBoxes" inputmode="numeric" autocomplete="off" placeholder="Ej: 6" value="${esc(row.minBoxes)}" /></label>`}
-        <label class="pf-mini"><span>Precio por pomo</span><input class="input" data-k="pricePerUnit" inputmode="decimal" autocomplete="off" placeholder="0.00 USD" value="${esc(row.pricePerUnit)}" /></label>
-        <label class="pf-mini"><span>Vendedor por pomo</span><input class="input" data-k="vendorCommission" inputmode="decimal" autocomplete="off" placeholder="0.00 USD" value="${esc(row.vendorCommission)}" /></label>
-        <label class="pf-mini"><span>Gestor por pomo <em class="text-muted" style="font-style:normal">o %</em></span><input class="input" data-k="gestorCommission" inputmode="text" autocomplete="off" placeholder="0.00 USD o 3%" value="${esc(row.gestorCommission)}" /></label>
-      </div>
-      <p class="pf-tier-sum" data-tier-sum></p>
-      <p class="pf-msg" data-tier-msg hidden></p>
-    </div>`;
-
   const body = `
     <div class="pf" id="p-form">
       ${section("pf-basic", "tags", "Producto", "", `
@@ -194,47 +156,27 @@ export function showProductDialog(product, categories = [], onSaved = () => {}, 
           </div>
         </div>`)}
 
-      ${section("pf-comm", "wallet", "Comisiones por unidad vendida", "", `
-        <div class="pf-grid">
-          <div class="pf-field pf-field--wide">
-            <label class="pf-label" for="p-vendorCommission">Vendedor</label>
-            <div class="pf-ig">
-              <input class="input" id="p-vendorCommission" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${esc(numberToInput(p.vendorCommission ?? 0))}" ${described("p-vendorCommission", true)} />
-              <select class="select" id="p-vendorCommissionCurrency" aria-label="Moneda de la comisión del vendedor">${curOptions(vendorCur)}</select>
-            </div>
-            ${hint("p-vendorCommission", "Lo que gana el vendedor por cada unidad · se suma en «Lo que llevas ganado»")}
-            ${msg("p-vendorCommission")}${warn("p-vendorCommission")}
-          </div>
-          <div class="pf-field pf-field--wide">
-            <label class="pf-label" for="p-gestorCommission">Gestor</label>
-            <div class="pf-ig">
-              <input class="input" id="p-gestorCommission" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${esc(numberToInput(p.gestorCommission ?? p.commission ?? 1))}" ${described("p-gestorCommission", true)} />
-              <select class="select" id="p-gestorCommissionCurrency" aria-label="Moneda de la comisión del gestor">${curOptions(gestorCur)}</select>
-            </div>
-            ${hint("p-gestorCommission", "Solo cuando la venta la trae un gestor")}
-            ${msg("p-gestorCommission")}
-          </div>
-        </div>`)}
-
-      ${section("pf-wholesale", "boxes", "Venta por caja", wholesaleSummary(hasWholesale, numberToInput(p.unitsPerBox), rows), `
-        <div class="pf-wh-body" id="p-wh-body"${hasWholesale ? "" : " hidden"}>
+      ${section("pf-own", "wallet", "Comisión propia del vendedor", ownOn ? `${esc(numberToInput(p.vendorCommission))} ${ownCur} por unidad` : "No: cobra por venta (lo normal)", `
+        <div class="pf-own-body" id="p-own-body"${ownOn ? "" : " hidden"}>
           <div class="pf-grid">
-            <div class="pf-field">
-              <label class="pf-label" for="p-unitsPerBox">Pomos por caja <span class="pf-req" aria-hidden="true">*</span></label>
-              <div class="pf-ig"><input class="input" id="p-unitsPerBox" inputmode="numeric" autocomplete="off" placeholder="Ej: 6" value="${esc(numberToInput(p.unitsPerBox))}" ${described("p-unitsPerBox", false)} /><span class="pf-unit">pomos</span></div>
-              ${msg("p-unitsPerBox")}
+            <div class="pf-field pf-field--wide">
+              <label class="pf-label" for="p-ownAmount">Gana por cada unidad</label>
+              <div class="pf-ig">
+                <input class="input" id="p-ownAmount" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${esc(ownOn ? numberToInput(p.vendorCommission) : "")}" aria-describedby="p-ownAmount-hint p-ownAmount-msg" />
+                <select class="select" id="p-ownCurrency" aria-label="Moneda">${["USD", "MN"].map((c) => `<option value="${c}"${ownCur === c ? " selected" : ""}>${c}</option>`).join("")}</select>
+              </div>
+              <p class="pf-hint" id="p-ownAmount-hint">Va aparte de la regla por venta.</p>
+              <p class="pf-msg" id="p-ownAmount-msg" hidden></p>
             </div>
           </div>
-          <p class="pf-hint pf-tiers-intro">Precio y comisiones <strong>por pomo</strong>, en USD. Si compran más cajas, puedes poner un precio más bajo.</p>
-          <div class="pf-tiers" id="p-tiers"></div>
-          ${msg("p-tiers")}${warn("p-tiers")}
-          <button type="button" class="btn btn-outline btn-sm pf-tier-add" id="p-tier-add">${icon("plus", 14)} Precio por más cajas</button>
-        </div>`, `
-        <label class="pf-switch pf-switch--head" for="p-wholesale">
-          <input type="checkbox" id="p-wholesale"${hasWholesale ? " checked" : ""} aria-describedby="pf-wholesale-sub" />
+        </div>
+        <p class="pf-hint pf-comm-note">${icon("wallet", 14)} <span>Solo para productos que van aparte (cargadores, breakers…). Los demás: el vendedor cobra <strong>por venta</strong> y el gestor su %. La venta por caja está en <strong>Admin → Venta mayorista</strong>.</span></p>`, `
+        <label class="pf-switch pf-switch--head" for="p-own">
+          <input type="checkbox" id="p-own"${ownOn ? " checked" : ""} aria-describedby="pf-own-sub" />
           <span class="pf-switch-track" aria-hidden="true"></span>
-          <span class="sr-only">Se vende por caja</span>
+          <span class="sr-only">Comisión fija propia</span>
         </label>`)}
+
 
       ${section("pf-image", "image", "Foto", "", `
         <div class="pf-image">
@@ -277,14 +219,19 @@ export function showProductDialog(product, categories = [], onSaved = () => {}, 
   const priceInput = $("#p-price");
   const costInput = $("#p-costPrice");
   const minStockInput = $("#p-minStock");
-  const vInput = $("#p-vendorCommission");
-  const gInput = $("#p-gestorCommission");
-  const whToggle = $("#p-wholesale");
-  const whBody = $("#p-wh-body");
-  const whSummary = $("#pf-wholesale-sub");
-  const unitsInput = $("#p-unitsPerBox");
-  const tiersBox = $("#p-tiers");
   const activeInput = $("#p-active");
+  const ownToggle = $("#p-own");
+  const ownAmount = $("#p-ownAmount");
+  const ownMsg = $("#p-ownAmount-msg");
+  const paintOwn = () => {
+    $("#p-own-body").hidden = !ownToggle.checked;
+    const sub = $("#pf-own-sub");
+    const a = parseDecimal(ownAmount.value);
+    if (sub) sub.textContent = ownToggle.checked ? (a > 0 ? `${numberToInput(a)} ${$("#p-ownCurrency").value} por unidad` : "Pon cuánto gana por unidad") : "No: cobra por venta (lo normal)";
+  };
+  ownToggle.addEventListener("change", () => { paintOwn(); if (ownToggle.checked && !ownAmount.value.trim()) { try { ownAmount.focus(); } catch {} } });
+  ownAmount.addEventListener("input", () => { ownMsg.hidden = true; ownAmount.classList.remove("is-invalid"); paintOwn(); });
+  $("#p-ownCurrency").addEventListener("change", paintOwn);
 
   $("#p-cancel").addEventListener("click", close);
 
@@ -312,12 +259,6 @@ export function showProductDialog(product, categories = [], onSaved = () => {}, 
     el.hidden = !text;
     el.textContent = text || "";
   }
-  function clearTierErrors(rowEl) {
-    const scope = rowEl || tiersBox;
-    scope.querySelectorAll(".is-invalid").forEach((el) => { el.classList.remove("is-invalid"); el.removeAttribute("aria-invalid"); });
-    scope.querySelectorAll("[data-tier-msg]").forEach((el) => { el.hidden = true; el.textContent = ""; });
-  }
-
   // ---------- marca ----------
   function paintBrand() {
     const typed = otherInput.value;
@@ -395,89 +336,26 @@ export function showProductDialog(product, categories = [], onSaved = () => {}, 
   viscInput.addEventListener("input", autoCategory);
   catSelect.addEventListener("change", () => { categoryTouched = true; catHint.textContent = ""; });
 
-  // ---------- precio, costo y comisiones ----------
+  // ---------- precio y costo ----------
   function paintMoney() {
     const m = marginInfo(priceInput.value, costInput.value);
     const el = $("#p-margin");
     if (m) {
       el.className = `pf-margin pf-span2 ${m.profit >= 0 ? "is-good" : "is-bad"}`;
       el.innerHTML = m.profit >= 0
-        ? `${icon("trendingUp", 14)} Ganas <strong>${money2(m.profit)} USD</strong> por unidad (${m.pct}% sobre el costo)`
-        : `${icon("trendingDown", 14)} Pierdes <strong>${money2(-m.profit)} USD</strong> por unidad`;
+        ? `${icon("trendingUp", 14)} <span>Ganas <strong>${money2(m.profit)} USD</strong> por unidad (${m.pct}% sobre el costo)</span>`
+        : `${icon("trendingDown", 14)} <span>Pierdes <strong>${money2(-m.profit)} USD</strong> por unidad</span>`;
     } else {
       el.className = "pf-margin pf-span2";
       el.textContent = parseDecimal(priceInput.value) > 0 && !costInput.value.trim() ? "Pon el costo para ver cuánto ganas por unidad" : "";
     }
     el.hidden = !el.textContent;
-    const check = validateProductForm({ price: priceInput.value, costPrice: costInput.value, vendorCommission: vInput.value });
-    setWarn("vendorCommission", check.errors.vendorCommission ? "" : check.warnings.vendorCommission || "");
+    const check = validateProductForm({ price: priceInput.value, costPrice: costInput.value });
     setWarn("costPrice", check.errors.costPrice ? "" : check.warnings.costPrice || "");
   }
   [
     [priceInput, "price"], [costInput, "costPrice"], [minStockInput, "minStock"],
-    [vInput, "vendorCommission"], [gInput, "gestorCommission"],
   ].forEach(([el, key]) => el.addEventListener("input", () => { setMsg(key, ""); paintMoney(); }));
-
-  // ---------- venta por caja ----------
-  function readRow(i) {
-    const el = tiersBox.querySelector(`[data-tier-row="${i}"]`);
-    if (!el) return;
-    el.querySelectorAll("[data-k]").forEach((inp) => { rows[i][inp.dataset.k] = inp.value; });
-  }
-  function paintTiers() {
-    const units = parseDecimal(unitsInput.value);
-    tiersBox.querySelectorAll("[data-tier-row]").forEach((el) => {
-      const i = Number(el.dataset.tierRow);
-      let next = null;
-      for (let j = i + 1; j < rows.length; j++) {
-        if (!isBlankTierRow(rows[j], j)) { next = rows[j]; break; }
-      }
-      const range = tierRangeLabel(i === 0 ? 1 : rows[i].minBoxes, next ? next.minBoxes : null);
-      el.querySelector("[data-tier-range]").textContent = range || "¿Desde cuántas cajas?";
-      const per = tierPerBox(rows[i], unitsInput.value);
-      el.querySelector("[data-tier-sum]").innerHTML = per
-        ? `Caja de ${units}: <strong>${money2(per.price)} USD</strong> · vendedor ${money2(per.vendor)} · gestor ${money2(per.gestor)}${per.gestorPct ? ` (${per.gestorPct}% del precio)` : ""}`
-        : "";
-    });
-    if (whSummary) whSummary.textContent = wholesaleSummary(whToggle.checked, unitsInput.value, rows);
-    const check = validateProductForm({ wholesale: whToggle.checked, unitsPerBox: unitsInput.value, tiers: rows });
-    setWarn("tiers", whToggle.checked && !check.tierErrors.length ? check.warnings.tiers || "" : "");
-  }
-  function renderTiers() {
-    tiersBox.innerHTML = rows.map(tierRowHtml).join("");
-    paintTiers();
-  }
-  tiersBox.addEventListener("input", (e) => {
-    const inp = e.target.closest("[data-k]");
-    if (!inp) return;
-    const rowEl = inp.closest("[data-tier-row]");
-    const i = Number(rowEl.dataset.tierRow);
-    rows[i][inp.dataset.k] = inp.value;
-    clearTierErrors(rowEl);
-    setMsg("tiers", "");
-    paintTiers();
-  });
-  tiersBox.addEventListener("click", (e) => {
-    const del = e.target.closest("[data-tier-del]");
-    if (!del) return;
-    rows.forEach((_, i) => readRow(i));
-    rows.splice(Number(del.dataset.tierDel), 1);
-    if (!rows.length) rows = [blankTier()];
-    renderTiers();
-  });
-  $("#p-tier-add").addEventListener("click", () => {
-    rows.forEach((_, i) => readRow(i));
-    rows.push(blankTier(rows[rows.length - 1] || {}));
-    renderTiers();
-    const last = tiersBox.querySelector(`[data-tier-row="${rows.length - 1}"]`);
-    try { last?.querySelector('[data-k="minBoxes"]')?.focus(); last?.scrollIntoView?.({ block: "nearest" }); } catch {}
-  });
-  whToggle.addEventListener("change", () => {
-    whBody.hidden = !whToggle.checked;
-    if (whToggle.checked && !unitsInput.value.trim()) { try { unitsInput.focus(); } catch {} }
-    paintTiers();
-  });
-  unitsInput.addEventListener("input", () => { setMsg("unitsPerBox", ""); paintTiers(); });
 
   // ---------- foto ----------
   const uploadBtn = $("#p-upload-btn");
@@ -555,7 +433,6 @@ export function showProductDialog(product, categories = [], onSaved = () => {}, 
   const snapshot = () => JSON.stringify([
     [...overlay.querySelectorAll(".modal-body input, .modal-body select")].map((el) => (el.type === "checkbox" ? el.checked : el.value)),
     brandHidden.value,
-    rows.map((r) => [r.minBoxes, r.pricePerUnit, r.vendorCommission, r.gestorCommission]),
   ]);
   let initialState = null; // se toma al final, con todo ya pintado
   overlay.addEventListener("click", (e) => {
@@ -575,36 +452,24 @@ export function showProductDialog(product, categories = [], onSaved = () => {}, 
   }
 
   $("#p-save").addEventListener("click", async () => {
-    rows.forEach((_, i) => readRow(i));
     const res = validateProductForm({
       name: nameInput.value,
       brand: brandHidden.value,
       price: priceInput.value,
       costPrice: costInput.value,
       minStock: minStockInput.value,
-      vendorCommission: vInput.value,
-      gestorCommission: gInput.value,
-      wholesale: whToggle.checked,
-      unitsPerBox: unitsInput.value,
-      tiers: rows,
     });
     Object.keys(FIELD_IDS).forEach((key) => setMsg(key, res.errors[key] || ""));
-    clearTierErrors();
-    const byRow = new Map();
-    for (const e of res.tierErrors) {
-      const rowEl = tiersBox.querySelector(`[data-tier-row="${e.index}"]`);
-      const inp = rowEl?.querySelector(`[data-k="${e.field}"]`);
-      if (inp) { inp.classList.add("is-invalid"); inp.setAttribute("aria-invalid", "true"); }
-      if (!byRow.has(e.index)) byRow.set(e.index, []);
-      byRow.get(e.index).push(e.message);
-    }
-    byRow.forEach((messages, index) => {
-      const m = tiersBox.querySelector(`[data-tier-row="${index}"] [data-tier-msg]`);
-      if (m) { m.textContent = [...new Set(messages)].join(" · "); m.hidden = false; }
-    });
+    // v5.31.0: comisión propia → monto obligatorio
+    const ownVal = parseDecimal(ownAmount.value);
+    const ownBad = ownToggle.checked && !(ownVal > 0);
+    ownMsg.hidden = !ownBad;
+    ownMsg.textContent = ownBad ? "Pon cuánto gana por unidad" : "";
+    ownAmount.classList.toggle("is-invalid", ownBad);
+    if (ownBad && res.ok) { focusFirstProblem(); toast("Falta un dato: está marcado en rojo", "error"); return; }
     if (!res.ok) {
       focusFirstProblem();
-      const n = Object.keys(res.errors).length + byRow.size;
+      const n = Object.keys(res.errors).length;
       toast(n === 1 ? "Falta un dato: está marcado en rojo" : `Faltan ${n} datos: están marcados en rojo`, "error");
       return;
     }
@@ -623,14 +488,11 @@ export function showProductDialog(product, categories = [], onSaved = () => {}, 
       salePrice: v.salePrice,
       minStock: v.minStock,
       costPrice: v.costPrice,
-      // 2 comisiones separadas: gestor y vendedor
-      gestorCommission: v.gestorCommission,
-      gestorCommissionCurrency: $("#p-gestorCommissionCurrency").value,
-      vendorCommission: v.vendorCommission,
-      vendorCommissionCurrency: $("#p-vendorCommissionCurrency").value,
-      // Mayorista (apagado → no se vende por caja)
-      unitsPerBox: whToggle.checked ? v.unitsPerBox : null,
-      wholesaleTiers: whToggle.checked ? v.wholesaleTiers : [],
+      // v5.31.0: comisión propia (si se marca). Sin marcar, el vendedor cobra por venta.
+      ownVendorCommission: ownToggle.checked,
+      ...(ownToggle.checked ? { vendorCommission: ownVal, vendorCommissionCurrency: $("#p-ownCurrency").value } : {}),
+      // v5.30.0: comisiones y venta por caja ya no se editan aquí (se conservan
+      // las que tenga el producto; la venta por caja está en «Venta mayorista").
       imageUrl,
       // La miniatura solo vale para la foto subida aquí (o la que ya tenía)
       thumbUrl: imageUrl && imageUrl === uploadedImageUrl ? uploadedThumbUrl : null,
@@ -663,7 +525,6 @@ export function showProductDialog(product, categories = [], onSaved = () => {}, 
   });
 
   // ---------- estado inicial ----------
-  renderTiers();
   paintBrand();
   paintMoney();
   if (isNew) autoCategory();

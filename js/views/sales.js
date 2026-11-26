@@ -4,9 +4,10 @@
 // =====================================================
 
 import { normalizeAppearance, isIconView } from "../appearance.js";
-import { applyVendorRuleToItems } from "../vendor-rule.js";
+import { applyVendorRuleToItems, gestorSaleCommission, vendorSaleCommission } from "../vendor-rule.js";
+import { wholesaleAvailableIn, wholesaleMinBoxes, wholesaleGestorPct, tierPricePerBox, wholesaleVendorAmount } from "../wholesale-config.js";
 import { getStore } from "../store.js";
-import { subscribeProducts, subscribeStock, subscribeCategories, subscribeBrands, listCards, listManagers, listSales, isUuid, getWholesaleTier, getSuggestedPricePerBox, getSuggestedVendorCommissionPerBox, getSuggestedGestorCommissionPerBox, isWholesaleProduct, listWarehouses, resolveEffectiveWarehouse, sumCartCommissions } from "../db.js";
+import { subscribeProducts, subscribeStock, subscribeCategories, subscribeBrands, listCards, listManagers, listSales, isUuid, getSuggestedPricePerBox, listWarehouses, resolveEffectiveWarehouse, sumCartCommissions } from "../db.js";
 import { formatMoney, generateSaleId, generateSaleCode, CURRENCIES, CURRENCY_LABELS, CARD_BRANDS, getRate } from "../currency.js";
 import { enqueueSale, generateClientRef, requestSync, getPendingCount, getPendingSales, discardQueuedSale } from "../offline-sync.js";
 import { isSupabaseConfiguredAsync } from "../supabase.js";
@@ -55,9 +56,17 @@ export function mountSalesView(container, navigate) {
   let saleType = "RETAIL"; // RETAIL | WHOLESALE
   let wholesaleProduct = null; // producto seleccionado para venta mayorista
   let wholesaleBoxes = 1; // cantidad de cajas
-  let wholesalePricePerBox = 0; // precio por caja (editable)
-  let wholesaleVendorCommissionPerBox = 0; // comisión vendedor por caja (editable)
-  let wholesaleGestorCommissionPerBox = 0; // comisión gestor por caja (editable)
+  let wholesalePricePerBox = 0; // precio por caja (el de Admin → Venta mayorista)
+  let wholesaleVendorCommissionPerBox = 0; // vendedor por caja (se calcula al registrar)
+  let wholesaleGestorCommissionPerBox = 0; // gestor por caja (se calcula al registrar)
+  let wholesaleVendorOverride = null; // v5.31.0: lo que gana el vendedor, escrito al vender
+  // Vendedor en venta por caja: lo escrito al vender → lo del producto → regla por venta
+  const wholesaleVendorFor = (total) => {
+    if (wholesaleVendorOverride !== null) return wholesaleVendorOverride;
+    const fixed = wholesaleProduct ? wholesaleVendorAmount(wholesaleProduct) : null;
+    if (fixed !== null) return fixed;
+    return vendorSaleCommission(total, store.getState().settings?.vendorSaleRule);
+  };
   // v5.8 (móvil): observer de la barra de cobro (declarado arriba: las
   // suscripciones pueden llamar a render() antes de llegar más abajo)
   let checkoutObserver = null;
@@ -303,7 +312,7 @@ export function mountSalesView(container, navigate) {
           gestorCommission: p.gestorCommission ?? p.commission ?? 0,
           gestorCommissionCurrency: p.gestorCommissionCurrency ?? p.commissionCurrency ?? "USD",
           vendorCommission: p.vendorCommission ?? 0,
-          vendorCommissionCurrency: p.vendorCommissionCurrency ?? "MN",
+          vendorCommissionCurrency: p.vendorCommissionCurrency ?? "MN", ownVendorCommission: !!p.ownVendorCommission,
         };
       });
       setTimeout(() => { if (container.isConnected) render(); }, 0);
@@ -792,20 +801,11 @@ export function mountSalesView(container, navigate) {
   }
 
   function paintWholesaleStock() {
-    const sel = container.querySelector("#wholesale-product-select");
-    if (sel) {
-      sel.querySelectorAll("option").forEach((opt) => {
-        const p = products.find((x) => x.id === opt.value);
-        if (!p || !p.unitsPerBox) return;
-        const qty = getStockQty(p.id);
-        opt.textContent = `${p.name} · ${p.unitsPerBox} pomos/caja · Stock: ${qty} (${Math.floor(qty / p.unitsPerBox)} cajas)`;
-      });
-    }
     const stockEl = container.querySelector("[data-ws-stock]");
     if (stockEl && wholesaleProduct) {
       const qty = getStockQty(wholesaleProduct.id);
       const maxBoxes = wholesaleProduct.unitsPerBox ? Math.floor(qty / wholesaleProduct.unitsPerBox) : 0;
-      stockEl.textContent = `${qty} pomos · ${maxBoxes} cajas`;
+      stockEl.innerHTML = `<strong>${maxBoxes}</strong> cajas en stock`;
       const boxesInput = container.querySelector("#wholesale-boxes");
       if (boxesInput) boxesInput.max = String(maxBoxes);
     }
@@ -886,55 +886,45 @@ export function mountSalesView(container, navigate) {
 
   // ===== Sección Mayorista =====
   function renderWholesaleSection() {
-    const wholesaleProducts = products.filter(isWholesaleProduct);
+    // v5.30.0: los productos, cajas mínimas, precio y % del gestor salen de
+    // Admin → Venta mayorista; solo los que se venden en ESTE almacén.
+    const whId = store.getState().currentWarehouse?.id || null;
+    const wholesaleProducts = products.filter((p) => p.active !== false && wholesaleAvailableIn(p, whId));
     if (wholesaleProducts.length === 0) {
       return `
         <div class="card">
           <div class="card-content text-center" style="padding:2rem">
-            <p class="text-muted">No hay productos configurados para venta mayorista.</p>
-            <p class="text-xs text-muted mt-2">El admin debe configurar "pomos por caja" y "tiers de precio" en el panel de productos.</p>
+            <p class="text-muted">No hay productos para vender por caja en este almacén.</p>
+            <p class="text-xs text-muted mt-2">El admin los pone en «Venta mayorista».</p>
           </div>
         </div>
       `;
     }
-    // Recalcular sugerencias si cambió el producto o las cajas
-    if (wholesaleProduct) {
-      const suggestedPrice = getSuggestedPricePerBox(wholesaleProduct, wholesaleBoxes);
-      const suggestedVendor = getSuggestedVendorCommissionPerBox(wholesaleProduct, wholesaleBoxes);
-      const suggestedGestor = getSuggestedGestorCommissionPerBox(wholesaleProduct, wholesaleBoxes, wholesalePricePerBox || null);
-      // Auto-actualizar si el valor guardado coincide con el tier anterior (o es 0)
-      if (wholesalePricePerBox === 0 || wholesalePricePerBox === (suggestedPrice)) {
-        wholesalePricePerBox = suggestedPrice || 0;
-      }
-      if (wholesaleVendorCommissionPerBox === 0) {
-        wholesaleVendorCommissionPerBox = suggestedVendor || 0;
-      }
-      if (wholesaleGestorCommissionPerBox === 0) {
-        wholesaleGestorCommissionPerBox = suggestedGestor || 0;
-      }
-    }
+    const minB = wholesaleProduct ? wholesaleMinBoxes(wholesaleProduct) : 1;
+    if (wholesaleProduct && wholesaleBoxes < minB) wholesaleBoxes = minB;
+    const suggested = wholesaleProduct ? (getSuggestedPricePerBox(wholesaleProduct, wholesaleBoxes) || 0) : 0;
+    wholesalePricePerBox = suggested;
     const stockQty = wholesaleProduct ? getStockQty(wholesaleProduct.id) : 0;
     const maxBoxes = wholesaleProduct?.unitsPerBox ? Math.floor(stockQty / wholesaleProduct.unitsPerBox) : 0;
-    const tier = wholesaleProduct ? getWholesaleTier(wholesaleProduct, wholesaleBoxes) : null;
     const totalUnits = wholesaleProduct ? wholesaleBoxes * wholesaleProduct.unitsPerBox : 0;
-    const total = wholesaleBoxes * wholesalePricePerBox;
-    // v5.27.0: elegir el producto en tarjetas (antes un desplegable largo) y
-    // las cajas con − n +; los tramos de precio a la vista; comisiones plegadas.
-    const tiers = wholesaleProduct ? [...(wholesaleProduct.wholesaleTiers || [])].sort((a, b) => a.minBoxes - b.minBoxes) : [];
-    const ppb = (t) => (Number(t.pricePerUnit) || 0) * (wholesaleProduct?.unitsPerBox || 0);
-    const suggested = wholesaleProduct ? (getSuggestedPricePerBox(wholesaleProduct, wholesaleBoxes) || 0) : 0;
+    const total = roundCents(wholesaleBoxes * wholesalePricePerBox);
+    const gPct = wholesaleProduct ? wholesaleGestorPct(wholesaleProduct) : 0;
+    const vendorAmt = wholesaleVendorFor(total);
+    const gestorAmt = gestorSaleCommission(selectedManager, { total, saleType: "WHOLESALE", wholesalePct: gPct });
     const pickList = wholesaleProducts.map((p) => {
       const q = getStockQty(p.id);
       const boxes = p.unitsPerBox ? Math.floor(q / p.unitsPerBox) : 0;
+      const min = wholesaleMinBoxes(p);
       const first = [...(p.wholesaleTiers || [])].sort((a, b) => a.minBoxes - b.minBoxes)[0];
-      const from = first ? (Number(first.pricePerUnit) || 0) * p.unitsPerBox : 0;
+      const price = tierPricePerBox(first, p.unitsPerBox);
+      const enough = boxes >= min;
       return `
-        <button type="button" class="ws-pick ${wholesaleProduct?.id === p.id ? "on" : ""}" data-ws-pick="${esc(p.id)}" ${boxes <= 0 ? "disabled" : ""} aria-pressed="${wholesaleProduct?.id === p.id}">
+        <button type="button" class="ws-pick ${wholesaleProduct?.id === p.id ? "on" : ""}" data-ws-pick="${esc(p.id)}" ${enough ? "" : "disabled"} aria-pressed="${wholesaleProduct?.id === p.id}">
           <span class="ws-pick-info">
             <span class="ws-pick-name">${esc(p.name)}</span>
-            <span class="ws-pick-sub">${p.unitsPerBox} pomos por caja · ${boxes > 0 ? `<strong>${boxes} caja${boxes === 1 ? "" : "s"}</strong> disponibles` : `<span class="sp-out">sin cajas completas</span>`}</span>
+            <span class="ws-pick-sub">${p.unitsPerBox} pomos/caja · desde ${min} caja${min === 1 ? "" : "s"} · ${enough ? `<strong>${boxes}</strong> en stock` : `<span class="sp-out">solo ${boxes} caja${boxes === 1 ? "" : "s"}</span>`}</span>
           </span>
-          ${from ? `<span class="ws-pick-price"><small>desde</small>${formatMoney(from, "USD")}<small>/caja</small></span>` : ""}
+          ${price ? `<span class="ws-pick-price">${formatMoney(price, "USD")}<small>/caja</small></span>` : ""}
         </button>`;
     }).join("");
     return `
@@ -952,52 +942,24 @@ export function mountSalesView(container, navigate) {
           <div class="ws-body">
             <div class="ws-facts">
               <span><strong>${wholesaleProduct.unitsPerBox}</strong> pomos por caja</span>
-              <span data-ws-stock><strong>${maxBoxes}</strong> cajas disponibles (${stockQty} pomos)</span>
+              <span>Mínimo <strong>${minB}</strong> caja${minB === 1 ? "" : "s"}</span>
+              <span data-ws-stock><strong>${maxBoxes}</strong> cajas en stock</span>
             </div>
 
             <div class="ws-boxes">
               <span class="ws-boxes-label">Cajas</span>
               <div class="ws-boxes-ctrl">
-                <button type="button" class="btn btn-secondary btn-icon" data-ws-step="-1" ${wholesaleBoxes <= 1 ? "disabled" : ""} aria-label="Una caja menos">${icon("minus", 18)}</button>
-                <input class="input ws-boxes-input" type="number" min="1" max="${maxBoxes}" id="wholesale-boxes" value="${wholesaleBoxes}" inputmode="numeric" aria-label="Cantidad de cajas" />
+                <button type="button" class="btn btn-secondary btn-icon" data-ws-step="-1" ${wholesaleBoxes <= minB ? "disabled" : ""} aria-label="Una caja menos">${icon("minus", 18)}</button>
+                <input class="input ws-boxes-input" type="number" min="${minB}" max="${maxBoxes}" id="wholesale-boxes" value="${wholesaleBoxes}" inputmode="numeric" aria-label="Cantidad de cajas" />
                 <button type="button" class="btn btn-primary btn-icon" data-ws-step="1" ${wholesaleBoxes >= maxBoxes ? "disabled" : ""} aria-label="Una caja más">${icon("plus", 18)}</button>
               </div>
               <span class="ws-boxes-units">${totalUnits} pomos</span>
             </div>
 
-            ${tiers.length ? `
-              <div class="ws-tiers" role="list" aria-label="Precios por cantidad">
-                ${tiers.map((t) => {
-                  const on = tier && t.minBoxes === tier.minBoxes;
-                  return `
-                  <div class="ws-tier ${on ? "on" : ""}" role="listitem">
-                    <span class="ws-tier-range">${t.minBoxes}${t.maxBoxes ? `–${t.maxBoxes}` : "+"} cajas</span>
-                    <strong>${formatMoney(ppb(t), "USD")}</strong><span class="ws-tier-unit">/caja</span>
-                    ${Number(t.gestorCommissionPercent) > 0 ? `<span class="ws-tier-note">gestor ${t.gestorCommissionPercent}%</span>` : ""}
-                  </div>`;
-                }).join("")}
-              </div>` : ""}
-
-            <label class="ws-price">
-              <span>Precio por caja (USD)</span>
-              <input class="input" type="number" step="0.01" id="wholesale-price" value="${wholesalePricePerBox}" inputmode="decimal" />
-              ${suggested && Math.abs(suggested - wholesalePricePerBox) > 0.001 ? `<button type="button" class="btn btn-text btn-sm" data-ws-suggested="${suggested}">Usar ${formatMoney(suggested, "USD")}</button>` : `<small>Precio del tramo</small>`}
-            </label>
-
-            <details class="ws-comm">
-              <summary>Comisiones <span>vendedor ${formatMoney(wholesaleBoxes * wholesaleVendorCommissionPerBox, "USD")} · gestor ${formatMoney(wholesaleBoxes * wholesaleGestorCommissionPerBox, "USD")}</span></summary>
-              <div class="grid grid-cols-2 gap-2" style="padding-top:0.625rem">
-                <div>
-                  <label class="label label-xs" for="wholesale-vendor-commission">Vendedor por caja (USD)</label>
-                  <input class="input" type="number" step="0.01" id="wholesale-vendor-commission" value="${wholesaleVendorCommissionPerBox}" />
-                </div>
-                <div>
-                  <label class="label label-xs" for="wholesale-gestor-commission">Gestor por caja (USD)</label>
-                  <input class="input" type="number" step="0.01" id="wholesale-gestor-commission" value="${wholesaleGestorCommissionPerBox}" />
-                  ${Number(tier?.gestorCommissionPercent) > 0 ? `<div class="text-xs text-muted mt-1">${tier.gestorCommissionPercent}% del precio de la caja</div>` : ""}
-                </div>
-              </div>
-            </details>
+            <div class="ws-comm-line">
+              <label class="ws-vendor">Vendedor gana <span class="ws-vendor-ig"><input class="input" id="wholesale-vendor-amount" inputmode="decimal" value="${vendorAmt === null ? "" : vendorAmt}" aria-label="Lo que gana el vendedor por esta venta, en USD" /><small>USD</small></span></label>
+              <span>Gestor ${selectedManager ? `${esc(selectedManager.name)} ${gPct}% <strong>${formatMoney(gestorAmt.usd, "USD")}</strong>` : `<em>sin gestor</em>`}</span>
+            </div>
 
             <div class="ws-total">
               <span>${wholesaleBoxes} caja${wholesaleBoxes === 1 ? "" : "s"} × ${formatMoney(wholesalePricePerBox, "USD")}</span>
@@ -1021,6 +983,7 @@ export function mountSalesView(container, navigate) {
           wholesalePricePerBox = 0;
           wholesaleVendorCommissionPerBox = 0;
           wholesaleGestorCommissionPerBox = 0;
+          wholesaleVendorOverride = null;
         } else {
           // Al entrar a mayorista, limpiar carrito retail
           cart = [];
@@ -1029,108 +992,47 @@ export function mountSalesView(container, navigate) {
       });
     });
 
-    // Mayorista: select de producto
-    const wsProductSelect = container.querySelector("#wholesale-product-select");
-    if (wsProductSelect) {
-      wsProductSelect.addEventListener("change", (e) => {
-        const pid = e.target.value;
-        wholesaleProduct = pid ? products.find((p) => p.id === pid) : null;
-        wholesaleBoxes = 1;
-        wholesalePricePerBox = 0;
-        wholesaleVendorCommissionPerBox = 0;
-        wholesaleGestorCommissionPerBox = 0;
-        render();
-        // Re-enfocar el input de cajas
-        setTimeout(() => {
-          const boxesInput = container.querySelector("#wholesale-boxes");
-          if (boxesInput) boxesInput.focus();
-        }, 50);
-      });
-    }
-
-    // v5.27.0: mayorista — elegir producto, cambiar, − / + cajas, precio sugerido
-    container.querySelectorAll("[data-ws-pick]").forEach((btn) => btn.addEventListener("click", () => {
-      wholesaleProduct = products.find((p) => p.id === btn.dataset.wsPick) || null;
-      wholesaleBoxes = 1;
+    // v5.27.0: mayorista — elegir producto, cambiar, − / + cajas
+    // v5.32.0: lo escrito en «Vendedor gana» se mantiene al cambiar las cajas
+    const pickWholesale = (id) => {
+      wholesaleProduct = products.find((p) => p.id === id) || null;
+      wholesaleBoxes = wholesaleProduct ? wholesaleMinBoxes(wholesaleProduct) : 1;
       wholesalePricePerBox = 0;
       wholesaleVendorCommissionPerBox = 0;
       wholesaleGestorCommissionPerBox = 0;
+      wholesaleVendorOverride = null;
       render();
-    }));
+    };
+    container.querySelectorAll("[data-ws-pick]").forEach((btn) => btn.addEventListener("click", () => pickWholesale(btn.dataset.wsPick)));
     container.querySelector("[data-ws-change]")?.addEventListener("click", () => {
       wholesaleProduct = null;
+      wholesaleVendorOverride = null;
       render();
     });
-    container.querySelectorAll("[data-ws-step]").forEach((btn) => btn.addEventListener("click", () => {
+    const setBoxes = (n) => {
       const q = wholesaleProduct ? getStockQty(wholesaleProduct.id) : 0;
       const maxB = wholesaleProduct?.unitsPerBox ? Math.floor(q / wholesaleProduct.unitsPerBox) : 1;
-      const next = Math.min(Math.max(1, wholesaleBoxes + Number(btn.dataset.wsStep)), Math.max(1, maxB));
-      if (next === wholesaleBoxes) return;
+      const minB = wholesaleProduct ? wholesaleMinBoxes(wholesaleProduct) : 1;
+      const next = Math.min(Math.max(minB, n), Math.max(minB, maxB));
+      if (next === wholesaleBoxes) return false;
       wholesaleBoxes = next;
-      wholesalePricePerBox = 0;
-      wholesaleVendorCommissionPerBox = 0;
-      wholesaleGestorCommissionPerBox = 0;
       render();
-    }));
-    container.querySelector("[data-ws-suggested]")?.addEventListener("click", (e) => {
-      wholesalePricePerBox = Number(e.currentTarget.dataset.wsSuggested) || 0;
-      if (Number(getWholesaleTier(wholesaleProduct, wholesaleBoxes)?.gestorCommissionPercent) > 0) wholesaleGestorCommissionPerBox = 0;
-      render();
+      return true;
+    };
+    container.querySelectorAll("[data-ws-step]").forEach((btn) => btn.addEventListener("click", () => setBoxes(wholesaleBoxes + Number(btn.dataset.wsStep))));
+    container.querySelector("#wholesale-boxes")?.addEventListener("change", (e) => {
+      // change (blur/Enter) en vez de input: sin re-render en cada tecla
+      if (!setBoxes(parseInt(e.target.value) || 1)) render();
+      setTimeout(() => container.querySelector("#wholesale-boxes")?.focus(), 50);
     });
 
-    // Mayorista: inputs
-    const wsBoxes = container.querySelector("#wholesale-boxes");
-    if (wsBoxes) {
-      // Usar change (blur/Enter) en vez de input para evitar re-render en cada tecla
-      wsBoxes.addEventListener("change", (e) => {
-        const v = parseInt(e.target.value) || 1;
-        wholesaleBoxes = Math.max(1, v);
-        // Reset precio para que se recalcule del tier
-        wholesalePricePerBox = 0;
-        wholesaleVendorCommissionPerBox = 0;
-        wholesaleGestorCommissionPerBox = 0;
-        render();
-        setTimeout(() => {
-          const newBoxes = container.querySelector("#wholesale-boxes");
-          if (newBoxes) { newBoxes.focus(); }
-        }, 50);
-      });
-    }
-    const wsPrice = container.querySelector("#wholesale-price");
-    if (wsPrice) {
-      wsPrice.addEventListener("change", (e) => {
-        wholesalePricePerBox = parseFloat(e.target.value) || 0;
-        // v5.26.0: gestor en % → se recalcula con el precio nuevo
-        if (Number(getWholesaleTier(wholesaleProduct, wholesaleBoxes)?.gestorCommissionPercent) > 0) wholesaleGestorCommissionPerBox = 0;
-        render();
-        setTimeout(() => {
-          const newPrice = container.querySelector("#wholesale-price");
-          if (newPrice) { newPrice.focus(); }
-        }, 50);
-      });
-    }
-    const wsVendorComm = container.querySelector("#wholesale-vendor-commission");
-    if (wsVendorComm) {
-      wsVendorComm.addEventListener("change", (e) => {
-        wholesaleVendorCommissionPerBox = parseFloat(e.target.value) || 0;
-        render();
-        setTimeout(() => {
-          const newComm = container.querySelector("#wholesale-vendor-commission");
-          if (newComm) { newComm.focus(); }
-        }, 50);
-      });
-    }
-    const wsGestorComm = container.querySelector("#wholesale-gestor-commission");
-    if (wsGestorComm) {
-      wsGestorComm.addEventListener("change", (e) => {
-        wholesaleGestorCommissionPerBox = parseFloat(e.target.value) || 0;
-        render();
-        setTimeout(() => {
-          const newComm = container.querySelector("#wholesale-gestor-commission");
-          if (newComm) { newComm.focus(); }
-        }, 50);
-      });
-    }
+    // v5.31.0: lo que gana el vendedor en esta venta por caja
+    container.querySelector("#wholesale-vendor-amount")?.addEventListener("change", (e) => {
+      const raw = String(e.target.value).trim().replace(",", ".");
+      const v = Number(raw);
+      wholesaleVendorOverride = raw === "" ? null : (Number.isFinite(v) && v >= 0 ? Math.round(v * 100) / 100 : wholesaleVendorOverride);
+      render();
+    });
 
     // Gestor (desplegable con nombres)
     const managerSelect = container.querySelector("#manager-code");
@@ -1357,6 +1259,7 @@ export function mountSalesView(container, navigate) {
         wholesalePricePerBox = 0;
         wholesaleVendorCommissionPerBox = 0;
         wholesaleGestorCommissionPerBox = 0;
+        wholesaleVendorOverride = null;
         render();
       };
       if (hasContent) {
@@ -1544,7 +1447,7 @@ export function mountSalesView(container, navigate) {
               gestorCommission: p.gestorCommission ?? p.commission ?? 0,
               gestorCommissionCurrency: p.gestorCommissionCurrency ?? p.commissionCurrency ?? "USD",
               vendorCommission: p.vendorCommission ?? 0,
-              vendorCommissionCurrency: p.vendorCommissionCurrency ?? "MN",
+              vendorCommissionCurrency: p.vendorCommissionCurrency ?? "MN", ownVendorCommission: !!p.ownVendorCommission,
             });
           }
           // v5.18.0: confirmación táctil al añadir desde el catálogo
@@ -1695,7 +1598,7 @@ export function mountSalesView(container, navigate) {
         gestorCommission: p.gestorCommission ?? p.commission ?? 0,
         gestorCommissionCurrency: p.gestorCommissionCurrency ?? p.commissionCurrency ?? "USD",
         vendorCommission: p.vendorCommission ?? 0,
-        vendorCommissionCurrency: p.vendorCommissionCurrency ?? "MN",
+        vendorCommissionCurrency: p.vendorCommissionCurrency ?? "MN", ownVendorCommission: !!p.ownVendorCommission,
       });
     }
     if (!silent && !quiet) {
@@ -1774,7 +1677,8 @@ export function mountSalesView(container, navigate) {
     // Validación según modo
     if (saleType === "WHOLESALE") {
       if (!wholesaleProduct) { toast("Selecciona un producto mayorista", "error"); return; }
-      if (wholesaleBoxes < 1) { toast("La cantidad de cajas debe ser al menos 1", "error"); return; }
+      const minB = wholesaleMinBoxes(wholesaleProduct);
+      if (wholesaleBoxes < minB) { toast(`Para venta por caja son mínimo ${minB} cajas`, "error"); return; }
       if (wholesalePricePerBox <= 0) { toast("El precio por caja debe ser mayor a 0", "error"); return; }
       const stockQty = getStockQty(wholesaleProduct.id);
       const maxBoxes = Math.floor(stockQty / wholesaleProduct.unitsPerBox);
@@ -1842,8 +1746,10 @@ export function mountSalesView(container, navigate) {
     let stockAdjustments = []; // [{ productId, quantity }] (referencia)
 
     if (saleType === "WHOLESALE") {
-      // Comisión vendedor (siempre USD en mayorista)
-      vendorCommissionUSD = wholesaleBoxes * wholesaleVendorCommissionPerBox;
+      // v5.31.0: lo que gana el vendedor por esta venta (escrito / del producto / regla)
+      const ruleAmt = wholesaleVendorFor(total);
+      if (ruleAmt !== null) wholesaleVendorCommissionPerBox = wholesaleBoxes > 0 ? Math.round((ruleAmt / wholesaleBoxes) * 10000) / 10000 : 0;
+      vendorCommissionUSD = ruleAmt !== null ? ruleAmt : wholesaleBoxes * wholesaleVendorCommissionPerBox;
       // Comisión gestor (siempre USD en mayorista)
       gestorCommissionUSD = wholesaleBoxes * wholesaleGestorCommissionPerBox;
       // Item "virtual": representación de la venta mayorista
@@ -1878,8 +1784,24 @@ export function mountSalesView(container, navigate) {
       // v5.26.0: el vendedor cobra POR VENTA (regla de Admin → Comisiones vendedores)
       const ruled = applyVendorRuleToItems(saleItems, total, store.getState().settings?.vendorSaleRule);
       saleItems = ruled.items;
-      if (ruled.vendorUSD !== null) { vendorCommissionUSD = ruled.vendorUSD; vendorCommissionMN = 0; }
+      if (ruled.vendorUSD !== null) {
+        // v5.31.0: regla por venta + los productos con comisión propia (aparte)
+        vendorCommissionUSD = Math.round((ruled.vendorUSD + ruled.fixedUSD) * 100) / 100;
+        vendorCommissionMN = ruled.fixedMN;
+      }
       stockAdjustments = cart.map((i) => ({ productId: i.productId, quantity: i.quantity }));
+    }
+    // v5.28.0: el gestor cobra según SU regla (Admin → Gestores): 5 % en ventas
+    // normales y 3 % en ventas por caja. Sin gestor elegido, no hay comisión.
+    {
+      const wholesalePct = saleType === "WHOLESALE" && wholesaleProduct ? wholesaleGestorPct(wholesaleProduct) : undefined;
+      const g = gestorSaleCommission(selectedManager, { total, saleType, wholesalePct });
+      gestorCommissionUSD = g.usd;
+      gestorCommissionMN = g.mn;
+      if (saleType === "WHOLESALE" && saleItems[0]) {
+        const perBox = wholesaleBoxes > 0 ? Math.round((g.usd / wholesaleBoxes) * 100) / 100 : 0;
+        saleItems[0] = { ...saleItems[0], gestorCommissionPerBox: perBox, gestorCommission: perBox, gestorCommissionCurrency: "USD", gestorCommissionPercent: wholesalePct };
+      }
     }
 
     const selectedCard = cards.find((c) => c.id === selectedCardId);
@@ -2040,6 +1962,7 @@ export function mountSalesView(container, navigate) {
     wholesalePricePerBox = 0;
     wholesaleVendorCommissionPerBox = 0;
     wholesaleGestorCommissionPerBox = 0;
+    wholesaleVendorOverride = null;
     render();
     // Subir ya (sin espera escalonada). Si falla, queda en cola y se reintenta.
     if (online) requestSync().catch((err) => console.warn("[Ventas] subida inmediata falló:", err));

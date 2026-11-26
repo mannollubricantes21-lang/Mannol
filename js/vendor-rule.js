@@ -30,7 +30,8 @@ export function normalizeVendorRule(raw) {
   if (typeof r === "string") { try { r = JSON.parse(r); } catch { r = null; } }
   if (!r || typeof r !== "object") return { ...DEFAULT_VENDOR_RULE };
   return {
-    enabled: r.enabled !== false,
+    // v5.30.0: siempre por venta (ya no hay comisión de vendedor por producto)
+    enabled: true,
     threshold: round2(num(r.threshold, DEFAULT_VENDOR_RULE.threshold)),
     above: round2(num(r.above, DEFAULT_VENDOR_RULE.above)),
     below: round2(num(r.below, DEFAULT_VENDOR_RULE.below)),
@@ -60,25 +61,84 @@ export function vendorRuleLabel(rule) {
 
 /**
  * Aplica la regla a los ítems de una venta al detalle: la comisión de la venta
- * viaja en el PRIMER ítem (items sí se guarda en la nube) y la de cada producto
- * queda en 0 para no contarla dos veces. Sin regla, se quitan restos de una
- * venta anterior («Vender de nuevo») y se deja la de cada producto.
- * @returns {{ items: object[], vendorUSD: number|null }}
+ * viaja en el PRIMER ítem normal (items sí se guarda en la nube) y la de cada
+ * producto queda en 0 para no contarla dos veces.
+ *
+ * v5.31.0: los productos con COMISIÓN PROPIA (cargadores, breakers…: marcados
+ * en el producto) van aparte: el vendedor cobra su monto fijo por unidad y NO
+ * cuentan para la regla. La regla se calcula con el resto del total; si la
+ * venta solo tiene productos con comisión propia, no hay comisión por venta.
+ * @returns {{ items: object[], vendorUSD: number|null, fixedUSD: number, fixedMN: number }}
  */
 export function applyVendorRuleToItems(items, totalUSD, rule) {
-  const amount = vendorSaleCommission(totalUSD, rule);
   const list = (Array.isArray(items) ? items : []).map((it) => {
     const { vendorSaleCommission: _a, vendorSaleCommissionCurrency: _b, ...rest } = it || {};
     return rest;
   });
-  if (amount === null) return { items: list, vendorUSD: null };
+  let fixedUSD = 0, fixedMN = 0, ownSubtotal = 0;
+  for (const it of list) {
+    if (!it.ownVendorCommission) continue;
+    const q = Number(it.quantity) || 0;
+    const v = (Number(it.vendorCommission) || 0) * q;
+    if (String(it.vendorCommissionCurrency || "MN").toUpperCase() === "USD") fixedUSD += v; else fixedMN += v;
+    ownSubtotal += Number(it.subtotal != null ? it.subtotal : (Number(it.unitPrice) || 0) * q) || 0;
+  }
+  fixedUSD = round2(fixedUSD); fixedMN = round2(fixedMN);
+  const firstNormal = list.findIndex((it) => !it.ownVendorCommission);
+  const base = Math.max(0, (Number(totalUSD) || 0) - ownSubtotal);
+  const amount = firstNormal >= 0 ? vendorSaleCommission(base, rule) : 0;
+  if (amount === null) return { items: list, vendorUSD: null, fixedUSD, fixedMN };
   return {
-    items: list.map((it, i) => ({
+    items: list.map((it, i) => (it.ownVendorCommission ? it : {
       ...it,
       vendorCommission: 0,
       vendorCommissionCurrency: "USD",
-      ...(i === 0 ? { vendorSaleCommission: amount, vendorSaleCommissionCurrency: "USD" } : {}),
+      ...(i === firstNormal ? { vendorSaleCommission: amount, vendorSaleCommissionCurrency: "USD" } : {}),
     })),
     vendorUSD: amount,
+    fixedUSD,
+    fixedMN,
   };
+}
+
+// =====================================================
+// Comisión del GESTOR (v5.28.0)
+// =====================================================
+// Regla del negocio: el gestor cobra un % del total de la venta que trae:
+//   ventas normales (por unidad) → 5 %   · ventas por caja (mayorista) → 3 %
+// Cada gestor guarda sus dos porcentajes (Admin → Gestores): `commission`
+// (normales) y `commissionWholesale` (por caja). «Valor fijo»: monto por venta.
+export const DEFAULT_GESTOR_PCT = Object.freeze({ retail: 5, wholesale: 3 });
+
+const pctOr = (v, def) => {
+  const n = Number(v);
+  return v === null || v === undefined || v === "" || !Number.isFinite(n) || n < 0 ? def : n;
+};
+
+/** % que se aplica a una venta de este gestor (null si es valor fijo) */
+export function gestorPercentFor(manager, saleType) {
+  if (!manager || (manager.commissionType || "PERCENT") !== "PERCENT") return null;
+  return saleType === "WHOLESALE"
+    ? pctOr(manager.commissionWholesale, DEFAULT_GESTOR_PCT.wholesale)
+    : pctOr(manager.commission, DEFAULT_GESTOR_PCT.retail);
+}
+
+/**
+ * Comisión del gestor por UNA venta.
+ * @param {object|null} manager
+ * @param {{ total:number, saleType?:string }} sale  total en USD
+ * @returns {{ usd:number, mn:number }}
+ */
+export function gestorSaleCommission(manager, { total, saleType, wholesalePct } = {}) {
+  if (!manager) return { usd: 0, mn: 0 };
+  // v5.30.0: en venta por caja manda el % configurado en el producto
+  // (Admin → Venta mayorista), sea cual sea el tipo de gestor.
+  const wp = Number(wholesalePct);
+  const hasWp = wholesalePct !== null && wholesalePct !== undefined && wholesalePct !== "" && Number.isFinite(wp) && wp >= 0;
+  const pct = saleType === "WHOLESALE" && hasWp ? wp : gestorPercentFor(manager, saleType);
+  if (pct === null) {
+    const v = round2(Number(manager.commission) || 0);
+    return String(manager.commissionCurrency || "USD").toUpperCase() === "MN" ? { usd: 0, mn: v } : { usd: v, mn: 0 };
+  }
+  return { usd: round2((Number(total) || 0) * pct / 100), mn: 0 };
 }

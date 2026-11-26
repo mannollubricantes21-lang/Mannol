@@ -107,9 +107,8 @@ export const DEMO_PRODUCTS = [
     categoryId: "cat-1-1", categoryName: "Sintéticos", active: true, createdAt: Date.now() - 86400000 * 60,
     unitsPerBox: 6,
     wholesaleTiers: [
-      { minBoxes: 1, maxBoxes: 5, pricePerUnit: 22, vendorCommission: 0.50, gestorCommission: 0.30 },
-      { minBoxes: 6, maxBoxes: 20, pricePerUnit: 20, vendorCommission: 0.75, gestorCommission: 0.40 },
-      { minBoxes: 21, maxBoxes: null, pricePerUnit: 18, vendorCommission: 1.00, gestorCommission: 0.50 },
+      // v5.30.0: formato de «Venta mayorista» (desde 10 cajas, 3 % gestor)
+      { minBoxes: 10, maxBoxes: null, pricePerBox: 120, pricePerUnit: 20, vendorCommission: 0, gestorCommission: 0, gestorCommissionPercent: 3 },
     ],
   },
   { id: "pr-002", name: "MANNOL Energy Formula 10W-40", brand: "MANNOL", viscosity: "10W-40", sku: "MN-7512", volumeLiters: 4, costPrice: 16, salePrice: 22, minStock: 5,
@@ -117,7 +116,7 @@ export const DEMO_PRODUCTS = [
     categoryId: "cat-1-1", categoryName: "Sintéticos", active: true, createdAt: Date.now() - 86400000 * 58,
     unitsPerBox: 6,
     wholesaleTiers: [
-      { minBoxes: 1, maxBoxes: 5, pricePerUnit: 20, vendorCommission: 0.50, gestorCommission: 0.25 },
+      { minBoxes: 1, maxBoxes: 5, pricePerUnit: 20, vendorCommission: 0.50, gestorCommission: 0.25, warehouseIds: ["wh-playa"] },
       { minBoxes: 6, maxBoxes: 20, pricePerUnit: 18, vendorCommission: 0.70, gestorCommission: 0.35 },
       { minBoxes: 21, maxBoxes: null, pricePerUnit: 16, vendorCommission: 0.90, gestorCommission: 0.45 },
     ],
@@ -156,7 +155,7 @@ export const DEMO_PRODUCTS = [
     gestorCommission: 0.5, gestorCommissionCurrency: "USD", vendorCommission: 20, vendorCommissionCurrency: "MN",
     categoryId: "cat-2-1", categoryName: "Aceite", active: true, createdAt: Date.now() - 86400000 * 40 },
   { id: "pr-007", name: "Filtro de Aceite Mannol W610/1", brand: "MANNOL", sku: "MN-W6101", costPrice: 3, salePrice: 5, minStock: 10,
-    gestorCommission: 0.5, gestorCommissionCurrency: "USD", vendorCommission: 20, vendorCommissionCurrency: "MN",
+    gestorCommission: 0.5, gestorCommissionCurrency: "USD", vendorCommission: 0.5, vendorCommissionCurrency: "USD", ownVendorCommission: true,
     categoryId: "cat-2-1", categoryName: "Aceite", active: true, createdAt: Date.now() - 86400000 * 38 },
   { id: "pr-008", name: "Filtro de Aire Mannol C30530", brand: "MANNOL", sku: "MN-C30530", costPrice: 5, salePrice: 8, minStock: 8,
     gestorCommission: 0.8, gestorCommissionCurrency: "USD", vendorCommission: 30, vendorCommissionCurrency: "MN",
@@ -293,9 +292,9 @@ export const DEMO_RATE_CONFIG = {
   id: "default",
   apiUrl: "https://api.eltoque.com/v1/currency/rates",
   apiToken: null,
-  markupMode: "PERCENT",
-  markupUsd: 5,
-  markupEur: 5,
+  markupMode: "FIXED",   // v5.28.0: +10 MN por USD (o +20)
+  markupUsd: 10,
+  markupEur: 10,
   manualUsdRate: 320,
   manualEurRate: 345,
   lastSyncAt: Date.now() - 3600000,

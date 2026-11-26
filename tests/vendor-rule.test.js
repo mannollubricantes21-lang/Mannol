@@ -12,8 +12,8 @@ describe("regla por venta", () => {
     expect(vendorSaleCommission(6, undefined)).toBe(0.4);
     expect(vendorSaleCommission(0, null)).toBe(0);
   });
-  it("apagada → null (vale la de cada producto)", () => {
-    expect(vendorSaleCommission(30, { enabled: false })).toBeNull();
+  it("v5.30: ya no se puede apagar (siempre por venta)", () => {
+    expect(vendorSaleCommission(30, { enabled: false })).toBe(1);
   });
   it("normaliza texto y valores raros", () => {
     expect(normalizeVendorRule('{"threshold":"30","above":"1,5","below":-1}'))
@@ -31,10 +31,9 @@ describe("regla por venta", () => {
     const c = saleVendorCommission({ items: r.items, status: "COMPLETADA" });
     expect(c).toMatchObject({ usd: 1, mn: 0, units: 4 });
   });
-  it("regla apagada: se queda la comisión de cada producto", () => {
-    const r = applyVendorRuleToItems([{ quantity: 2, vendorCommission: 50, vendorSaleCommission: 1 }], 40, { enabled: false });
-    expect(r.vendorUSD).toBeNull();
-    expect(saleVendorCommission({ items: r.items })).toMatchObject({ usd: 0, mn: 100 });
+  it("aunque venga guardada como apagada, cobra por venta", () => {
+    const r = applyVendorRuleToItems([{ quantity: 2, vendorCommission: 50 }], 40, { enabled: false });
+    expect(r.vendorUSD).toBe(1);
   });
   it("itemVendorCommission suma la de la venta", () => {
     expect(itemVendorCommission({ quantity: 2, vendorCommission: 0, vendorCommissionCurrency: "USD", vendorSaleCommission: 0.4 }).usd).toBe(0.4);
@@ -95,5 +94,57 @@ describe("gestor en % por caja", () => {
     expect(getSuggestedGestorCommissionPerBox(p, 9)).toBeCloseTo(1.2);
     expect(getSuggestedGestorCommissionPerBox(p, 10)).toBe(1.62);
     expect(getSuggestedGestorCommissionPerBox(p, 10, 60)).toBe(1.8);
+  });
+});
+
+import { gestorSaleCommission, gestorPercentFor } from "../js/vendor-rule.js";
+
+describe("gestor: 5% ventas normales / 3% por caja (v5.29)", () => {
+  const g = { commissionType: "PERCENT", commission: 5, commissionWholesale: 3 };
+  it("venta normal paga 5%", () => {
+    expect(gestorPercentFor(g, "RETAIL")).toBe(5);
+    expect(gestorSaleCommission(g, { total: 200, saleType: "RETAIL" })).toEqual({ usd: 10, mn: 0 });
+  });
+  it("venta por caja paga 3%", () => {
+    expect(gestorPercentFor(g, "WHOLESALE")).toBe(3);
+    expect(gestorSaleCommission(g, { total: 1000, saleType: "WHOLESALE" })).toEqual({ usd: 30, mn: 0 });
+  });
+  it("sin % de caja guardado usa 3 por defecto", () => {
+    expect(gestorPercentFor({ commissionType: "PERCENT", commission: 5 }, "WHOLESALE")).toBe(3);
+  });
+  it("sin gestor no paga nada", () => {
+    expect(gestorSaleCommission(null, { total: 100, saleType: "RETAIL" })).toEqual({ usd: 0, mn: 0 });
+  });
+  it("monto fijo no depende del total", () => {
+    const f = { commissionType: "FIXED", commission: 2, commissionCurrency: "USD" };
+    expect(gestorPercentFor(f, "RETAIL")).toBeNull();
+    expect(gestorSaleCommission(f, { total: 999, saleType: "RETAIL" }).usd).toBe(2);
+  });
+});
+
+describe("productos con comisión propia (v5.31)", () => {
+  const aceite = { productId: "a", quantity: 1, unitPrice: 30, subtotal: 30, vendorCommission: 50, vendorCommissionCurrency: "MN" };
+  const cargador = { productId: "c", quantity: 2, unitPrice: 5, subtotal: 10, vendorCommission: 0.5, vendorCommissionCurrency: "USD", ownVendorCommission: true };
+
+  it("va aparte: su fijo por unidad + la regla con el resto", () => {
+    const r = applyVendorRuleToItems([cargador, aceite], 40, null);
+    expect(r.vendorUSD).toBe(1);            // 30 USD de aceite → 1
+    expect(r.fixedUSD).toBe(1);             // 2 cargadores × 0.5
+    expect(r.items[0]).toMatchObject({ vendorCommission: 0.5, ownVendorCommission: true });
+    expect(r.items[1].vendorSaleCommission).toBe(1);
+    expect(saleVendorCommission({ items: r.items })).toMatchObject({ usd: 2, mn: 0 });
+  });
+  it("no cuenta para llegar a 25: aceite 20 + cargador 10 → 0.40", () => {
+    const r = applyVendorRuleToItems([{ ...aceite, subtotal: 20, unitPrice: 20 }, cargador], 30, null);
+    expect(r.vendorUSD).toBe(0.4);
+  });
+  it("solo productos con comisión propia: sin regla", () => {
+    const r = applyVendorRuleToItems([cargador], 10, null);
+    expect(r.vendorUSD).toBe(0);
+    expect(saleVendorCommission({ items: r.items })).toMatchObject({ usd: 1, mn: 0 });
+  });
+  it("en MN se suma en MN", () => {
+    const r = applyVendorRuleToItems([{ ...cargador, vendorCommission: 100, vendorCommissionCurrency: "MN" }], 10, null);
+    expect(r.fixedMN).toBe(200);
   });
 });

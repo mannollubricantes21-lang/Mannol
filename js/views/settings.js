@@ -7,7 +7,7 @@ import { getSettingsAdmin, saveSettings, syncElToqueRates, subscribeRates, listW
 import { formatDate } from "../currency.js";
 import { toast, icon, showModal, esc } from "../ui.js";
 
-export function mountSettingsView(container, navigate) {
+export function mountSettingsView(container, navigate, { embedded = false } = {}) {
   const store = getStore();
   let form = { ...store.getState().settings };
   let warehouses = [];
@@ -64,11 +64,12 @@ export function mountSettingsView(container, navigate) {
               <input type="checkbox" id="s-elToqueEnabled" ${form.elToqueEnabled ? "checked" : ""} />
             </div>
             <hr class="border" />
-            <div><label class="label">Markup (%) sobre tasa elToque</label>
+            ${embedded ? `<p class="text-xs text-muted" style="margin:0">El margen sobre la tasa oficial (por ejemplo <strong>+10</strong> o <strong>+20 MN</strong> por USD) se pone en <strong>Finanzas → Tasas</strong>.</p>` : `<div><label class="label">Markup (%) sobre tasa elToque</label>
               <input class="input" type="number" step="0.1" id="s-elToqueMarkup" value="${form.elToqueMarkup}" />
               <p class="text-xs text-muted mt-1">Porcentaje agregado a la tasa oficial.</p>
-            </div>
+            </div>`}
             ${form.lastRateSync ? `<p class="text-xs text-muted">Última sincronización: ${formatDate(form.lastRateSync)}</p>` : ""}
+            ${embedded ? `` : `
             <hr class="border" />
             <div><label class="label label-xs">Tasas actuales</label>
               <div class="grid grid-cols-4 gap-2 mt-2">
@@ -80,11 +81,11 @@ export function mountSettingsView(container, navigate) {
                   </div>
                 `).join("")}
               </div>
-            </div>
+            </div>`}
           </div>
         </div>
 
-        <div class="card">
+        ${embedded ? "" : `<div class="card">
           <div class="card-header"><h2 class="card-title flex items-center gap-2">${icon("store", 16)} Almacenes (${warehouses.length})</h2></div>
           <div class="card-content" style="display:flex;flex-direction:column;gap:0.5rem">
             ${warehouses.map((w) => `
@@ -98,7 +99,7 @@ export function mountSettingsView(container, navigate) {
             `).join("")}
             <button class="btn btn-outline btn-sm btn-block" id="new-wh">+ Nuevo almacén</button>
           </div>
-        </div>
+        </div>`}
 
         <div class="flex justify-end">
           <button class="btn btn-primary btn-lg" id="save-settings" ${saving ? "disabled" : ""}>
@@ -112,7 +113,7 @@ export function mountSettingsView(container, navigate) {
     container.querySelector("#s-businessName").addEventListener("input", (e) => { form.businessName = e.target.value; });
     container.querySelector("#s-pinCode").addEventListener("input", (e) => { form.pinCode = e.target.value.replace(/\D/g, "").slice(0, 6); e.target.value = form.pinCode; });
     container.querySelector("#s-elToqueEnabled").addEventListener("change", (e) => { form.elToqueEnabled = e.target.checked; });
-    container.querySelector("#s-elToqueMarkup").addEventListener("input", (e) => { form.elToqueMarkup = parseFloat(e.target.value) || 0; });
+    container.querySelector("#s-elToqueMarkup")?.addEventListener("input", (e) => { form.elToqueMarkup = parseFloat(e.target.value) || 0; });
 
     container.querySelector("#s-sync").addEventListener("click", async () => {
       syncing = true;
@@ -146,7 +147,7 @@ export function mountSettingsView(container, navigate) {
       }
     });
 
-    container.querySelector("#new-wh").addEventListener("click", () => showWarehouseDialog(null));
+    container.querySelector("#new-wh")?.addEventListener("click", () => showWarehouseDialog(null));
     container.querySelectorAll("[data-edit-wh]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const w = warehouses.find((x) => x.id === btn.dataset.editWh);

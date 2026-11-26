@@ -138,76 +138,39 @@ describe("revisión campo a campo", () => {
     expect($("#p-price").hasAttribute("aria-invalid")).toBe(false);
   });
 
-  it("acepta coma decimal y avisa (sin bloquear) si el vendedor no gana nada", async () => {
+  it("acepta coma decimal; sin campos de comisión (v5.30)", async () => {
     showProductDialog(null, CATEGORIES, () => {}, ctx());
-    expect($("#p-vendorCommission-warn").hidden).toBe(false);
+    expect($("#p-vendorCommission")).toBeNull();
+    expect($("#p-gestorCommission")).toBeNull();
     type("#p-name", "Aceite Z");
     type("#p-price", "22,50");
     type("#p-costPrice", "15");
     expect($("#p-margin").textContent).toMatch(/7\.50 USD/);
-    type("#p-vendorCommission", "0,75");
-    expect($("#p-vendorCommission-warn").hidden).toBe(true);
     await save();
     const data = saveProduct.mock.calls[0][0];
-    expect(data).toMatchObject({ salePrice: 22.5, costPrice: 15, vendorCommission: 0.75, gestorCommission: 1, minStock: 5, active: true });
-    expect(data).toMatchObject({ unitsPerBox: null, wholesaleTiers: [] });
+    expect(data).toMatchObject({ salePrice: 22.5, costPrice: 15, minStock: 5, active: true });
+    expect(data).not.toHaveProperty("vendorCommission");
+    expect(data).not.toHaveProperty("wholesaleTiers");
   });
 });
 
-describe("venta por caja", () => {
-  it("filas «desde N cajas» → tramos con la forma de siempre", async () => {
+describe("venta por caja (v5.30: ahora en Admin → Venta mayorista)", () => {
+  it("el formulario ya no la tiene y avisa dónde está", () => {
     showProductDialog(null, CATEGORIES, () => {}, ctx());
-    expect($("#p-wh-body").hidden).toBe(true);
-    const sw = $("#p-wholesale");
-    sw.checked = true;
-    sw.dispatchEvent(new Event("change", { bubbles: true }));
-    expect($("#p-wh-body").hidden).toBe(false);
-    type("#p-name", "Aceite caja");
-    type("#p-price", "25");
-    type("#p-unitsPerBox", "6");
-    type('[data-tier-row="0"] [data-k="pricePerUnit"]', "22");
-    type('[data-tier-row="0"] [data-k="vendorCommission"]', "0.5");
-    $("#p-tier-add").click();
-    type('[data-tier-row="1"] [data-k="minBoxes"]', "6");
-    type('[data-tier-row="1"] [data-k="pricePerUnit"]', "20");
-    expect($('[data-tier-row="0"] [data-tier-range]').textContent).toBe("1 a 5 cajas");
-    expect($('[data-tier-row="1"] [data-tier-range]').textContent).toBe("6 cajas o más");
-    expect($('[data-tier-row="0"] [data-tier-sum]').textContent).toContain("132.00 USD");
-    expect($("#pf-wholesale-sub").textContent).toBe("6 pomos por caja · 2 precios");
+    expect($("#p-wholesale")).toBeNull();
+    expect($("#p-tiers")).toBeNull();
+    expect(document.body.textContent).toContain("Venta mayorista");
+  });
+
+  it("editar un producto NO borra su venta por caja ni sus comisiones", async () => {
+    const prod = { id: "p3", name: "Con caja", brand: "Royal", salePrice: 25, vendorCommission: 0.6, gestorCommission: 0.3, unitsPerBox: 12, wholesaleTiers: TIERS, categoryId: "cat-ref", minStock: 3, active: true };
+    showProductDialog(prod, CATEGORIES, () => {}, ctx());
     await save();
     const data = saveProduct.mock.calls[0][0];
-    expect(data.unitsPerBox).toBe(6);
-    expect(data.wholesaleTiers).toEqual([
-      { minBoxes: 1, maxBoxes: 5, pricePerUnit: 22, vendorCommission: 0.5, gestorCommission: 0 },
-      { minBoxes: 6, maxBoxes: null, pricePerUnit: 20, vendorCommission: 0.5, gestorCommission: 0 }, // copió la comisión del anterior
-    ]);
-  });
-
-  it("un «desde» que no sube marca su fila y no guarda", async () => {
-    showProductDialog({ id: "p2", name: "Con caja", brand: "MANNOL", salePrice: 25, unitsPerBox: 6, wholesaleTiers: TIERS }, CATEGORIES, () => {}, ctx());
-    type('[data-tier-row="1"] [data-k="minBoxes"]', "1");
-    await save();
-    expect(saveProduct).not.toHaveBeenCalled();
-    expect($('[data-tier-row="1"] [data-tier-msg]').hidden).toBe(false);
-    expect($('[data-tier-row="1"] [data-k="minBoxes"]').classList.contains("is-invalid")).toBe(true);
-  });
-
-  it("editar sin tocar nada guarda lo mismo; apagar la venta por caja la quita", async () => {
-    const prod = { id: "p3", name: "Con caja", brand: "Royal", salePrice: 25, vendorCommission: 0.6, vendorCommissionCurrency: "USD", gestorCommission: 0.3, gestorCommissionCurrency: "MN", unitsPerBox: 12, wholesaleTiers: TIERS, categoryId: "cat-ref", minStock: 3, active: true };
-    showProductDialog(prod, CATEGORIES, () => {}, ctx());
-    expect($$("[data-tier-row]")).toHaveLength(2);
-    await save();
-    expect(saveProduct.mock.calls[0][0]).toMatchObject({
-      id: "p3", brand: "Royal", salePrice: 25, vendorCommission: 0.6, gestorCommission: 0.3, gestorCommissionCurrency: "MN",
-      unitsPerBox: 12, wholesaleTiers: TIERS, categoryId: "cat-ref", categoryName: "Refrigerante", minStock: 3,
-    });
-    showProductDialog(prod, CATEGORIES, () => {}, ctx());
-    const sw = $$("#p-wholesale").pop();
-    sw.checked = false;
-    sw.dispatchEvent(new Event("change", { bubbles: true }));
-    $$("#p-save").pop().click();
-    await flush(); await flush();
-    expect(saveProduct.mock.calls[1][0]).toMatchObject({ unitsPerBox: null, wholesaleTiers: [] });
+    expect(data).toMatchObject({ id: "p3", brand: "Royal", salePrice: 25, categoryId: "cat-ref", categoryName: "Refrigerante", minStock: 3 });
+    expect(data).not.toHaveProperty("unitsPerBox");
+    expect(data).not.toHaveProperty("wholesaleTiers");
+    expect(data).not.toHaveProperty("gestorCommission");
   });
 });
 
@@ -256,5 +219,32 @@ describe("otros", () => {
     await save();
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect($$(".modal-overlay")).toHaveLength(0);
+  });
+});
+
+describe("comisión propia (v5.31)", () => {
+  it("marcada: pide el monto y lo guarda aparte", async () => {
+    showProductDialog(null, CATEGORIES, () => {}, ctx());
+    expect($("#p-own-body").hidden).toBe(true);
+    type("#p-name", "Cargador USB");
+    type("#p-price", "5");
+    const sw = $("#p-own");
+    sw.checked = true;
+    sw.dispatchEvent(new Event("change", { bubbles: true }));
+    await save();
+    expect(saveProduct).not.toHaveBeenCalled();
+    expect($("#p-ownAmount-msg").hidden).toBe(false);
+    type("#p-ownAmount", "0,5");
+    await save();
+    expect(saveProduct.mock.calls[0][0]).toMatchObject({ ownVendorCommission: true, vendorCommission: 0.5, vendorCommissionCurrency: "USD" });
+  });
+  it("sin marcar: no toca la comisión guardada", async () => {
+    showProductDialog(null, CATEGORIES, () => {}, ctx());
+    type("#p-name", "Aceite");
+    type("#p-price", "20");
+    await save();
+    const d = saveProduct.mock.calls[0][0];
+    expect(d.ownVendorCommission).toBe(false);
+    expect(d).not.toHaveProperty("vendorCommission");
   });
 });

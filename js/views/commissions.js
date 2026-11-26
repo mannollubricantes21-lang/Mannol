@@ -95,7 +95,7 @@ export function mountCommissionsView(container, navigate) {
                   ${records.map((r) => {
                     const typeLabel = r.managerType === "LOCAL" ? `Local · ${esc(r.warehouseName || '—')}` : "Referidor";
                     const commTypeLabel = (r.commissionType || "PERCENT") === "PERCENT"
-                      ? `${r.commission}% del total`
+                      ? `${r.commission}% (por caja: % del producto)`
                       : `${formatMoney(r.commission, r.commissionCurrency || "USD")} por venta`;
                     return `
                     <tr>
@@ -136,6 +136,7 @@ export function mountCommissionsView(container, navigate) {
                           <span style="font-size:0.875rem;line-height:1">$</span>
                           ${formatMoney(r.amountUSD, "USD")}
                         </span>
+                        ${r.wholesaleCount ? `<div class="gc-split">Normales ${formatMoney(r.retailUSD || 0, "USD")} (${r.retailCount || 0}) · Caja ${formatMoney(r.wholesaleUSD || 0, "USD")} (${r.wholesaleCount})</div>` : ""}
                       </td>
                       <td class="text-center">
                         ${r.paid ? `<span class="badge badge-accent">${icon("check", 12)} Pagada</span>` : `<span class="badge badge-warning">${icon("clock", 12)} Pendiente</span>`}
@@ -208,6 +209,8 @@ export function mountCommissionsView(container, navigate) {
           total_vendido_usd: r.totalSales,
           comision_usd: r.amountUSD,
           comision_mn: r.amountMN,
+          comision_normales_usd: r.retailUSD ?? 0,
+          comision_caja_usd: r.wholesaleUSD ?? 0,
           estado: r.paid ? 'Pagada' : 'Pendiente',
           pagada_en: r.paidAt ? formatDate(r.paidAt) : '',
         }));

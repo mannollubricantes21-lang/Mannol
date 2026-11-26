@@ -17,7 +17,7 @@
 //    red no responde en 4 s se abre la copia guardada.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v55";
+const CACHE_VERSION = "mannol-pos-supabase-v60";
 const DATA_CACHE = "mannol-pos-data-v1"; // respuestas de Supabase (se conserva entre versiones)
 const NAV_TIMEOUT_MS = 4000;
 const API_TIMEOUT_MS = 6000;
@@ -63,6 +63,7 @@ const STATIC_ASSETS = [
   "./js/ticket.js",        // v5.21.0: ticket compartible y «Vender de nuevo»
   "./js/appearance.js",    // v5.25.0: apariencia por almacén
   "./js/vendor-rule.js",   // v5.26.0: comisión del vendedor por venta
+  "./js/wholesale-config.js", // v5.30.0: venta mayorista
   "./fonts/barlow-condensed-latin-700-normal.woff2", // v5.27.0: cifras (sin red)
   "./fonts/barlow-condensed-latin-800-normal.woff2",
   "./js/views/appearance-dialog.js",
@@ -86,6 +87,7 @@ const STATIC_ASSETS = [
   "./js/views/managers.js",
   "./js/views/admin.js",
   "./js/views/product-dialog.js", // v5.15.0: formulario de producto del admin
+  "./js/views/wholesale-admin.js", // v5.30.0: Admin → Venta mayorista
   "./js/views/warehouse-interior.js",
   "./manifest.webmanifest",
   "./offline.html",

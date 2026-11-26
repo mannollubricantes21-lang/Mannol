@@ -347,7 +347,7 @@ export function labelTableCards(scope = document) {
     const hasMedia = labels[0] === "";
     const titleIdx = hasMedia ? 1 : 0;
     const actionsIdx = /acciones/i.test(labels[labels.length - 1]) ? labels.length - 1 : -1;
-    table.querySelectorAll(":scope > tbody > tr").forEach((tr) => {
+    table.querySelectorAll(":scope > tbody > tr, :scope > tfoot > tr").forEach((tr) => {
       if (tr.dataset.tc === "1") return;
       let col = 0;
       for (const cell of tr.children) {

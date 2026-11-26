@@ -8,6 +8,7 @@ import { hasPersistedSupabaseSession } from "../supabase.js";
 import { subscribeSales, subscribeStock, listProducts, listWarehouses, listAllStockAcrossWarehouses, listStockForProductInAllWarehouses, createTransferRequest, listTransferRequests, saveDailyClosure, listDailyClosures, listSalesInRange } from "../db.js";
 import { computeSellerEarnings, renderSellerEarningsCard, monthRange } from "../seller-earnings.js";
 import { vendorRuleLabel } from "../vendor-rule.js";
+import { wholesaleShortages } from "../wholesale-config.js";
 import { computeClosureStats, closureDateKey, validateTransferRequest, buildClosureShareText, suggestRestock, buildRestockText, computeCashCount, cashDiffLabel, CASH_CURRENCIES } from "../sales-stats.js";
 import { getPendingCount } from "../offline-sync.js";
 import { formatMoney, formatDate } from "../currency.js";
@@ -299,7 +300,7 @@ export function mountWarehouseInterior(container, navigate) {
       earnCur = mine(earnCur);
       earnPrev = mine(earnPrev);
     }
-    const ruleNote = `${vendorRuleLabel(store.getState().settings?.vendorSaleRule)}. Por caja: lo del producto.`;
+    const ruleNote = `${vendorRuleLabel(store.getState().settings?.vendorSaleRule)}. Cargadores y similares: su comisión aparte. Por caja: lo del producto.`;
     const earningsHtml = renderSellerEarningsCard(earnCur, earnPrev, { open: earnOpen, prevLoading, ruleNote, mySlot });
 
     // v5.21.0: pedido sugerido (ventas de 30 días: este mes + el pasado)
@@ -308,6 +309,11 @@ export function mountWarehouseInterior(container, navigate) {
     const restock = products.length && stock.length
       ? suggestRestock({ products, stock, sales: [...salesById.values()] })
       : [];
+
+    // v5.32.0: venta por caja que no llega al mínimo en este almacén
+    const qtyById = {};
+    stock.forEach((x) => { qtyById[x.productId] = x.quantity; });
+    const boxShort = products.length ? wholesaleShortages(products, qtyById, warehouse.id) : [];
 
     container.innerHTML = `
       <div class="wi-layout wi-v2" data-sec-active="${section}" style="display:flex;flex-direction:column;gap:0.875rem">
@@ -617,6 +623,26 @@ export function mountWarehouseInterior(container, navigate) {
             </div>
           ` : ''}
         </div>
+
+        <!-- v5.32.0: venta por caja sin cajas suficientes -->
+        ${boxShort.length ? `
+          <div class="card wi-boxshort" data-sec="inv">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
+              <h3 class="card-title flex items-center gap-1">${icon("boxes", 14)} No alcanza para venta por caja</h3>
+              <span class="badge badge-warning" style="font-size:0.625rem">${boxShort.length}</span>
+            </div>
+            <div class="card-content" style="padding:0.5rem 0.75rem 0.75rem;display:flex;flex-direction:column;gap:0.375rem">
+              ${boxShort.map((r) => `
+                <div class="restock-row">
+                  <div style="flex:1;min-width:0">
+                    <div class="text-xs font-semibold truncate">${esc(r.name)}</div>
+                    <div class="text-xs text-muted">Hay ${r.boxes} caja${r.boxes === 1 ? "" : "s"} · mínimo ${r.minBoxes} · faltan ${r.missingUnits} pomos</div>
+                  </div>
+                  <span class="restock-qty" title="Cajas que faltan">+${r.minBoxes - r.boxes}</span>
+                </div>`).join("")}
+            </div>
+          </div>
+        ` : ""}
 
         <!-- v5.21.0: Pedido sugerido -->
         ${restock.length ? `

@@ -1,5 +1,88 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.32.0 (2026-11-26) — Seguridad del token · Mejoras de venta por caja
+
+> **SQL**: ejecutar `seguridad-token-v5.32.sql` (o `instalar.sql`, sección 12).
+
+- **Token de elToque protegido**: ya no se puede leer desde la app de los
+  almacenes; solo el admin lo ve y lo cambia (Admin → Tasas). Las tasas de
+  elToque se actualizan cuando el admin entra o toca «Sincronizar»; los
+  almacenes usan la última tasa guardada.
+- **Editar un producto ya no cambia su fecha de creación.**
+- **Venta mayorista → «Revisar»**: los productos que vienen de la versión
+  anterior salen marcados para poner el mínimo real de cajas.
+- **Venta por caja**: lo que escribes en «Vendedor gana» se mantiene al cambiar
+  la cantidad de cajas.
+- **Comisiones de gestores**: cada gestor muestra lo ganado en ventas normales
+  y por caja por separado (también en el CSV).
+- **Inventario del almacén**: aviso «No alcanza para venta por caja» cuando no
+  hay cajas suficientes para el mínimo (cuántas cajas y pomos faltan).
+- Limpieza: se quitó el código viejo de la venta mayorista (precio editable,
+  comisión por pomo) y el campo «% por caja» del gestor.
+
+## v5.31.0 (2026-11-26) — Comisión propia por producto · Vendedor en venta por caja
+
+> **SQL**: ejecutar `comision-propia-v5.31.sql` (o `instalar.sql`, sección 11).
+
+- **Producto → «Comisión propia del vendedor»** (interruptor): para lo que va
+  aparte (cargadores, breakers…). El vendedor gana ese monto fijo por unidad
+  (USD o MN) y esos productos **no cuentan** para la regla por venta; el resto
+  de la venta sigue con la regla (≥ 25 USD → 1, si no 0.40).
+- **Venta mayorista**: campo «Vendedor del almacén gana por esa venta (USD)»
+  en cada producto (vacío = regla por venta). Al vender por caja, la casilla
+  «Vendedor gana» se puede cambiar.
+- En la lista de productos sale la comisión propia (ej. «Vend. 0.5 USD/u»).
+
+## v5.30.0 (2026-11-26) — Nuevo apartado «Venta mayorista» · Sin comisiones por producto
+
+> Sin SQL.
+
+- **Admin → Venta mayorista** (nuevo, en Gestión): un solo lugar para la venta
+  por caja. Por cada producto: pomos por caja, **mínimo de cajas**, **precio
+  por caja**, **comisión del gestor %** (3 por defecto) y **en qué almacenes**
+  se vende por caja (o todos). Muestra el precio por pomo y lo que gana el
+  gestor en la venta mínima.
+- **Al vender por caja** solo salen los productos de ese almacén, empieza en el
+  mínimo de cajas y no deja vender menos. El precio es el configurado. Se ve
+  lo que gana el vendedor y el gestor.
+- **Formulario de producto**: se quitaron las comisiones y la venta por caja.
+  Al editar un producto no se pierde su configuración mayorista.
+- **Vendedor**: siempre por venta (≥ 25 USD → 1 USD, si no 0.40), también en
+  ventas por caja. Ya no se puede apagar la regla.
+- **Gestor**: su % (5) en ventas normales; en ventas por caja, el % del producto.
+- Lista de productos: la columna «Comisiones» ahora es «Por caja».
+
+## v5.29.0 (2026-11-25) — Tasa +10/+20 MN fijo · Gestores 5% / 3%
+
+> **SQL**: ejecutar `gestores-tasa-v5.29.sql` (o `instalar.sql` completo, sección 10).
+
+- **Tasa**: el margen sobre la tasa oficial ahora es una suma fija en MN
+  (+10 o +20 por USD/EUR), no un 5%. En Admin → Tasas hay botones rápidos
+  «+10 MN» y «+20 MN». La pantalla de inicio dice «Incluye +10 MN por USD».
+- **Gestores**: cada gestor tiene dos porcentajes: **ventas normales 5%** y
+  **ventas por caja (mayoristas) 3%**. Se calcula sobre el total de la venta,
+  al registrarla y en los reportes de comisiones. Se edita en Admin → Gestores.
+- En la venta por caja se ve el % y el monto del gestor (ya no se escribe a mano).
+
+## v5.28.0 (2026-11-25) — Admin: Configuración a la vista y versión móvil
+
+> Sin SQL.
+
+- **Nueva sección «Configuración»** en el menú del admin:
+  - **Ajustes generales**: nombre del negocio, PIN de empleado por defecto y
+    sincronización de tasas de elToque (antes no estaba en el admin).
+  - **GitHub y fotos** (antes «Almacenamiento», escondido en Sistema): conectar
+    el repositorio para guardar las fotos de los productos. Si la app está en
+    GitHub Pages, el usuario y el repositorio ya vienen puestos: solo pegar el
+    token, «Guardar» y «Probar conexión».
+  - **Fin de semana**.
+- En el **Dashboard** del admin sale un aviso «Conecta GitHub para las fotos»
+  mientras no esté configurado.
+- **Admin en el teléfono**: todas las tablas (Comisiones, Ganancia/Inversión,
+  Usuarios, Productos, Almacenes, Gestores, Cierres…) se ven como tarjetas, sin
+  tener que deslizar de lado; la fila de totales es una tarjeta marcada. El
+  título de arriba va en una línea y los formularios de 3 columnas pasan a una.
+
 ## v5.27.0 (2026-11-25) — Más simple: una sola navegación y botones en relieve
 
 > Sin SQL. Revisado por tres revisores independientes (uso, botones, «qué sobra»):

@@ -3448,3 +3448,77 @@ grant execute on function public.verify_warehouse_pin(text, text, int) to anon, 
 
 -- Que la API vea la función nueva al momento
 notify pgrst, 'reload schema';
+
+-- =====================================================================
+-- 10. v5.29.0 — Gestores 5% normal / 3% por caja · Tasa +10 MN fijo
+-- (Se puede ejecutar varias veces sin problema)
+-- =====================================================================
+
+-- % del gestor en ventas por caja (mayoristas). Ventas normales usan "commission".
+alter table public.managers
+  add column if not exists commission_wholesale numeric not null default 3;
+
+-- La tasa se sube una cantidad fija (+10 o +20 MN por USD), no un %.
+alter table public.rate_config alter column markup_mode set default 'FIXED';
+alter table public.rate_config alter column markup_usd  set default 10;
+alter table public.rate_config alter column markup_eur  set default 10;
+
+-- Solo cambia si sigue con el valor de fábrica (5%). Si ya lo ajustaste, no se toca.
+update public.rate_config
+   set markup_mode = 'FIXED', markup_usd = 10, markup_eur = 10
+ where markup_mode = 'PERCENT' and markup_usd = 5 and markup_eur = 5;
+
+notify pgrst, 'reload schema';
+
+-- =====================================================================
+-- 11. v5.31.0 — Productos con comisión propia del vendedor
+--     (cargadores, breakers… van aparte de la regla por venta)
+--     Se puede ejecutar varias veces sin problema.
+-- =====================================================================
+alter table public.products
+  add column if not exists own_vendor_commission boolean not null default false;
+
+notify pgrst, 'reload schema';
+
+-- =====================================================================
+-- 12. v5.32.0 — El token de elToque solo lo ve el admin
+--     Antes cualquiera con la app podía leer rate_config.api_token.
+--     Ahora la tabla se lee SIN esa columna; el admin lo lee/guarda con
+--     dos funciones que comprueban que sea admin.
+--     Se puede ejecutar varias veces sin problema.
+-- =====================================================================
+revoke select on public.rate_config from anon, authenticated;
+grant select (id, api_url, markup_mode, markup_usd, markup_eur, manual_usd_rate, manual_eur_rate,
+              last_sync_at, last_usd_rate, last_eur_rate, cache_ttl_minutes, auto_sync)
+  on public.rate_config to anon, authenticated;
+
+create or replace function public.get_rate_api_token()
+returns text
+language sql stable security definer
+set search_path = public
+as $$
+  select case when public.is_admin()
+              then (select api_token from public.rate_config where id = 'default')
+              else null end;
+$$;
+
+create or replace function public.set_rate_api_token(p_token text)
+returns void
+language plpgsql security definer
+set search_path = public
+as $$
+begin
+  if not public.is_admin() then
+    raise exception 'Solo el admin puede cambiar el token de elToque';
+  end if;
+  insert into public.rate_config (id, api_token) values ('default', nullif(trim(p_token), ''))
+  on conflict (id) do update set api_token = excluded.api_token;
+end;
+$$;
+
+revoke all on function public.get_rate_api_token() from public, anon;
+revoke all on function public.set_rate_api_token(text) from public, anon;
+grant execute on function public.get_rate_api_token() to authenticated;
+grant execute on function public.set_rate_api_token(text) to authenticated;
+
+notify pgrst, 'reload schema';

@@ -41,7 +41,10 @@ import { normalizeVendorRule, vendorRuleLabel } from "../vendor-rule.js";
 import { computeSellerEarnings, sellerModeOf, saleVendorCommission, productsWithoutVendorCommission, monthRange, moneyPair } from "../seller-earnings.js";
 import { closureDateKey, aggregateClosuresReport, reportPeriodRange } from "../sales-stats.js";
 import { getGitHubConfig, saveGitHubConfig, testGitHubConnection, isGitHubConfigured } from "../github-storage.js";
+import { mountSettingsView } from "./settings.js";
 import { showProductDialog } from "./product-dialog.js";
+import { mountWholesalePanel } from "./wholesale-admin.js";
+import { wholesaleConfigOf } from "../wholesale-config.js";
 
 // Secciones agrupadas por categoría para mejor organización
 const NAV_SECTIONS = [
@@ -51,6 +54,7 @@ const NAV_SECTIONS = [
       { id: "dashboard", label: "Dashboard", icon: "home" },
       { id: "users", label: "Usuarios", icon: "userCog" },
       { id: "products", label: "Productos", icon: "tags" },
+      { id: "wholesale", label: "Venta mayorista", icon: "boxes" },
       { id: "categories", label: "Categorías", icon: "tags" },
       { id: "brands", label: "Marcas", icon: "award" },
       { id: "warehouses", label: "Almacenes", icon: "store" },
@@ -73,14 +77,32 @@ const NAV_SECTIONS = [
       { id: "transfers", label: "Transferencias", icon: "arrowLeftRight" },
       { id: "movements", label: "Movimientos", icon: "listTree" },
       { id: "closures", label: "Cierres de caja", icon: "receipt" },
-      { id: "storage", label: "Almacenamiento", icon: "cloud" },
-      { id: "weekend", label: "Fin de semana", icon: "calendar" },
       { id: "audit", label: "Auditoría", icon: "receipt" },
+    ],
+  },
+  {
+    // v5.27.0: todo lo que se configura, junto y a la vista
+    label: "Configuración",
+    items: [
+      { id: "settings", label: "Ajustes generales", icon: "settings" },
+      { id: "storage", label: "GitHub y fotos", icon: "cloud" },
+      { id: "weekend", label: "Fin de semana", icon: "calendar" },
     ],
   },
 ];
 
 const ALL_TABS = NAV_SECTIONS.flatMap((s) => s.items);
+
+// v5.27.0: «usuario.github.io/Repo» → { owner: "usuario", repo: "Repo" }
+export function guessGitHubRepo(loc = (typeof location !== "undefined" ? location : null)) {
+  try {
+    const host = String(loc?.hostname || "");
+    if (!host.endsWith(".github.io")) return {};
+    const owner = host.slice(0, -".github.io".length);
+    const repo = String(loc?.pathname || "").split("/").filter(Boolean)[0] || `${owner}.github.io`;
+    return { owner, repo: repo.endsWith(".html") ? `${owner}.github.io` : repo };
+  } catch { return {}; }
+}
 
 // Exporta mountAdminPanel para que admin-app.js lo use
 export function mountAdminPanel(container, user) {
@@ -835,9 +857,22 @@ export function mountAdminView(container, navigateOrUser) {
     content.innerHTML = `<div class="empty-state"><div class="spinner spinner-lg"></div><p class="text-sm text-muted mt-2">Cargando…</p></div>`;
 
     switch (activeTab) {
-      case "dashboard": mountAnalyticsDashboard(content, myGen); break;
+      case "dashboard":
+        mountAnalyticsDashboard(content, myGen);
+        // v5.27.0: aviso si las fotos aún no van a GitHub
+        isGitHubConfigured().then((ok) => {
+          if (ok || myGen !== tabGeneration || activeTab !== "dashboard") return;
+          const tip = document.createElement("button");
+          tip.type = "button";
+          tip.className = "admin-setup-tip";
+          tip.innerHTML = `${icon("cloud", 18)}<span><strong>Conecta GitHub para las fotos de productos.</strong> Ahora se guardan en Supabase (1 GB gratis).</span><span class="admin-setup-go">Configurar ${icon("chevronRight", 14)}</span>`;
+          tip.addEventListener("click", () => window.__adminNavigateTo?.("storage"));
+          content.prepend(tip);
+        }).catch(() => {});
+        break;
       case "users": mountUsersPanel(content, myGen); break;
       case "products": mountProductsPanel(content, myGen); break;
+      case "wholesale": mountWholesalePanel(content, { isStale: () => myGen !== tabGeneration }); break;
       case "categories": mountCategoriesPanel(content, myGen); break;
       case "brands": mountBrandsPanel(content, myGen); break;
       case "warehouses": mountWarehousesPanel(content, myGen); break;
@@ -850,6 +885,7 @@ export function mountAdminView(container, navigateOrUser) {
       case "movements": mountMovementsPanel(content, myGen); break;
       case "closures": mountClosuresPanel(content, myGen); break;
       case "storage": mountStoragePanel(content, myGen); break;
+      case "settings": mountSettingsView(content, navigate || (() => {}), { embedded: true }); break;
       case "rates": mountRatesPanel(content, myGen); break;
       case "profit": mountProfitPanel(content, myGen); break;
       case "audit": mountAuditPanel(content, myGen); break;
@@ -1713,7 +1749,7 @@ export function mountAdminView(container, navigateOrUser) {
           </div>
         ` : `
           <table class="table table-cards">
-            <thead><tr><th></th><th>Producto</th><th style="white-space:nowrap">Categoría</th><th class="text-right">Precio</th><th class="text-right" style="white-space:nowrap">Comisiones <span class="text-xs text-muted">G/V</span></th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
+            <thead><tr><th></th><th>Producto</th><th style="white-space:nowrap">Categoría</th><th class="text-right">Precio</th><th class="text-right" style="white-space:nowrap">Por caja</th><th class="text-center">Estado</th><th class="text-right">Acciones</th></tr></thead>
             <tbody>
               ${items.map((p) => `
                 <tr>
@@ -1725,7 +1761,7 @@ export function mountAdminView(container, navigateOrUser) {
                   <td class="font-medium">${esc(p.name)}${p.brand ? ` <span class="text-xs text-muted" style="font-weight:400">· ${esc(p.brand)}</span>` : ''}</td>
                   <td class="text-xs text-muted">${esc(catLabel(p) || '—')}</td>
                   <td class="text-right">${formatMoney(p.salePrice, "USD")}</td>
-                  <td class="text-right text-xs"><span class="badge badge-outline" style="font-size:0.625rem;white-space:nowrap">G ${p.gestorCommission ?? p.commission ?? 0} ${p.gestorCommissionCurrency ?? p.commissionCurrency ?? "USD"} · V ${p.vendorCommission ?? 0} ${p.vendorCommissionCurrency ?? "MN"}</span></td>
+                  <td class="text-right text-xs">${(() => { const w = wholesaleConfigOf(p); return (w ? `<span class="badge badge-outline" style="font-size:0.625rem;white-space:nowrap">desde ${w.minBoxes} cajas · ${formatMoney(w.pricePerBox, "USD")}</span>` : `<span class="text-muted">—</span>`) + (p.ownVendorCommission ? ` <span class="badge badge-accent" style="font-size:0.625rem;white-space:nowrap" title="Comisión propia del vendedor">Vend. ${p.vendorCommission} ${p.vendorCommissionCurrency || "MN"}/u</span>` : ""); })()}</td>
                   <td class="text-center">${p.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
                   <td class="text-right">
                     <button class="btn btn-ghost btn-sm" data-stock-product="${esc(p.id)}" aria-label="Añadir o ajustar stock de ${esc(p.name)}" title="Añadir / ajustar stock por almacén">${icon("boxes", 12)}</button>
@@ -3052,10 +3088,10 @@ export function mountAdminView(container, navigateOrUser) {
                   </select>
                 </div>
                 <div>
-                  <label class="label label-xs" id="m-commission-label">Comisión ${commissionType === 'PERCENT' ? '%' : '$'}</label>
+                  <label class="label label-xs" id="m-commission-label">${commissionType === 'PERCENT' ? 'Comisión %' : 'Por venta $'}</label>
                   <input class="input" type="number" step="0.01" id="m-commission" value="${m.commission ?? 5}" />
                 </div>
-                <div>
+                <div id="m-cur-wrap"${commissionType === 'PERCENT' ? ' hidden' : ''}>
                   <label class="label label-xs">Moneda</label>
                   <select class="select" id="m-commissionCurrency">
                     <option value="USD" ${commissionCurrency === 'USD' ? 'selected' : ''}>USD</option>
@@ -3065,7 +3101,7 @@ export function mountAdminView(container, navigateOrUser) {
               </div>
               <p class="text-xs text-muted" style="margin-top:0.25rem" id="m-commission-hint">
                 ${commissionType === 'PERCENT'
-                  ? 'Porcentaje aplicado al total vendido (ej: 3 = 3% del total).'
+                  ? '5 % del total de cada venta normal. En ventas por caja se usa el % de cada producto (Venta mayorista).'
                   : 'Valor fijo pagado por cada venta completada (ej: 5 = $5 por venta).'}
               </p>
             </div>
@@ -3101,11 +3137,12 @@ export function mountAdminView(container, navigateOrUser) {
         const type = commTypeSel.value;
         const label = document.getElementById("m-commission-label");
         const hint = document.getElementById("m-commission-hint");
+        document.getElementById("m-cur-wrap").hidden = type === "PERCENT";
         if (type === "PERCENT") {
           label.textContent = "Comisión %";
-          hint.textContent = "Porcentaje aplicado al total vendido (ej: 3 = 3% del total).";
+          hint.textContent = "5 % del total de cada venta normal. En ventas por caja se usa el % de cada producto (Venta mayorista).";
         } else {
-          label.textContent = "Comisión $";
+          label.textContent = "Por venta $";
           hint.textContent = "Valor fijo pagado por cada venta completada (ej: 5 = $5 por venta).";
         }
       });
@@ -3123,6 +3160,7 @@ export function mountAdminView(container, navigateOrUser) {
           commissionType: document.querySelector("#m-commissionType").value,
           commissionCurrency: document.querySelector("#m-commissionCurrency").value,
           commission: parseFloat(document.querySelector("#m-commission").value) || 0,
+          // v5.28.0: % para las ventas por caja (mayorista)
           warehouseId: document.querySelector("#m-warehouseId")?.value || null,
           notes: document.querySelector("#m-notes").value.trim() || null,
           active: true,
@@ -3490,7 +3528,7 @@ export function mountAdminView(container, navigateOrUser) {
                   </div>
 
                   <div class="overflow-x-auto">
-                    <table class="table">
+                    <table class="table table-cards">
                       <thead><tr><th>Almacén</th><th class="text-center">Cierres</th><th class="text-center">Ventas</th><th class="text-center">Unid.</th><th class="text-right">Total (USD)</th><th class="text-right">Prom/día</th><th class="text-right">Ticket prom.</th></tr></thead>
                       <tbody>
                         ${report.perWarehouse.map((w) => `
@@ -3533,7 +3571,7 @@ export function mountAdminView(container, navigateOrUser) {
                   <p class="empty-state-desc">Cada almacén cierra su caja desde el interior de almacén → "Cerrar caja de hoy".</p>
                 </div>
               ` : `
-                <table class="table">
+                <table class="table table-cards">
                   <thead><tr><th>Fecha</th><th>Almacén</th><th class="text-center">Ventas</th><th class="text-center">Unid.</th><th class="text-right">Total (USD)</th><th>Detalle por moneda</th><th>Fondo</th><th>Arqueo</th><th>Cerrado por</th></tr></thead>
                   <tbody>
                     ${closures
@@ -3958,7 +3996,7 @@ export function mountAdminView(container, navigateOrUser) {
                   <p class="empty-state-desc">No hay productos que coincidan con los filtros.</p>
                 </div>
               ` : `
-                <table class="table">
+                <table class="table table-cards">
                   <thead><tr>
                     <th>Producto</th>
                     ${activeWhs.map((w) => `<th class="text-center">${esc(w.code)}</th>`).join('')}
@@ -4275,7 +4313,7 @@ export function mountAdminView(container, navigateOrUser) {
                   <p class="empty-state-desc">No hay movimientos que coincidan con los filtros seleccionados.</p>
                 </div>
               ` : `
-                <table class="table">
+                <table class="table table-cards">
                   <thead><tr>
                     <th>Fecha</th>
                     <th>Producto</th>
@@ -4684,14 +4722,18 @@ export function mountAdminView(container, navigateOrUser) {
   // ===== STORAGE (imágenes de productos en GitHub) =====
   async function mountStoragePanel(content, gen) {
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
-    const cfg = await getGitHubConfig();
+    const cfg = { ...(await getGitHubConfig()) };
     const configured = await isGitHubConfigured();
+    // v5.27.0: si la app está publicada en GitHub Pages, el repo ya se sabe
+    const guess = guessGitHubRepo();
+    if (!cfg.owner && guess.owner) cfg.owner = guess.owner;
+    if (!cfg.repo && guess.repo) cfg.repo = guess.repo;
 
     content.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:1rem">
         <div>
-          <h1 class="text-2xl font-bold flex items-center gap-2">${icon("cloud", 24)} Almacenamiento de imágenes</h1>
-          <p class="text-sm text-muted">Guarda las imágenes de productos en GitHub para no agotar el espacio de Supabase.</p>
+          <h1 class="text-2xl font-bold flex items-center gap-2">${icon("cloud", 24)} GitHub y fotos de productos</h1>
+          <p class="text-sm text-muted">Conecta el repositorio de GitHub para guardar ahí las fotos de los productos (no gastan el espacio de Supabase). Solo hace falta pegar el token y pulsar «Guardar» y «Probar conexión».</p>
         </div>
 
         <div class="grid md:grid-cols-2 gap-3">
@@ -5201,15 +5243,14 @@ export function mountAdminView(container, navigateOrUser) {
     getSettings().then((st) => { vRule = normalizeVendorRule(st.vendorSaleRule); if (!loading) render(); }).catch(() => {});
 
     function ruleCardHtml() {
-      const r = vRule;
+      // v5.30.0: siempre por venta (ya no hay comisión por producto)
+      const r = { ...vRule, enabled: true };
       return `
         <div class="card" id="vrule-card">
           <div class="card-header"><h3 class="card-title">${icon("wallet", 16)} Cuánto gana el vendedor por cada venta</h3></div>
           <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
-            <label class="flex items-center gap-2 text-sm" style="cursor:pointer">
-              <input type="checkbox" id="vr-enabled" ${r.enabled ? "checked" : ""} />
-              <span>Pagar <strong>por venta</strong> (no por cada pomo)</span>
-            </label>
+            <input type="checkbox" id="vr-enabled" checked hidden />
+            <p class="text-sm" style="margin:0">Se paga <strong>por venta</strong>, igual en ventas normales y por caja.</p>
             <div class="vrule-grid" ${r.enabled ? "" : 'style="opacity:.5"'}>
               <div><label class="label label-xs" for="vr-threshold">Venta desde (USD)</label><input class="input" id="vr-threshold" inputmode="decimal" value="${r.threshold}" ${r.enabled ? "" : "disabled"} /></div>
               <div><label class="label label-xs" for="vr-above">Gana (USD)</label><input class="input" id="vr-above" inputmode="decimal" value="${r.above}" ${r.enabled ? "" : "disabled"} /></div>
@@ -5309,7 +5350,7 @@ export function mountAdminView(container, navigateOrUser) {
           <div class="card">
             <div class="overflow-x-auto">
               ${loading ? `<div class="empty-state"><div class="spinner"></div></div>` : `
-                <table class="table">
+                <table class="table table-cards">
                   <thead><tr><th>Almacén</th><th>Vendedor</th><th class="text-center">Ventas</th><th class="text-center">Productos</th><th class="text-right">Comisión</th></tr></thead>
                   <tbody>
                     ${rows.map(({ w, sh }) => `
@@ -5370,7 +5411,7 @@ export function mountAdminView(container, navigateOrUser) {
     let syncing = false;
 
     async function load() {
-      config = await getRateConfig();
+      config = await getRateConfig({ withToken: true });
       render();
     }
 
@@ -5393,25 +5434,32 @@ export function mountAdminView(container, navigateOrUser) {
             <div class="card-header"><h3 class="card-title">API elToque</h3></div>
             <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
               <div><label class="label label-xs">API URL</label><input class="input" id="r-apiUrl" value="${config.apiUrl}" /></div>
-              <div><label class="label label-xs">API Token (Bearer)</label><input class="input" type="password" id="r-apiToken" value="${config.apiToken || ''}" placeholder="(opcional)" /></div>
+              <div><label class="label label-xs">API Token (Bearer)</label><input class="input" type="password" id="r-apiToken" value="${esc(config.apiToken || '')}" placeholder="(opcional)" autocomplete="off" /><p class="text-xs text-muted" style="margin:0.25rem 0 0">Solo lo ve el admin. Las tasas de elToque se actualizan cuando el admin entra o toca «Sincronizar».</p></div>
             </div>
           </div>
 
           <div class="card">
-            <div class="card-header"><h3 class="card-title">Markup</h3></div>
+            <div class="card-header"><h3 class="card-title">Margen sobre la tasa oficial</h3></div>
             <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
+              <!-- v5.28.0: lo normal es sumar 10 o 20 MN por USD -->
+              <div class="flex gap-2 flex-wrap items-center">
+                <span class="text-sm font-semibold">Rápido:</span>
+                <button type="button" class="btn btn-secondary btn-sm" data-markup-fixed="10">+10 MN</button>
+                <button type="button" class="btn btn-secondary btn-sm" data-markup-fixed="20">+20 MN</button>
+                <span class="text-xs text-muted">(fijo, por cada USD y EUR; luego «Guardar»)</span>
+              </div>
               <div class="grid grid-cols-2 gap-2">
                 <div><label class="label label-xs">Modo</label>
                   <select class="select" id="r-markupMode">
+                    <option value="FIXED" ${config.markupMode === 'FIXED' ? 'selected' : ''}>Fijo: suma MN (ej. +10)</option>
                     <option value="PERCENT" ${config.markupMode === 'PERCENT' ? 'selected' : ''}>Porcentaje (%)</option>
-                    <option value="FIXED" ${config.markupMode === 'FIXED' ? 'selected' : ''}>Fijo (suma)</option>
                   </select>
                 </div>
                 <div><label class="label label-xs">Caché TTL (minutos)</label><input class="input" type="number" id="r-cacheTtl" value="${config.cacheTtlMinutes}" /></div>
               </div>
               <div class="grid grid-cols-2 gap-2">
-                <div><label class="label label-xs">Markup USD</label><input class="input" type="number" step="0.1" id="r-markupUsd" value="${config.markupUsd}" /></div>
-                <div><label class="label label-xs">Markup EUR</label><input class="input" type="number" step="0.1" id="r-markupEur" value="${config.markupEur}" /></div>
+                <div><label class="label label-xs" id="r-lblUsd">${config.markupMode === "PERCENT" ? "% sobre USD" : "MN extra por USD"}</label><input class="input" type="number" step="0.1" id="r-markupUsd" value="${config.markupUsd}" /></div>
+                <div><label class="label label-xs" id="r-lblEur">${config.markupMode === "PERCENT" ? "% sobre EUR" : "MN extra por EUR"}</label><input class="input" type="number" step="0.1" id="r-markupEur" value="${config.markupEur}" /></div>
               </div>
             </div>
           </div>
@@ -5449,6 +5497,18 @@ export function mountAdminView(container, navigateOrUser) {
         </div>
       `;
 
+      const syncMarkupLabels = () => {
+        const pct = content.querySelector("#r-markupMode").value === "PERCENT";
+        content.querySelector("#r-lblUsd").textContent = pct ? "% sobre USD" : "MN extra por USD";
+        content.querySelector("#r-lblEur").textContent = pct ? "% sobre EUR" : "MN extra por EUR";
+      };
+      content.querySelector("#r-markupMode").addEventListener("change", syncMarkupLabels);
+      content.querySelectorAll("[data-markup-fixed]").forEach((b) => b.addEventListener("click", () => {
+        content.querySelector("#r-markupMode").value = "FIXED";
+        syncMarkupLabels();
+        content.querySelector("#r-markupUsd").value = b.dataset.markupFixed;
+        content.querySelector("#r-markupEur").value = b.dataset.markupFixed;
+      }));
       content.querySelector("#sync-now").addEventListener("click", async () => {
         syncing = true;
         render();
@@ -5551,7 +5611,7 @@ export function mountAdminView(container, navigateOrUser) {
           <div class="card">
             <div class="overflow-x-auto">
               ${movements.length === 0 ? `<div class="empty-state">No hay movimientos registrados</div>` : `
-                <table class="table">
+                <table class="table table-cards">
                   <thead><tr><th>Fecha</th><th>Motivo</th><th>Producto</th><th class="text-right">Delta</th><th>Nota</th></tr></thead>
                   <tbody>
                     ${movements.map((m) => `
@@ -5679,7 +5739,7 @@ export function mountAdminView(container, navigateOrUser) {
         <div class="card">
           <div class="card-header"><h3 class="card-title">Detalle por producto</h3></div>
           <div class="overflow-x-auto">
-            <table class="table">
+            <table class="table table-cards">
               <thead><tr><th>Producto</th><th class="text-center">Stock</th><th class="text-right">Costo unit.</th><th class="text-right">Venta unit.</th><th class="text-right">Inversión</th><th class="text-right">Vendido</th><th class="text-right">Ganancia</th><th class="text-center">%</th></tr></thead>
               <tbody>
                 ${productStats.sort((a, b) => b.profit - a.profit).map((ps) => {

@@ -209,6 +209,8 @@
  * @property {number} [lastRateSync]
  */
 
+import { gestorSaleCommission } from "./vendor-rule.js";
+import { tierPricePerBox } from "./wholesale-config.js";
 import {
   getSupabase,
   isSupabaseConfiguredAsync,
@@ -1617,6 +1619,7 @@ const PRODUCT_COLUMNS = new Set([
   "gestor_commission", "gestor_commission_currency",
   "vendor_commission", "vendor_commission_currency",
   "image_url", "thumb_url", "active", "units_per_box", "wholesale_tiers", "created_at",
+  "own_vendor_commission", // v5.31.0: cargadores, breakers… con comisión fija aparte
 ]);
 
 function sanitizeProductRow(r) {
@@ -1669,13 +1672,31 @@ export async function saveProduct(p) {
       }
     }
 
-    const r = sanitizeProductRow(toRow({ ...p, createdAt: p.createdAt || Date.now() }));
+    // v5.32.0: al EDITAR no se toca la fecha de creación (antes cada guardado
+    // la cambiaba a "ahora" y el producto salía como recién creado).
+    const r = sanitizeProductRow(toRow(p.id ? { ...p } : { ...p, createdAt: p.createdAt || Date.now() }));
+    if (p.id && !p.createdAt) delete r.created_at;
+    // v5.31.0: si la columna nueva aún no existe (falta el SQL), se guarda lo demás
+    const missingOwn = (e) => !!e && "own_vendor_commission" in r && /own_vendor_commission/i.test(`${e.message || ""} ${e.details || ""} ${e.hint || ""}`);
+    const needSql = () => {
+      if (p.ownVendorCommission) throw new Error("Se guardó el producto, pero la comisión propia necesita el SQL de la v5.31 (comision-propia-v5.31.sql).");
+    };
     if (p.id) {
-      const { error } = await s.from("products").update(r).eq("id", p.id);
+      let { error } = await s.from("products").update(r).eq("id", p.id);
+      if (missingOwn(error)) {
+        delete r.own_vendor_commission;
+        ({ error } = await s.from("products").update(r).eq("id", p.id));
+        if (!error) needSql();
+      }
       if (error) throw error;
       return p.id;
     }
-    const { data, error } = await s.from("products").insert(r).select().single();
+    let { data, error } = await s.from("products").insert(r).select().single();
+    if (missingOwn(error)) {
+      delete r.own_vendor_commission;
+      ({ data, error } = await s.from("products").insert(r).select().single());
+      if (!error) needSql();
+    }
     if (error) throw error;
     return data.id;
   } catch (err) {
@@ -2474,15 +2495,49 @@ export async function getTodayRates() {
   };
 }
 
-export async function getRateConfig() {
+// v5.32.0: el token de elToque NO se lee con la tabla (solo el admin, por RPC)
+const RATE_CONFIG_COLUMNS = "id, api_url, markup_mode, markup_usd, markup_eur, manual_usd_rate, manual_eur_rate, last_sync_at, last_usd_rate, last_eur_rate, cache_ttl_minutes, auto_sync";
+const isMissingFn = (e) => !!e && (e.code === "PGRST202" || e.code === "42883" || /could not find the function|does not exist/i.test(e.message || ""));
+
+/** Token de elToque: solo lo devuelve al admin (null para los demás). */
+export async function getRateApiToken() {
+  if (await isDemo()) return DEMO_RATE_CONFIG.apiToken || null;
+  const s = await sb();
+  if (!s) return null;
+  try {
+    const { data, error } = await s.rpc("get_rate_api_token");
+    if (!error) return data || null;
+    if (!isMissingFn(error)) return null;
+    // Sin el SQL de la v5.32 todavía: se lee como antes
+    const r = await s.from("rate_config").select("api_token").eq("id", "default").maybeSingle();
+    return r.data?.api_token || null;
+  } catch { return null; }
+}
+
+/** Guarda el token (solo admin). */
+export async function saveRateApiToken(token) {
+  const s = await sb();
+  if (!s) return;
+  const { error } = await s.rpc("set_rate_api_token", { p_token: token || "" });
+  if (!error) return;
+  if (!isMissingFn(error)) throw error;
+  const r = await s.from("rate_config").upsert({ id: "default", api_token: token || null }, { onConflict: "id" });
+  if (r.error) throw r.error;
+}
+
+export async function getRateConfig({ withToken = false } = {}) {
   const demo = await isDemo();
   if (demo) return { ...DEMO_RATE_CONFIG };
   const s = await sb();
   if (!s) return { ...DEMO_RATE_CONFIG };
   try {
-    const { data, error } = await s.from("rate_config").select("*").eq("id", "default").maybeSingle();
+    const { data, error } = await s.from("rate_config").select(RATE_CONFIG_COLUMNS).eq("id", "default").maybeSingle();
     if (error) throw error;
-    if (data) return { ...DEMO_RATE_CONFIG, ...row(data) };
+    if (data) {
+      const cfg = { ...DEMO_RATE_CONFIG, ...row(data), apiToken: null };
+      if (withToken) cfg.apiToken = await getRateApiToken();
+      return cfg;
+    }
     // Create default
     const r = toRow({ id: "default", ...DEMO_RATE_CONFIG });
     await s.from("rate_config").insert(r).catch(() => {});
@@ -2496,7 +2551,10 @@ export async function saveRateConfig(config) {
   const s = await sb();
   if (!s) return;
   try {
-    const r = toRow({ ...config, id: "default" });
+    // v5.32.0: el token va aparte (función solo-admin), nunca con la tabla
+    const { apiToken, ...rest } = config || {};
+    if ("apiToken" in (config || {})) await saveRateApiToken(apiToken);
+    const r = toRow({ ...rest, id: "default" });
     const { error } = await s.from("rate_config").upsert(r, { onConflict: "id" });
     if (error) throw error;
   } catch (err) {
@@ -2512,7 +2570,7 @@ function applyMarkup(rawRate, mode, markup) {
 
 // Sync rates from elToque API
 export async function syncRatesFromElToque() {
-  const config = await getRateConfig();
+  const config = await getRateConfig({ withToken: true });
   const now = Date.now();
   let newUsd = null;
   let newEur = null;
@@ -2638,6 +2696,8 @@ function computeManagerCommission(m, sales, year, month, payouts) {
   let weekendCount = 0;
   let weekdayAmount = 0;
   let weekendAmount = 0;
+  // v5.32.0: lo ganado separado en ventas normales y por caja
+  let retailUSD = 0, wholesaleUSD = 0, retailCount = 0, wholesaleCount = 0;
 
   // Filtrar ventas según el tipo de gestor:
   // - LOCAL: solo cuenta las ventas del almacén al que pertenece el gestor
@@ -2669,24 +2729,16 @@ function computeManagerCommission(m, sales, year, month, payouts) {
       weekdayAmount += s.totalAmount;
     }
 
-    // Calcular comisión según tipo
-    let commissionForThisSale = 0;
-    if (commissionType === "PERCENT") {
-      // Porcentaje del total de la venta
-      commissionForThisSale = (s.totalAmount * commissionValue) / 100;
-    } else {
-      // FIXED: valor fijo por venta
-      commissionForThisSale = commissionValue;
-    }
+    // v5.28.0: % distinto para ventas normales (5 %) y por caja (3 %);
+    // el % es del total en USD → se cuenta en USD. Valor fijo: en su moneda.
+    const c = gestorSaleCommission(m, { total: s.totalAmount, saleType: s.saleType, wholesalePct: s.items?.[0]?.gestorCommissionPercent });
+    amountUSD += c.usd;
+    amountMN += c.mn;
+    if (s.saleType === "WHOLESALE") { wholesaleUSD += c.usd; wholesaleCount++; }
+    else { retailUSD += c.usd; retailCount++; }
     // Sumar unidades
     for (const item of s.items) {
       totalUnits += item.quantity;
-    }
-    // Acumular en la moneda configurada
-    if (commissionCurrency === "USD") {
-      amountUSD += commissionForThisSale;
-    } else {
-      amountMN += commissionForThisSale;
     }
   }
 
@@ -2708,6 +2760,10 @@ function computeManagerCommission(m, sales, year, month, payouts) {
     totalSales,
     amountUSD,
     amountMN,
+    retailUSD: Math.round(retailUSD * 100) / 100,
+    wholesaleUSD: Math.round(wholesaleUSD * 100) / 100,
+    retailCount,
+    wholesaleCount,
     amount: amountUSD + amountMN * (getStore().getState().rates["MN"]?.rateUSD || (1/320)),
     // Separación sábado/domingo vs lunes-viernes (para el reporte de comisiones)
     weekdayCount,
@@ -3096,12 +3152,10 @@ export async function listManagers() {
       const managerType = m.managerType || "REFERRER";
       const commissionType = m.commissionType || "PERCENT";
       const commissionCurrency = m.commissionCurrency || "USD";
-      let comisionEstimada = 0;
-      if (commissionType === "PERCENT") {
-        comisionEstimada = montoTotal * (m.commission || 0) / 100;
-      } else {
-        comisionEstimada = (m.commission || 0) * completadas.length;
-      }
+      const comisionEstimada = completadas.reduce((sum, s) => {
+        const c = gestorSaleCommission({ ...m, commissionType }, { total: s.totalAmount, saleType: s.saleType, wholesalePct: s.items?.[0]?.gestorCommissionPercent });
+        return sum + c.usd + c.mn;
+      }, 0);
       return {
         ...m,
         managerType,
@@ -3159,14 +3213,25 @@ export async function saveManager(m) {
   if (!s) return "demo-id";
   try {
     const r = toRow({ ...m, code: (m.code || "").toUpperCase(), createdAt: m.createdAt || Date.now() });
-    if (m.id) {
-      const { error } = await s.from("managers").update(r).eq("id", m.id);
+    // v5.28.0: si falta la columna nueva (SQL sin ejecutar), se guarda lo demás
+    const missingWh = (e) => e && /commission_wholesale/.test(`${e.message || ""} ${e.details || ""}`);
+    const run = async (row) => {
+      if (m.id) {
+        const { error } = await s.from("managers").update(row).eq("id", m.id);
+        if (error) throw error;
+        return m.id;
+      }
+      const { data, error } = await s.from("managers").insert(row).select().single();
       if (error) throw error;
-      return m.id;
+      return data.id;
+    };
+    try {
+      return await run(r);
+    } catch (e) {
+      if (!missingWh(e)) throw e;
+      const { commission_wholesale: _w, ...rest } = r;
+      return await run(rest);
     }
-    const { data, error } = await s.from("managers").insert(r).select().single();
-    if (error) throw error;
-    return data.id;
   } catch (err) {
     console.error("saveManager failed:", err);
     return "demo-id";
@@ -4242,7 +4307,7 @@ export function getSuggestedPricePerBox(product, boxes) {
   if (!product?.unitsPerBox) return null;
   const tier = getWholesaleTier(product, boxes);
   if (!tier) return null;
-  return (tier.pricePerUnit || 0) * product.unitsPerBox;
+  return tierPricePerBox(tier, product.unitsPerBox);
 }
 
 /**

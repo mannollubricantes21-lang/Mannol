@@ -4,7 +4,7 @@
 // =====================================================
 
 import { getStore } from "../store.js";
-import { listWarehouses, subscribeRates, syncElToqueRates, getSettings } from "../db.js";
+import { listWarehouses, subscribeRates, syncElToqueRates, getSettings, getRateConfig } from "../db.js";
 import { formatMoney, formatDate, convertAmount, formatMoneyGrouped, parseAmountInput } from "../currency.js";
 import { toast, icon, esc, showModal, brandMark, warehouseColor } from "../ui.js";
 import { APP_LABEL } from "../version.js";
@@ -47,7 +47,11 @@ export function renderHomeView(navigate) {
   const { usdInMN, eurInMN } = getHomeRates(state);
   const usdSource = mnRate?.source || "manual";
   const eurSource = eurRate?.source || "manual";
-  const usdMarkupPct = settings.elToqueMarkup > 0 ? settings.elToqueMarkup : 0;
+  // v5.28.0: el margen real sale de Admin → Tasas (fijo en MN, p. ej. +10, o %)
+  const rm = state._rateMarkup;
+  const markupText = rm && Number(rm.markupUsd) > 0
+    ? (rm.markupMode === "FIXED" ? `+${Number(rm.markupUsd)} MN por USD` : `+${Number(rm.markupUsd)}%`)
+    : "";
 
   return `
     <div class="mobile-shell">
@@ -147,8 +151,8 @@ export function renderHomeView(navigate) {
               <div class="premium-rate-tile-sub">1 EUR = ${eurInMN.toFixed(0)} MN</div>
             </div>
           </div>
-          ${usdMarkupPct > 0 ? `
-            <p class="rates-footnote">${icon("trendingUp", 12)} Incluye margen de <strong>+${usdMarkupPct}%</strong> sobre la tasa oficial</p>
+          ${markupText ? `
+            <p class="rates-footnote">${icon("trendingUp", 12)} Incluye <strong>${markupText}</strong> sobre la tasa oficial</p>
           ` : ''}
         </section>
 
@@ -226,6 +230,12 @@ export function mountHomeView(container, navigate) {
     store.setState({ _supabaseConfigured: false });
     render();
   });
+
+  getRateConfig().then((cfg) => {
+    if (!mounted || !cfg) return;
+    store.setState({ _rateMarkup: { markupMode: cfg.markupMode, markupUsd: cfg.markupUsd } });
+    render();
+  }).catch(() => {});
 
   settingsPromise = getSettings().then((s) => {
     if (!mounted) return;
