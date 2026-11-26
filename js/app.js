@@ -3,7 +3,7 @@
 // =====================================================
 
 import { getStore, applyTheme } from "./store.js";
-import { getAppearance, applyAppearance } from "./appearance.js";
+import { getAppearance, applyAppearance, sellerSlotOf } from "./appearance.js";
 import { subscribeAuth } from "./auth.js";
 import { isSupabaseConfiguredAsync } from "./supabase.js";
 import { setupAutoSync } from "./offline-sync.js";
@@ -84,7 +84,7 @@ function renderView(container, view, navigate) {
   // v5.25.0: apariencia propia del almacén (color, fondo, letra, catálogo)
   try {
     const wh = store.getState().currentWarehouse;
-    applyAppearance(view === "dashboard" && wh ? getAppearance(wh.id) : null, applyTheme, store.getState().theme);
+    applyAppearance(view === "dashboard" && wh ? getAppearance(wh.id, sellerSlotOf(store.getState().currentUser)) : null, applyTheme, store.getState().theme);
   } catch (e) { console.warn("[apariencia]", e); }
 
   try {

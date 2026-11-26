@@ -1,12 +1,13 @@
 // =====================================================
 // Diálogo «Apariencia del almacén» (v5.25.0)
 // Color, fondo, tamaño de letra y vista del catálogo — se ve al momento.
+// v5.33.0: paletas (fondo, tarjetas, casillas y textos con otro tono).
 // =====================================================
 import { getStore, applyTheme } from "../store.js";
 import { showModal, icon, esc, toast } from "../ui.js";
 import {
-  ACCENTS, BACKGROUNDS, FONT_LABELS, CATALOG_VIEWS, DEFAULT_APPEARANCE,
-  getAppearance, saveAppearance, applyAppearance,
+  ACCENTS, BACKGROUNDS, FONT_LABELS, CATALOG_VIEWS, DEFAULT_APPEARANCE, PALETTES, paletteSwatch,
+  getAppearance, saveAppearance, applyAppearance, sellerSlotOf,
 } from "../appearance.js";
 
 const SAMPLE = [
@@ -19,7 +20,11 @@ const SAMPLE = [
 export function openAppearanceDialog(warehouse, onSaved) {
   if (!warehouse) return;
   const store = getStore();
-  const original = getAppearance(warehouse.id);
+  // v5.32.2: con dos vendedores, la apariencia es de quien entró
+  const user = store.getState().currentUser;
+  const slot = sellerSlotOf(user);
+  const who = slot ? (user?.sellerName || `Vendedor ${slot}`) : "";
+  const original = getAppearance(warehouse.id, slot);
   let draft = { ...original };
   let saved = false;
 
@@ -27,10 +32,26 @@ export function openAppearanceDialog(warehouse, onSaved) {
 
   const body = () => `
     <div class="appearance-dialog">
-      <p class="text-xs text-muted" style="margin:0">Solo para <strong>${esc(warehouse.name)}</strong> en este teléfono. Los cambios se ven al momento.</p>
+      <p class="text-xs text-muted" style="margin:0">${who ? `Solo para <strong>${esc(who)}</strong> en ${esc(warehouse.name)} (el otro vendedor tiene la suya).` : `Solo para <strong>${esc(warehouse.name)}</strong> en este teléfono.`} Los cambios se ven al momento.</p>
+
+      <!-- v5.33.0: paletas -->
+      <div class="ap-group">
+        <div class="ap-label">Paleta</div>
+        <div class="ap-palettes" role="radiogroup" aria-label="Paleta">
+          ${Object.entries(PALETTES).map(([k, pl]) => {
+            const sw = paletteSwatch(k, document.documentElement.getAttribute("data-theme") === "dark");
+            return `
+            <button type="button" role="radio" class="ap-pal ${draft.palette === k ? "on" : ""}" data-ap="palette" data-v="${k}" aria-checked="${draft.palette === k}">
+              <span class="ap-pal-mini" aria-hidden="true" style="background:${sw.page}">
+                <span style="background:${sw.card};border-color:${sw.line}"><i style="background:${sw.text}"></i><i style="background:${sw.text};opacity:.45"></i><b></b></span>
+              </span>
+              <span class="ap-pal-label">${esc(pl.label)}</span>
+            </button>`; }).join("")}
+        </div>
+      </div>
 
       <div class="ap-group">
-        <div class="ap-label">Color</div>
+        <div class="ap-label">Color de botones</div>
         <div class="ap-swatches">
           ${Object.entries(ACCENTS).map(([k, a]) => `
             <button type="button" class="ap-swatch ${draft.accent === k ? "on" : ""}" data-ap="accent" data-v="${k}" aria-pressed="${draft.accent === k}">
@@ -102,7 +123,7 @@ export function openAppearanceDialog(warehouse, onSaved) {
   }
 
   const close = showModal({
-    title: `${icon("palette", 16)} Apariencia del almacén`,
+    title: `${icon("palette", 16)} ${who ? `Apariencia de ${esc(who)}` : "Apariencia del almacén"}`,
     body: body(),
     footer: `
       <button class="btn btn-ghost" id="ap-reset">Restablecer</button>
@@ -134,7 +155,7 @@ export function openAppearanceDialog(warehouse, onSaved) {
   });
   document.querySelector("#ap-save")?.addEventListener("click", () => {
     saved = true;
-    const n = saveAppearance(warehouse.id, draft);
+    const n = saveAppearance(warehouse.id, draft, slot);
     applyAppearance(n, applyTheme, store.getState().theme);
     toast("Apariencia guardada para este almacén", "success");
     close();

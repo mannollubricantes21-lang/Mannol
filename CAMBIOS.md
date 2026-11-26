@@ -1,5 +1,46 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.34.0 (2026-11-26) — Tasa automática por GitHub · Pago a vendedores · Caja sin cerrar · Copia en Excel
+
+> **SQL**: ejecutar `pagos-vendedores-v5.34.sql` (o `instalar.sql`, sección 13).
+> **Tasa automática**: ver `INSTRUCCIONES-TASA.md` (secretos de GitHub).
+
+- **Tasa sola, cada 15 min** (GitHub Actions, como en TiendaMax):
+  `.github/workflows/tasa-eltoque.yml` + `scripts/tasa-eltoque.mjs`. Lee
+  elTOQUE (API; si falla, la página pública o su copia en Wayback), la guarda
+  en Supabase con el margen de Admin → Tasas y, si cambió, avisa por Telegram.
+- **Pago a vendedores**: en Comisiones vendedores, cada vendedor (también los
+  dos del mismo almacén) tiene «Marcar pagado». Si después entran ventas, avisa
+  cuánto falta. Totales «Pagado / Falta» abajo; columna «pagado» en el CSV.
+- **Caja sin cerrar**: el panel del admin avisa qué almacenes vendieron ayer y
+  no hicieron el cierre (con botón a «Cierres de caja»).
+- **Copia de seguridad** (Configuración): un Excel con Ventas, Detalle de
+  ventas, Productos, Stock, Almacenes, Gestores y Cierres de caja.
+
+## v5.33.0 (2026-11-26) — Paletas de colores en «Apariencia»
+
+- Nuevo grupo **Paleta** en Apariencia: Normal, Arena, Océano, Bosque,
+  Lavanda, Coral, Grafito y Alto contraste. Cambian el fondo, las tarjetas,
+  las casillas, los bordes, los textos, el resumen de «Hoy» y la barra de
+  abajo; funcionan con fondo claro y oscuro.
+- «Color» pasa a llamarse **Color de botones** (se combina con la paleta).
+- Como el resto de la apariencia: por almacén, y por vendedor si hay dos.
+
+## v5.32.2 (2026-11-26) — Cada vendedor con su apariencia
+
+- En almacenes con **dos vendedores**, la apariencia (color, fondo, letra,
+  vista del catálogo) es de **quien entró**: lo que cambia uno no le cambia al
+  otro. Al principio los dos parten de la que ya tenía el almacén.
+- En «Más» sale «Mi apariencia» y el diálogo dice «Apariencia de Marta».
+
+## v5.32.1 (2026-11-26) — En PC, Hoy / Inventario / Caja muestran solo lo suyo
+
+- En pantallas grandes (PC, desde 1280 px) las tres secciones del almacén
+  enseñaban todo junto. Ahora cada una muestra solo lo suyo, igual que en el
+  móvil, aprovechando el ancho: Hoy (resumen | aviso y ventas), Inventario
+  (lista; debajo «No alcanza para venta por caja» | «Pedido sugerido»),
+  Caja (cierre | lo ganado).
+
 ## v5.32.0 (2026-11-26) — Seguridad del token · Mejoras de venta por caja
 
 > **SQL**: ejecutar `seguridad-token-v5.32.sql` (o `instalar.sql`, sección 12).

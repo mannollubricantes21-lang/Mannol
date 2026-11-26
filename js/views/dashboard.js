@@ -4,7 +4,7 @@
 // =====================================================
 
 import { getStore, applyTheme } from "../store.js";
-import { getAppearance, saveAppearance, applyAppearance } from "../appearance.js";
+import { getAppearance, saveAppearance, applyAppearance, sellerSlotOf } from "../appearance.js";
 import { openAppearanceDialog } from "./appearance-dialog.js";
 import { APP_LABEL } from "../version.js";
 import { subscribeSales, listWarehouses, listManagers, listCards, listCategories, listSalesInRange } from "../db.js";
@@ -229,9 +229,10 @@ export function mountDashboardView(container, navigate) {
     // v5.25.0: si el almacén fija su fondo, el botón lo cambia y lo recuerda
     const wh = store.getState().currentWarehouse;
     if (wh) {
-      const ap = getAppearance(wh.id);
-      if (ap.background !== "app") saveAppearance(wh.id, { ...ap, background: next });
-      applyAppearance(getAppearance(wh.id), applyTheme, next);
+      const slot = sellerSlotOf(store.getState().currentUser);
+      const ap = getAppearance(wh.id, slot);
+      if (ap.background !== "app") saveAppearance(wh.id, { ...ap, background: next }, slot);
+      applyAppearance(getAppearance(wh.id, slot), applyTheme, next);
     }
     renderShell();
   }
@@ -378,7 +379,7 @@ export function mountDashboardView(container, navigate) {
             <button class="drawer-item" id="pin-search-btn" style="margin-bottom:0.25rem">${icon("search", 16)}<span style="flex:1;text-align:left">Buscar</span></button>
             <button class="drawer-item" id="pin-refresh-btn" style="margin-bottom:0.25rem">${icon("refresh", 16)}<span style="flex:1;text-align:left">Actualizar datos</span></button>
             <button class="drawer-item" id="pin-theme-btn" style="margin-bottom:0.25rem">${state.theme === "dark" ? icon("sun", 16) : icon("moon", 16)}<span style="flex:1;text-align:left">${state.theme === "dark" ? "Modo claro" : "Modo oscuro"}</span></button>` : ""}
-          ${warehouse ? `<button class="drawer-item" id="appearance-btn" style="margin-bottom:0.25rem">${icon("palette", 16)}<span style="flex:1;text-align:left">Apariencia de ${esc(warehouse.name)}</span></button>` : ""}
+          ${warehouse ? `<button class="drawer-item" id="appearance-btn" style="margin-bottom:0.25rem">${icon("palette", 16)}<span style="flex:1;text-align:left">${sellerSlotOf(store.getState().currentUser) ? "Mi apariencia" : `Apariencia de ${esc(warehouse.name)}`}</span></button>` : ""}
           ${canFullscreen() ? `<button class="drawer-item" id="fullscreen-btn" style="margin-bottom:0.25rem">${icon("smartphone", 16)}<span style="flex:1;text-align:left">${document.fullscreenElement ? "Salir de pantalla completa" : "Pantalla completa (kiosko)"}</span></button>` : ""}
           <button class="btn btn-ghost btn-block" id="logout-btn" aria-label="${pinMode ? "Salir del almacén" : "Cerrar sesión"}" style="justify-content:flex-start;color:var(--danger)">${icon("logout", 14)} ${pinMode ? "Salir del almacén" : "Cerrar sesión"}</button>
           <p class="text-xs text-muted text-center mt-2" style="margin-top:0.5rem">${esc(APP_LABEL)}${pinMode ? "" : " · Acceso por PIN de almacén"}</p>

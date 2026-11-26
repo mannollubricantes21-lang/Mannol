@@ -17,7 +17,7 @@
 //    red no responde en 4 s se abre la copia guardada.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v60";
+const CACHE_VERSION = "mannol-pos-supabase-v64";
 const DATA_CACHE = "mannol-pos-data-v1"; // respuestas de Supabase (se conserva entre versiones)
 const NAV_TIMEOUT_MS = 4000;
 const API_TIMEOUT_MS = 6000;
@@ -88,6 +88,9 @@ const STATIC_ASSETS = [
   "./js/views/admin.js",
   "./js/views/product-dialog.js", // v5.15.0: formulario de producto del admin
   "./js/views/wholesale-admin.js", // v5.30.0: Admin → Venta mayorista
+  "./js/views/backup-admin.js", // v5.34.0: copia de seguridad
+  "./js/backup.js",
+  "./js/xlsx-lite.js",
   "./js/views/warehouse-interior.js",
   "./manifest.webmanifest",
   "./offline.html",

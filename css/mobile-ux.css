@@ -2834,3 +2834,66 @@ html[data-font-scale] body { font-size: 1rem; }
 .wsa-review-note svg { flex: none; color: var(--warning); margin-top: 0.0625rem; }
 .wsa-review { font-style: normal; font-size: 0.6875rem; font-weight: 700; padding: 0.125rem 0.5rem; border-radius: 999px; background: color-mix(in oklab, var(--warning) 18%, transparent); color: var(--warning); vertical-align: middle; }
 .gc-split { font-size: 0.6875rem; color: var(--text-muted); font-weight: 500; margin-top: 0.125rem; white-space: nowrap; }
+
+/* =====================================================
+   v5.32.1 — En PC también: Hoy / Inventario / Caja muestran solo lo suyo
+   (antes, desde 1280 px, se veía todo junto en las tres secciones)
+   ===================================================== */
+.wi-layout.wi-v2[data-sec-active="hoy"] > [data-sec]:not([data-sec~="hoy"]),
+.wi-layout.wi-v2[data-sec-active="inv"] > [data-sec]:not([data-sec~="inv"]),
+.wi-layout.wi-v2[data-sec-active="caja"] > [data-sec]:not([data-sec~="caja"]) { display: none !important; }
+.wi-layout.wi-v2[data-sec-active="caja"] > .wi-cierre { order: 1; }
+.wi-layout.wi-v2[data-sec-active="caja"] > .wi-ganado { order: 2; }
+@media (min-width: 1280px) {
+  .wi-layout.wi-v2 {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas: none;
+    grid-template-rows: none;
+    grid-auto-flow: row dense;
+    align-items: start;
+    gap: 1rem !important;
+  }
+  .wi-layout.wi-v2 > * { grid-area: auto !important; grid-column: 1 / -1 !important; }
+  /* Hoy: el resumen a la izquierda; aviso y ventas a la derecha */
+  .wi-layout.wi-v2[data-sec-active="hoy"] { grid-template-rows: auto 1fr; }
+  .wi-layout.wi-v2[data-sec-active="hoy"] > .wi2-sum { grid-column: 1 !important; grid-row: 1 / span 2; }
+  .wi-layout.wi-v2[data-sec-active="hoy"]:not(:has(> .wi2-alert)) > .wi-recientes { grid-row: 1 / span 2; }
+  .wi-layout.wi-v2[data-sec-active="hoy"] > .wi2-alert,
+  .wi-layout.wi-v2[data-sec-active="hoy"] > .wi-recientes { grid-column: 2 !important; }
+  .wi-layout.wi-v2[data-sec-active="hoy"]:not(:has(> .wi-recientes)):not(:has(> .wi2-alert)) > .wi2-sum { grid-column: 1 / -1 !important; }
+  /* lado a lado donde hay dos tarjetas de igual peso */
+  .wi-layout.wi-v2 > .wi-cierre,
+  .wi-layout.wi-v2 > .wi-ganado,
+  .wi-layout.wi-v2 > .wi-boxshort,
+  .wi-layout.wi-v2 > .wi-pedido { grid-column: auto !important; }
+  /* si alguna queda sola, que ocupe todo el ancho */
+  .wi-layout.wi-v2[data-sec-active="inv"]:not(:has(> .wi-boxshort)) > .wi-pedido,
+  .wi-layout.wi-v2[data-sec-active="inv"]:not(:has(> .wi-pedido)) > .wi-boxshort { grid-column: 1 / -1 !important; }
+}
+
+/* v5.33.0 — Paletas en «Apariencia» */
+.ap-palettes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; }
+.ap-pal { display: flex; flex-direction: column; align-items: stretch; gap: 0.3rem; padding: 0.35rem; border-radius: 0.75rem; border: 2px solid var(--card-line); background: var(--bg-elevated); color: var(--text); cursor: pointer; font: inherit; }
+.ap-pal.on { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-tint); }
+.ap-pal:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+.ap-pal-mini { display: flex; align-items: center; justify-content: center; height: 3.25rem; border-radius: 0.5rem; padding: 0.4rem; }
+.ap-pal-mini > span { flex: 1; height: 100%; border-radius: 0.375rem; border: 1px solid; display: flex; flex-direction: column; gap: 0.2rem; padding: 0.3rem 0.35rem; }
+.ap-pal-mini i { display: block; height: 0.25rem; border-radius: 2px; width: 80%; }
+.ap-pal-mini i + i { width: 55%; }
+.ap-pal-mini b { display: block; margin-top: auto; height: 0.4rem; width: 45%; border-radius: 3px; background: var(--primary); }
+.ap-pal-label { font-size: 0.75rem; font-weight: 600; text-align: center; line-height: 1.15; }
+@media (max-width: 380px) { .ap-palettes { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* La paleta también tiñe el resumen oscuro de «Hoy» y la barra de abajo */
+html:not([data-palette="normal"])[data-palette] .wi-v2 .card.wi2-sum {
+  background: linear-gradient(180deg, var(--hero-top) 0%, var(--hero-bot) 100%) !important;
+  border-color: var(--hero-line) !important;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 2px 0 var(--hero-line), 0 16px 30px -14px rgb(0 0 0 / 0.5) !important;
+}
+html:not([data-palette="normal"])[data-palette] .bottom-nav-bar { background: var(--bg-dark) !important; }
+
+/* v5.34.0 — caja sin cerrar (rojo suave) y copia de seguridad */
+.admin-setup-tip--warn { background: #fde8e6; color: #6b1410; border-color: #f2b8b2; box-shadow: 0 3px 0 #e59a92; }
+[data-theme="dark"] .admin-setup-tip--warn { background: #3d1311; color: #ffc9c3; border-color: #6b2620; box-shadow: 0 3px 0 #1f0807; }
+.bk-range { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; }
+.bk-range .input { width: 11rem; }

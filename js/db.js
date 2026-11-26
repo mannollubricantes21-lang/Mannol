@@ -220,7 +220,7 @@ import {
   isoToMs,
 } from "./supabase.js";
 import { getStore } from "./store.js";
-import { validateTransferRequest, canTransitionRequest } from "./sales-stats.js";
+import { validateTransferRequest, canTransitionRequest, missingClosures } from "./sales-stats.js";
 import {
   DEMO_WAREHOUSES, DEMO_MANAGERS, DEMO_CARDS, DEMO_CATEGORIES, DEMO_BRANDS,
   DEMO_PRODUCTS, DEMO_STOCK, DEMO_SALES, DEMO_RATE_CONFIG, DEMO_TODAY_RATES,
@@ -4341,4 +4341,66 @@ export function getSuggestedGestorCommissionPerBox(product, boxes, pricePerBox =
  */
 export function isWholesaleProduct(product) {
   return !!(product?.unitsPerBox && product?.wholesaleTiers?.length > 0);
+}
+
+// =====================================================
+// v5.34.0: pago a los vendedores (Admin → Comisiones vendedores → «Pagado»)
+// Una fila por vendedor (almacén + turno) y mes, con lo que se le pagó.
+// =====================================================
+const DEMO_SELLER_PAYOUTS_KEY = "mannol-demo-seller-payouts-v1";
+export const sellerPayoutId = (warehouseId, shiftKey, year, month) => `${warehouseId}_${shiftKey}_${year}_${month}`;
+
+export async function listSellerPayouts(year, month) {
+  if (await isDemo()) {
+    return (readDemoStore(DEMO_SELLER_PAYOUTS_KEY) || []).filter((p) => p.year === year && p.month === month);
+  }
+  const s = await sb();
+  if (!s) return [];
+  try {
+    const { data, error } = await s.from("seller_payouts").select("*").eq("year", year).eq("month", month);
+    if (error) throw error;
+    return rows(data || []);
+  } catch (err) {
+    console.warn("listSellerPayouts failed:", err);
+    return null; // null = no se pudo leer (¿falta el SQL de la v5.34?)
+  }
+}
+
+/** Marca (o desmarca) como pagado lo de un vendedor en un mes. */
+export async function markSellerPaid(p, paid) {
+  const id = sellerPayoutId(p.warehouseId, p.shiftKey, p.year, p.month);
+  const rec = {
+    id, warehouseId: p.warehouseId, shiftKey: p.shiftKey, sellerName: p.sellerName || null,
+    year: p.year, month: p.month,
+    amountUsd: Math.round((Number(p.amountUSD) || 0) * 100) / 100,
+    amountMn: Math.round((Number(p.amountMN) || 0) * 100) / 100,
+    paidAt: Date.now(), paidBy: nullIfNotUuid(p.paidBy),
+  };
+  if (await isDemo()) {
+    const list = (readDemoStore(DEMO_SELLER_PAYOUTS_KEY) || []).filter((x) => x.id !== id);
+    if (paid) list.push(rec);
+    writeDemoStore(DEMO_SELLER_PAYOUTS_KEY, list);
+    return;
+  }
+  const s = await sb();
+  if (!s) throw new Error("Sin conexión con la nube");
+  if (paid) {
+    const { error } = await s.from("seller_payouts").upsert(toRow(rec), { onConflict: "id" });
+    if (error) throw /seller_payouts/.test(error.message || "") || error.code === "42P01" || error.code === "PGRST205"
+      ? new Error("Falta ejecutar el SQL de la v5.34 (pagos-cierres-v5.34.sql)") : error;
+  } else {
+    const { error } = await s.from("seller_payouts").delete().eq("id", id);
+    if (error) throw error;
+  }
+}
+
+/**
+ * v5.34.0: almacenes que vendieron un día y no hicieron el cierre de caja.
+ * @returns {Promise<{ warehouse: object, sales: number, totalUSD: number }[]>}
+ */
+export async function listMissingClosures(dateKey, { from, to }) {
+  const [warehouses, closures] = await Promise.all([listWarehouses().catch(() => []), listDailyClosures({ limit: 500 }).catch(() => [])]);
+  const active = (warehouses || []).filter((w) => w.active !== false);
+  const sales = await Promise.all(active.map((w) => listSalesInRange({ warehouseId: w.id, from, to }).catch(() => null)));
+  return missingClosures(active, closures || [], sales, dateKey);
 }

@@ -438,3 +438,23 @@ export function buildRestockText({ warehouseName, items }) {
   lines.push("", `Total: ${items.reduce((n, r) => n + r.suggested, 0)} unidades`);
   return lines.join("\n");
 }
+
+
+/**
+ * v5.34.0: almacenes con ventas completadas ese día y sin cierre de caja.
+ * @param {object[]} warehouses
+ * @param {object[]} closures      cierres (closureDate "YYYY-MM-DD", warehouseId)
+ * @param {(object[]|null)[]} salesByWh  ventas del día de cada almacén (mismo orden; null = no se pudo leer)
+ */
+export function missingClosures(warehouses, closures, salesByWh, dateKey) {
+  const closed = new Set((closures || []).filter((c) => String(c.closureDate) === dateKey).map((c) => String(c.warehouseId)));
+  const out = [];
+  (warehouses || []).forEach((w, i) => {
+    const list = salesByWh?.[i];
+    if (!Array.isArray(list) || closed.has(String(w.id))) return;
+    const done = list.filter((s) => (s.status || "COMPLETADA") === "COMPLETADA");
+    if (!done.length) return;
+    out.push({ warehouse: w, sales: done.length, totalUSD: Math.round(done.reduce((a, s) => a + (Number(s.totalAmount ?? s.totalUSD) || 0), 0) * 100) / 100 });
+  });
+  return out;
+}

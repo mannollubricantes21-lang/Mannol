@@ -3522,3 +3522,39 @@ grant execute on function public.get_rate_api_token() to authenticated;
 grant execute on function public.set_rate_api_token(text) to authenticated;
 
 notify pgrst, 'reload schema';
+
+-- =====================================================================
+-- 13. v5.34.0 — Pago a los vendedores (Comisiones vendedores → «Pagado»)
+--     Una fila por vendedor (almacén + turno) y mes, con lo que se pagó.
+--     Solo el admin la lee y la escribe. Se puede ejecutar varias veces.
+-- =====================================================================
+create table if not exists public.seller_payouts (
+  id text primary key,                 -- almacen_turno_año_mes
+  warehouse_id uuid references public.warehouses(id) on delete cascade,
+  shift_key text not null,             -- all · seller1 · seller2 · weekday · weekend
+  seller_name text,
+  year int not null,
+  month int not null check (month between 1 and 12),
+  amount_usd numeric not null default 0,
+  amount_mn numeric not null default 0,
+  paid_at timestamptz not null default now(),
+  paid_by uuid
+);
+alter table public.seller_payouts enable row level security;
+
+drop policy if exists "seller_payouts_admin_read" on public.seller_payouts;
+create policy "seller_payouts_admin_read" on public.seller_payouts
+  for select to authenticated using (public.is_admin());
+drop policy if exists "seller_payouts_admin_insert" on public.seller_payouts;
+create policy "seller_payouts_admin_insert" on public.seller_payouts
+  for insert to authenticated with check (public.is_admin());
+drop policy if exists "seller_payouts_admin_update" on public.seller_payouts;
+create policy "seller_payouts_admin_update" on public.seller_payouts
+  for update to authenticated using (public.is_admin()) with check (public.is_admin());
+drop policy if exists "seller_payouts_admin_delete" on public.seller_payouts;
+create policy "seller_payouts_admin_delete" on public.seller_payouts
+  for delete to authenticated using (public.is_admin());
+
+create index if not exists idx_seller_payouts_month on public.seller_payouts (year, month);
+
+notify pgrst, 'reload schema';

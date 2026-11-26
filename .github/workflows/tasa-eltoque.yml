@@ -1,0 +1,46 @@
+name: Tasa elTOQUE → Supabase
+
+# v5.34.0: la tasa se actualiza sola, sin que nadie abra la app (como en TiendaMax).
+# Lee elTOQUE, la guarda en Supabase con el margen de Admin → Tasas y, si cambió,
+# avisa por Telegram. Ver scripts/tasa-eltoque.mjs.
+#
+# Secretos (Settings → Secrets and variables → Actions → New repository secret):
+#   ELTOQUE_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   (opcionales, para el aviso)
+#
+# El cron de GitHub no es puntual (puede retrasarse 5-20 min). Para avisos al
+# minuto, un Worker de Cloudflare puede dispararlo con workflow_dispatch, igual
+# que en TiendaMax.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tasa-eltoque
+  cancel-in-progress: false
+
+jobs:
+  tasa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+      - name: Actualizar tasa
+        env:
+          ELTOQUE_API_KEY: ${{ secrets.ELTOQUE_API_KEY }}
+          ELTOQUE_API_URL: ${{ secrets.ELTOQUE_API_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node scripts/tasa-eltoque.mjs

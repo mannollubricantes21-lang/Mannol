@@ -12,7 +12,7 @@ import {
   fetchBrands, saveBrand, deleteBrand, renameBrandInProducts, updateProductsCatalogFields,
   listManagers, saveManager, deleteManager,
   listCards, listCardsAdmin, saveCard, deleteCard,
-  listSalesInRange, lastWarehouseSaveSkippedSellers,
+  listSalesInRange, lastWarehouseSaveSkippedSellers, listSellerPayouts, markSellerPaid, sellerPayoutId, listMissingClosures,
   listStock, listSales, adjustStock,
   getRateConfig, saveRateConfig, syncRatesFromElToque,
   listStockMovements,
@@ -44,6 +44,7 @@ import { getGitHubConfig, saveGitHubConfig, testGitHubConnection, isGitHubConfig
 import { mountSettingsView } from "./settings.js";
 import { showProductDialog } from "./product-dialog.js";
 import { mountWholesalePanel } from "./wholesale-admin.js";
+import { mountBackupPanel } from "./backup-admin.js";
 import { wholesaleConfigOf } from "../wholesale-config.js";
 
 // Secciones agrupadas por categoría para mejor organización
@@ -87,6 +88,7 @@ const NAV_SECTIONS = [
       { id: "settings", label: "Ajustes generales", icon: "settings" },
       { id: "storage", label: "GitHub y fotos", icon: "cloud" },
       { id: "weekend", label: "Fin de semana", icon: "calendar" },
+      { id: "backup", label: "Copia de seguridad", icon: "download" },
     ],
   },
 ];
@@ -869,6 +871,23 @@ export function mountAdminView(container, navigateOrUser) {
           tip.addEventListener("click", () => window.__adminNavigateTo?.("storage"));
           content.prepend(tip);
         }).catch(() => {});
+        // v5.34.0: almacenes que vendieron ayer y no cerraron la caja
+        (() => {
+          const today = new Date(); today.setHours(0, 0, 0, 0);
+          const to = today.getTime();
+          const y = new Date(today); y.setDate(y.getDate() - 1);
+          const from = y.getTime();
+          listMissingClosures(closureDateKey(from), { from, to }).then((miss) => {
+            if (!miss.length || myGen !== tabGeneration || activeTab !== "dashboard") return;
+            const tip = document.createElement("button");
+            tip.type = "button";
+            tip.className = "admin-setup-tip admin-setup-tip--warn";
+            const names = miss.map((m) => `${m.warehouse.name} (${m.sales} venta${m.sales === 1 ? "" : "s"})`).join(" · ");
+            tip.innerHTML = `${icon("alertTriangle", 18)}<span><strong>${miss.length === 1 ? "1 almacén no cerró" : `${miss.length} almacenes no cerraron`} la caja ayer.</strong> ${esc(names)}</span><span class="admin-setup-go">Ver cierres ${icon("chevronRight", 14)}</span>`;
+            tip.addEventListener("click", () => window.__adminNavigateTo?.("closures"));
+            content.prepend(tip);
+          }).catch(() => {});
+        })();
         break;
       case "users": mountUsersPanel(content, myGen); break;
       case "products": mountProductsPanel(content, myGen); break;
@@ -881,6 +900,7 @@ export function mountAdminView(container, navigateOrUser) {
       case "cards": mountCardsPanel(content, myGen); break;
       case "warehouseCommissions": mountWarehouseCommissionsPanel(content, myGen); break;
       case "weekend": mountWeekendPanel(content, myGen); break;
+      case "backup": mountBackupPanel(content); break;
       case "transfers": mountTransfersPanel(content, myGen); break;
       case "movements": mountMovementsPanel(content, myGen); break;
       case "closures": mountClosuresPanel(content, myGen); break;
@@ -5239,6 +5259,7 @@ export function mountAdminView(container, navigateOrUser) {
     let failed = [];        // almacenes cuyas ventas no se pudieron cargar
     let unconfigured = [];  // productos activos sin comisión de vendedor
     let range = monthRange(now.getTime(), 0);
+    let payouts = [];       // v5.34.0: lo ya pagado este mes (null = falta el SQL)
     let vRule = normalizeVendorRule(getStore().getState().settings?.vendorSaleRule);
     getSettings().then((st) => { vRule = normalizeVendorRule(st.vendorSaleRule); if (!loading) render(); }).catch(() => {});
 
@@ -5256,7 +5277,7 @@ export function mountAdminView(container, navigateOrUser) {
               <div><label class="label label-xs" for="vr-above">Gana (USD)</label><input class="input" id="vr-above" inputmode="decimal" value="${r.above}" ${r.enabled ? "" : "disabled"} /></div>
               <div><label class="label label-xs" for="vr-below">Si es menos, gana (USD)</label><input class="input" id="vr-below" inputmode="decimal" value="${r.below}" ${r.enabled ? "" : "disabled"} /></div>
             </div>
-            <p class="text-xs text-muted" style="margin:0" id="vr-label">${esc(vendorRuleLabel(r))}. Vale para ventas al detalle, aunque lleve 3 o 4 pomos. Las ventas <strong>por caja</strong> pagan lo que pongas en cada producto (Productos → Venta por caja). ${r.enabled ? "" : "Apagado: el vendedor gana el monto de cada producto."}</p>
+            <p class="text-xs text-muted" style="margin:0" id="vr-label">${esc(vendorRuleLabel(r))}. Vale para ventas al detalle, aunque lleve 3 o 4 pomos. Las ventas <strong>por caja</strong> pagan lo que pongas en «Venta mayorista» (si lo dejas vacío, esta regla). Cargadores y similares: su comisión propia. ${r.enabled ? "" : "Apagado: el vendedor gana el monto de cada producto."}</p>
             <div><button class="btn btn-primary btn-sm" id="vr-save">${icon("save", 14)} Guardar regla</button></div>
           </div>
         </div>`;
@@ -5298,8 +5319,12 @@ export function mountAdminView(container, navigateOrUser) {
       ]);
       if (gen !== tabGeneration) return;
       const active = warehouses.filter((w) => w.active !== false);
-      const results = await Promise.all(active.map((w) => listSalesInRange({ warehouseId: w.id, from: r.from, to: r.to })));
+      const [results, paidList] = await Promise.all([
+        Promise.all(active.map((w) => listSalesInRange({ warehouseId: w.id, from: r.from, to: r.to }))),
+        listSellerPayouts(y, m).catch(() => null),
+      ]);
       if (gen !== tabGeneration) return;
+      payouts = paidList;
       rows = [];
       failed = [];
       active.forEach((w, i) => {
@@ -5318,8 +5343,26 @@ export function mountAdminView(container, navigateOrUser) {
       return `<div class="text-xs text-muted">${esc(sh.label)}</div>${sh.name ? `<strong>${esc(sh.name)}</strong>` : ""}`;
     }
 
+    // v5.34.0: ¿ya se le pagó? (y si después entraron ventas, cuánto falta)
+    const payOf = (w, sh) => (payouts || []).find((p) => p.id === sellerPayoutId(w.id, sh.key, ...period.split("-").map(Number)));
+    function payCell(w, sh) {
+      if (payouts === null) return `<span class="text-xs text-muted">Ejecuta el SQL v5.34</span>`;
+      const p = payOf(w, sh);
+      const owe = (sh.usd || 0) > 0.004 || (sh.mn || 0) > 0.004;
+      if (!p) return owe ? `<button class="btn btn-primary btn-sm" data-pay="${esc(w.id)}|${esc(sh.key)}">${icon("check", 14)} Marcar pagado</button>` : `<span class="text-xs text-muted">Nada que pagar</span>`;
+      const extraUsd = Math.round(((sh.usd || 0) - (Number(p.amountUsd) || 0)) * 100) / 100;
+      const extraMn = Math.round(((sh.mn || 0) - (Number(p.amountMn) || 0)) * 100) / 100;
+      return `<span class="badge badge-accent">${icon("check", 12)} Pagado ${p.paidAt ? formatDateShort(p.paidAt) : ""}</span>
+        ${extraUsd > 0.004 || extraMn > 0.004 ? `<div class="text-xs" style="color:var(--warning);margin-top:0.25rem">Ventas nuevas: faltan ${moneyPair(Math.max(0, extraUsd), Math.max(0, extraMn))} <button class="btn btn-text btn-sm" data-pay="${esc(w.id)}|${esc(sh.key)}">Pagar también</button></div>` : ""}
+        <div><button class="btn btn-text btn-sm" data-unpay="${esc(w.id)}|${esc(sh.key)}">Quitar «pagado»</button></div>`;
+    }
+
     function render() {
       if (gen !== tabGeneration) return;
+      const paidTot = rows.reduce((a, { w, sh }) => {
+        const p = payOf(w, sh);
+        return p ? { usd: a.usd + Math.min(sh.usd, Number(p.amountUsd) || 0), mn: a.mn + Math.min(sh.mn, Number(p.amountMn) || 0) } : a;
+      }, { usd: 0, mn: 0 });
       const t = rows.reduce((a, { sh }) => ({
         sales: a.sales + sh.sales, units: a.units + sh.units,
         usd: a.usd + sh.usd, mn: a.mn + sh.mn,
@@ -5351,7 +5394,7 @@ export function mountAdminView(container, navigateOrUser) {
             <div class="overflow-x-auto">
               ${loading ? `<div class="empty-state"><div class="spinner"></div></div>` : `
                 <table class="table table-cards">
-                  <thead><tr><th>Almacén</th><th>Vendedor</th><th class="text-center">Ventas</th><th class="text-center">Productos</th><th class="text-right">Comisión</th></tr></thead>
+                  <thead><tr><th>Almacén</th><th>Vendedor</th><th class="text-center">Ventas</th><th class="text-center">Productos</th><th class="text-right">Comisión</th><th class="text-right">Pago</th></tr></thead>
                   <tbody>
                     ${rows.map(({ w, sh }) => `
                       <tr>
@@ -5360,8 +5403,9 @@ export function mountAdminView(container, navigateOrUser) {
                         <td class="text-center">${sh.sales}</td>
                         <td class="text-center">${sh.units}</td>
                         <td class="text-right" style="white-space:nowrap"><strong>${moneyPair(sh.usd, sh.mn)}</strong>${sh.pending.usd || sh.pending.mn ? `<div class="text-xs text-muted">+ ${moneyPair(sh.pending.usd, sh.pending.mn)} por confirmar</div>` : ""}</td>
+                        <td class="text-right">${payCell(w, sh)}</td>
                       </tr>`).join("")}
-                    ${failed.map((w) => `<tr><td class="font-medium">${esc(w.name)} <span class="badge badge-outline">${esc(w.code)}</span></td><td colspan="4" class="text-xs text-danger">No se pudieron cargar las ventas (¿sin conexión?).</td></tr>`).join("")}
+                    ${failed.map((w) => `<tr><td class="font-medium">${esc(w.name)} <span class="badge badge-outline">${esc(w.code)}</span></td><td colspan="5" class="text-xs text-danger">No se pudieron cargar las ventas (¿sin conexión?).</td></tr>`).join("")}
                   </tbody>
                   <tfoot>
                     <tr style="background:var(--bg-soft);font-weight:700">
@@ -5369,6 +5413,7 @@ export function mountAdminView(container, navigateOrUser) {
                       <td class="text-center">${t.sales}</td>
                       <td class="text-center">${t.units}</td>
                       <td class="text-right" style="white-space:nowrap">${moneyPair(t.usd, t.mn)}</td>
+                      <td class="text-right text-xs" style="white-space:nowrap">Pagado ${moneyPair(paidTot.usd, paidTot.mn)}<br>Falta ${moneyPair(Math.max(0, t.usd - paidTot.usd), Math.max(0, t.mn - paidTot.mn))}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -5385,6 +5430,28 @@ export function mountAdminView(container, navigateOrUser) {
         load();
       });
       content.querySelector("[data-wc-jump]")?.addEventListener("click", () => window.__adminNavigateTo?.("products"));
+      // v5.34.0: marcar / quitar «pagado»
+      const payAction = async (btn, paid) => {
+        const [whId, key] = (btn.dataset.pay || btn.dataset.unpay).split("|");
+        const hit = rows.find(({ w, sh }) => w.id === whId && sh.key === key);
+        if (!hit) return;
+        const [yy, mm] = period.split("-").map(Number);
+        btn.disabled = true;
+        try {
+          await markSellerPaid({
+            warehouseId: whId, shiftKey: key, sellerName: hit.sh.name || hit.w.name, year: yy, month: mm,
+            amountUSD: hit.sh.usd, amountMN: hit.sh.mn, paidBy: getStore().getState().currentUser?.id,
+          }, paid);
+          payouts = await listSellerPayouts(yy, mm);
+          toast(paid ? `Pagado: ${hit.sh.name || hit.w.name}` : "Quitado «pagado»", "success");
+          render();
+        } catch (err) {
+          btn.disabled = false;
+          toast(err.message || "No se pudo guardar", "error", 7000);
+        }
+      };
+      content.querySelectorAll("[data-pay]").forEach((b) => b.addEventListener("click", () => payAction(b, true)));
+      content.querySelectorAll("[data-unpay]").forEach((b) => b.addEventListener("click", () => payAction(b, false)));
       content.querySelector("#wc-csv")?.addEventListener("click", () => {
         exportToCSV(`comisiones-vendedores-${period}.csv`, rows.map(({ w, sh }) => ({
           mes: period,
@@ -5396,6 +5463,7 @@ export function mountAdminView(container, navigateOrUser) {
           productos: sh.units,
           comision_mn: sh.mn,
           comision_usd: sh.usd,
+          pagado: payOf(w, sh) ? "Sí" : "No",
           por_confirmar_mn: sh.pending.mn,
           por_confirmar_usd: sh.pending.usd,
         })));
@@ -5434,7 +5502,7 @@ export function mountAdminView(container, navigateOrUser) {
             <div class="card-header"><h3 class="card-title">API elToque</h3></div>
             <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
               <div><label class="label label-xs">API URL</label><input class="input" id="r-apiUrl" value="${config.apiUrl}" /></div>
-              <div><label class="label label-xs">API Token (Bearer)</label><input class="input" type="password" id="r-apiToken" value="${esc(config.apiToken || '')}" placeholder="(opcional)" autocomplete="off" /><p class="text-xs text-muted" style="margin:0.25rem 0 0">Solo lo ve el admin. Las tasas de elToque se actualizan cuando el admin entra o toca «Sincronizar».</p></div>
+              <div><label class="label label-xs">API Token (Bearer)</label><input class="input" type="password" id="r-apiToken" value="${esc(config.apiToken || '')}" placeholder="(opcional)" autocomplete="off" /><p class="text-xs text-muted" style="margin:0.25rem 0 0">Solo lo ve el admin. La tasa se actualiza sola cada 15 min desde GitHub (secretos del repositorio: ver INSTRUCCIONES-TASA.md); «Sincronizar» la trae al momento.</p></div>
             </div>
           </div>
 
