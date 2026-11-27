@@ -1,5 +1,17 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.38.0 (2026-11-27) — Pago mixto siempre con tasa de MN
+
+> Sin SQL.
+
+- Si la tabla `rates` estaba vacía y `tasa.json` aún no estaba publicado, el
+  cobro se quedaba sin tasa de MN («Sin tasa de MN» / «No hay tasa de cambio
+  para MN») y el resto no se calculaba. Ahora, sin MN en la lista, se arma con
+  la última tasa de elTOQUE guardada (o la manual de Admin → Tasas) + el
+  margen. Nunca con los valores de ejemplo.
+- Pago mixto: al escribir USD, el resto en MN = (falta en USD) × (tasa del
+  día + recargo +10/+20).
+
 ## v5.37.0 (2026-11-27) — Tasa automática con un solo secreto (como TiendaMax)
 
 > Sin SQL. En GitHub basta el secreto `ELTOQUE_API_KEY` (ver INSTRUCCIONES-TASA.md).

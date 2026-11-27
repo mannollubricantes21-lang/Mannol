@@ -2467,7 +2467,7 @@ export function subscribeRates(cb) {
       return;
     }
     const s = await sb();
-    if (!s) { cb(mirrorLoad("rates") || []); return; }
+    if (!s) { cb(await ensureMnRate(mirrorLoad("rates") || [])); return; }
     try {
       await refresh();
       const channel = s.channel("rates-ch");
@@ -2480,7 +2480,7 @@ export function subscribeRates(cb) {
       unsub = () => { clearInterval(iv); prevUnsub(); };
     } catch (err) {
       console.error("subscribeRates failed:", err);
-      cb(mirrorLoad("rates") || []);
+      cb(await ensureMnRate(mirrorLoad("rates") || []));
     }
     async function refresh() {
       let table = null;
@@ -2499,7 +2499,9 @@ export function subscribeRates(cb) {
         const tableT = Math.max(0, ...table.map((r) => (typeof r.updatedAt === "number" ? r.updatedAt : Date.parse(r.updatedAt) || 0)));
         if (tasa && tasa.updatedAt > tableT) { cb(await ratesFromTasa(tasa)); return; }
       } catch {}
-      cb(table);
+      // La tabla `rates` puede estar vacía y tasa.json sin publicar: sin MN no
+      // se puede cobrar el resto en pesos, así que se usa la tasa de Admin → Tasas.
+      cb(await ensureMnRate(table));
     }
   })();
   return () => unsub();
@@ -2555,6 +2557,31 @@ async function ratesFromTasa(tasa, config) {
   const t = tasa.updatedAt || Date.now();
   const row = (currency, rateUSD) => ({ id: currency, currency, rateUSD, source: "eltoque", updatedAt: t });
   return [row("USD", 1), row("MN", 1 / appliedUsd), row("EUR", appliedEur / appliedUsd), row("TRANSFERENCIA", 1 / appliedUsd)];
+}
+
+const hasMnRate = (list) => (list || []).some((r) => r && r.currency === "MN" && Number(r.rateUSD) > 0);
+
+/**
+ * v5.38.0: si la lista de tasas no trae MN (tabla vacía y tasa.json sin
+ * publicar), arma las tasas con la última de elTOQUE guardada en la
+ * configuración (o la manual de Admin → Tasas) más el margen.
+ */
+async function ensureMnRate(list) {
+  if (hasMnRate(list)) return list;
+  try {
+    const cfg = await getRateConfig();
+    // Los valores de ejemplo (305 / 332) no son tasas reales: nunca se cobra con ellos
+    const isPlaceholder = cfg.lastUsdRate === DEMO_RATE_CONFIG.lastUsdRate && cfg.lastEurRate === DEMO_RATE_CONFIG.lastEurRate;
+    const lastUsd = isPlaceholder ? null : cfg.lastUsdRate;
+    const usd = applyMarkup(lastUsd || cfg.manualUsdRate, cfg.markupMode, cfg.markupUsd);
+    if (!okRate(usd)) return list;
+    const rawEur = (isPlaceholder ? null : cfg.lastEurRate) || cfg.manualEurRate;
+    const eur = applyMarkup(rawEur, cfg.markupMode, cfg.markupEur) || cfg.manualEurRate || 345;
+    const t = cfg.lastSyncAt || Date.now();
+    const source = lastUsd ? "api" : "manual";
+    const row = (currency, rateUSD) => ({ id: currency, currency, rateUSD, source, updatedAt: t });
+    return [row("USD", 1), row("MN", 1 / usd), row("EUR", eur / usd), row("TRANSFERENCIA", 1 / usd)];
+  } catch { return list; }
 }
 
 export async function getTodayRates() {
