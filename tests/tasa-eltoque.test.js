@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractRate, parseElToqueHtml, buildRateRows, changed, main } from "../scripts/tasa-eltoque.mjs";
+import { extractRate, parseElToqueHtml, buildRateRows, changed, failureHint, main } from "../scripts/tasa-eltoque.mjs";
 
 describe("tasa elTOQUE (GitHub Actions, v5.34)", () => {
   it("lee USD y EUR (ECU) en las formas de respuesta conocidas", () => {
@@ -49,13 +49,28 @@ describe("tasa elTOQUE (GitHub Actions, v5.34)", () => {
     expect(tg.body.text).toContain("485 MN");
   });
 
-  it("si elTOQUE no responde, no toca nada", async () => {
+  it("si elTOQUE no responde, no toca nada y falla en rojo (v5.39.1)", async () => {
     const fetchFn = async (url) => {
       if (String(url).includes("/rest/v1/")) throw new Error("no debería escribir");
       return { ok: false, status: 503, json: async () => ({}), text: async () => "" };
     };
-    const r = await main({ env: { ELTOQUE_API_KEY: "k", SUPABASE_URL: "u", SUPABASE_SERVICE_ROLE_KEY: "s" }, fetchFn, log: () => {}, readTasa: async () => null, writeTasa: async () => { throw new Error("no debería escribir"); } });
-    expect(r.skipped).toBe(true);
+    await expect(
+      main({ env: { ELTOQUE_API_KEY: "k", SUPABASE_URL: "u", SUPABASE_SERVICE_ROLE_KEY: "s" }, fetchFn, log: () => {}, readTasa: async () => null, writeTasa: async () => { throw new Error("no debería escribir"); } }),
+    ).rejects.toThrow(/No se pudo leer elTOQUE/);
+  });
+
+  it("v5.39.1: el mensaje de fallo es accionable según el error", () => {
+    // Secreto faltante → cómo crearlo bien (repositorio, no environment)
+    expect(failureHint("Falta ELTOQUE_API_KEY", "fetch failed")).toMatch(/no existe o está vacío/);
+    expect(failureHint("Falta ELTOQUE_API_KEY", "fetch failed")).toMatch(/New repository secret/);
+    // Token rechazado → cómo probarlo a mano
+    expect(failureHint("API elTOQUE: HTTP 401 | HTTP 401 | HTTP 401", "fetch failed")).toMatch(/token fue rechazado/);
+    expect(failureHint("API elTOQUE: HTTP 422", "fetch failed")).toMatch(/curl -H/);
+    // Otro fallo (red, etc.) → no inventa la causa
+    expect(failureHint("fetch failed", "Wayback no tiene copia")).toMatch(/Se mantiene la última tasa publicada/);
+    // El mensaje siempre incluye ambos orígenes del fallo
+    expect(failureHint("API elTOQUE: HTTP 401", "fetch failed")).toContain("API: API elTOQUE: HTTP 401");
+    expect(failureHint("API elTOQUE: HTTP 401", "fetch failed")).toContain("Página/Wayback: fetch failed");
   });
 
   it("como TiendaMax: con SOLO el token de elTOQUE escribe tasa.json (sin Supabase)", async () => {
