@@ -66,3 +66,28 @@ describe("sin conexión: última copia del equipo", () => {
     expect(await first(subscribeStock, "w9")).toEqual([]);
   });
 });
+
+import { getTodayRates, subscribeRates, fetchPublishedTasa } from "../js/db.js";
+
+describe("v5.37: tasa publicada por GitHub (tasa.json)", () => {
+  it("si es más nueva que la guardada, la usan todos (con el margen +10)", async () => {
+    localStorage.clear();
+    online = true;
+    const real = globalThis.fetch;
+    globalThis.fetch = async (u) => {
+      if (String(u).includes("tasa.json")) return { ok: true, status: 200, json: async () => ({ usd: 500, eur: 550, updatedAt: new Date(Date.now()).toISOString() }) };
+      return real(u);
+    };
+    try {
+      const t = await getTodayRates();
+      expect(t).toMatchObject({ rawUsd: 500, usd: 510, rawEur: 550, eur: 560 });
+      const rates = await first(subscribeRates);
+      expect(rates.find((r) => r.currency === "MN").rateUSD).toBeCloseTo(1 / 510);
+      // sin red: la última tasa.json leída
+      globalThis.fetch = async () => { throw new TypeError("Failed to fetch"); };
+      expect((await fetchPublishedTasa()).usd).toBe(500);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+});

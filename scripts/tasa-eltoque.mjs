@@ -10,9 +10,10 @@
 // 3. Si cambió, avisa por Telegram (opcional).
 //
 // Secretos del repositorio (Settings → Secrets and variables → Actions):
-//   ELTOQUE_API_KEY            token de la API de elTOQUE
-//   SUPABASE_URL               https://xxxx.supabase.co
-//   SUPABASE_SERVICE_ROLE_KEY  clave service_role (NUNCA en la app)
+//   ELTOQUE_API_KEY            token de la API de elTOQUE  ← CON ESTE BASTA
+//   (opcionales) SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY: además la guarda
+//   en Supabase. Sin ellos, la tasa va en tasa.json junto a la app y cada
+//   equipo la lee de ahí (como TiendaMax).
 //   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   (opcionales) para el aviso
 //   ELTOQUE_API_URL            (opcional) si elTOQUE te dio otra dirección
 // Sin dependencias: Node 20 trae fetch.
@@ -135,7 +136,9 @@ async function supa(fetchFn, base, key, path, { method = "GET", body, prefer } =
   const r = await fetchFn(`${base.replace(/\/$/, "")}/rest/v1/${path}`, {
     method,
     headers: {
-      apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json",
+      // Clave nueva de Supabase (sb_secret_…): solo en «apikey». La antigua
+      // service_role (eyJ…): también en Authorization.
+      apikey: key, ...(String(key).startsWith("sb_") ? {} : { Authorization: `Bearer ${key}` }), "Content-Type": "application/json",
       ...(prefer ? { Prefer: prefer } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -154,13 +157,22 @@ async function telegram(fetchFn, token, chatId, text) {
   } catch (e) { console.warn("⚠️ Telegram:", e.message); }
 }
 
-export async function main({ env = process.env, fetchFn = fetch, log = console.log } = {}) {
-  const url = env.SUPABASE_URL, key = env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error("Faltan SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY en los secretos del repositorio");
+/** Lee tasa.json (la publicada la vez anterior), o null. */
+async function readTasaFile(path) {
+  try { const fs = await import("node:fs/promises"); return JSON.parse(await fs.readFile(path, "utf8")); } catch { return null; }
+}
+async function writeTasaFile(path, data) {
+  const fs = await import("node:fs/promises");
+  await fs.writeFile(path, JSON.stringify(data, null, 2) + "\n", "utf8");
+}
+
+export async function main({ env = process.env, fetchFn = fetch, log = console.log, tasaPath = env.TASA_JSON_PATH || "tasa.json", readTasa = readTasaFile, writeTasa = writeTasaFile } = {}) {
+  const url = (env.SUPABASE_URL || "").trim().replace(/\/+$/, ""), key = (env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+  const useSupabase = !!(url && key); // opcional: con solo ELTOQUE_API_KEY basta (tasa.json)
 
   let t;
   try {
-    t = await fetchFromApi({ apiKey: (env.ELTOQUE_API_KEY || "").trim(), apiUrl: (env.ELTOQUE_API_URL || "").trim() || DEFAULT_API_URL, fetchFn });
+    t = await fetchFromApi({ apiKey: (env.ELTOQUE_API_KEY || "").trim().replace(/^Bearer\s+/i, ""), apiUrl: (env.ELTOQUE_API_URL || "").trim() || DEFAULT_API_URL, fetchFn });
   } catch (e) {
     log(`⚠️ ${e.message} → probando la página pública`);
     try {
@@ -173,25 +185,42 @@ export async function main({ env = process.env, fetchFn = fetch, log = console.l
   }
   log(`Tasa ${t.source}: USD ${t.usd}${reasonable(t.eur) ? ` · EUR ${t.eur}` : ""}`);
 
-  const [cfg = {}] = (await supa(fetchFn, url, key, "rate_config?id=eq.default&select=markup_mode,markup_usd,markup_eur,manual_usd_rate,manual_eur_rate,last_usd_rate,last_eur_rate")) || [];
-  const eur = reasonable(t.eur) ? t.eur : Number(cfg.last_eur_rate) || null;
   const nowIso = new Date().toISOString();
-  const isNew = changed(cfg.last_usd_rate, t.usd) || (reasonable(t.eur) && changed(cfg.last_eur_rate, t.eur));
+  const prevFile = await readTasa(tasaPath);
+  let cfg = {};
+  if (useSupabase) {
+    [cfg = {}] = (await supa(fetchFn, url, key, "rate_config?id=eq.default&select=markup_mode,markup_usd,markup_eur,manual_usd_rate,manual_eur_rate,last_usd_rate,last_eur_rate")) || [];
+  }
+  const prevUsd = Number(prevFile?.usd) || Number(cfg.last_usd_rate);
+  const prevEur = Number(prevFile?.eur) || Number(cfg.last_eur_rate);
+  const eur = reasonable(t.eur) ? t.eur : (reasonable(prevEur) ? prevEur : null);
+  const isNew = changed(prevUsd, t.usd) || (reasonable(t.eur) && changed(prevEur, t.eur));
 
-  await supa(fetchFn, url, key, "rate_config?on_conflict=id", {
-    method: "POST", prefer: "resolution=merge-duplicates,return=minimal",
-    body: { id: "default", last_usd_rate: t.usd, last_eur_rate: eur, last_sync_at: nowIso },
-  });
-  const { rows, appliedUsd, appliedEur } = buildRateRows({ usd: t.usd, eur }, cfg, nowIso);
-  await supa(fetchFn, url, key, "rates?on_conflict=currency", { method: "POST", prefer: "resolution=merge-duplicates,return=minimal", body: rows });
-  await supa(fetchFn, url, key, "settings?id=eq.global", { method: "PATCH", prefer: "return=minimal", body: { last_rate_sync: nowIso } }).catch((e) => log("⚠️ settings:", e.message));
-  log(`Guardada. Al cliente: USD ${Math.round(appliedUsd)} MN · EUR ${Math.round(appliedEur)} MN`);
+  // 1) tasa.json junto a la app (GitHub lo publica con la web). Solo si cambió.
+  if (isNew || !prevFile) {
+    await writeTasa(tasaPath, { usd: t.usd, eur, source: t.source, updatedAt: nowIso });
+    log(`tasa.json actualizado (USD ${t.usd}${eur ? ` · EUR ${eur}` : ""}).`);
+  }
+
+  // 2) Supabase (opcional, si pusiste sus secretos)
+  let appliedUsd = null, appliedEur = null;
+  if (useSupabase) {
+    await supa(fetchFn, url, key, "rate_config?on_conflict=id", {
+      method: "POST", prefer: "resolution=merge-duplicates,return=minimal",
+      body: { id: "default", last_usd_rate: t.usd, last_eur_rate: eur, last_sync_at: nowIso },
+    });
+    const built = buildRateRows({ usd: t.usd, eur }, cfg, nowIso);
+    appliedUsd = built.appliedUsd; appliedEur = built.appliedEur;
+    await supa(fetchFn, url, key, "rates?on_conflict=currency", { method: "POST", prefer: "resolution=merge-duplicates,return=minimal", body: built.rows });
+    await supa(fetchFn, url, key, "settings?id=eq.global", { method: "PATCH", prefer: "return=minimal", body: { last_rate_sync: nowIso } }).catch((e) => log("⚠️ settings:", e.message));
+    log(`Supabase al día. Al cliente: USD ${Math.round(appliedUsd)} MN · EUR ${Math.round(appliedEur)} MN`);
+  }
 
   if (isNew) {
-    const prev = Number(cfg.last_usd_rate);
-    const arrow = reasonable(prev) ? (t.usd > prev ? "⬆️" : "⬇️") : "💱";
+    const arrow = reasonable(prevUsd) ? (t.usd > prevUsd ? "⬆️" : "⬇️") : "💱";
     await telegram(fetchFn, env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_CHAT_ID,
-      `${arrow} <b>Tasa MANNOL</b>\nelTOQUE: USD <b>${Math.round(t.usd)}</b>${reasonable(prev) ? ` (antes ${Math.round(prev)})` : ""}${reasonable(t.eur) ? ` · EUR <b>${Math.round(t.eur)}</b>` : ""}\nAl cliente: USD <b>${Math.round(appliedUsd)} MN</b> · EUR <b>${Math.round(appliedEur)} MN</b>`);
+      `${arrow} <b>Tasa MANNOL</b>\nelTOQUE: USD <b>${Math.round(t.usd)}</b>${reasonable(prevUsd) ? ` (antes ${Math.round(prevUsd)})` : ""}${reasonable(t.eur) ? ` · EUR <b>${Math.round(t.eur)}</b>` : ""}` +
+      (appliedUsd ? `\nAl cliente: USD <b>${Math.round(appliedUsd)} MN</b> · EUR <b>${Math.round(appliedEur)} MN</b>` : ""));
     log("Cambio de tasa: aviso enviado (si Telegram está configurado).");
   } else {
     log("Sin cambio visible de tasa.");

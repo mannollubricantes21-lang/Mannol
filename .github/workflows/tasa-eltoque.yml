@@ -1,16 +1,12 @@
-name: Tasa elTOQUE → Supabase
+name: Tasa elTOQUE
 
-# v5.34.0: la tasa se actualiza sola, sin que nadie abra la app (como en TiendaMax).
-# Lee elTOQUE, la guarda en Supabase con el margen de Admin → Tasas y, si cambió,
-# avisa por Telegram. Ver scripts/tasa-eltoque.mjs.
-#
-# Secretos (Settings → Secrets and variables → Actions → New repository secret):
-#   ELTOQUE_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   (opcionales, para el aviso)
-#
-# El cron de GitHub no es puntual (puede retrasarse 5-20 min). Para avisos al
-# minuto, un Worker de Cloudflare puede dispararlo con workflow_dispatch, igual
-# que en TiendaMax.
+# v5.37.0: la tasa se actualiza sola cada 15 min, igual que en TiendaMax.
+# Solo hace falta UN secreto: ELTOQUE_API_KEY
+#   (Settings → Secrets and variables → Actions → New repository secret)
+# Guarda la tasa en tasa.json junto a la app; cada almacén la lee de ahí y le
+# suma el margen de Admin → Tasas (+10 / +20 MN).
+# Opcionales: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (también la guarda en
+# Supabase) y TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (aviso cuando cambia).
 
 on:
   schedule:
@@ -18,7 +14,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: tasa-eltoque
@@ -30,12 +26,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
-        with:
-          sparse-checkout: scripts
       - uses: actions/setup-node@v5
         with:
           node-version: '20'
-      - name: Actualizar tasa
+      - name: Leer tasa de elTOQUE
         env:
           ELTOQUE_API_KEY: ${{ secrets.ELTOQUE_API_KEY }}
           ELTOQUE_API_URL: ${{ secrets.ELTOQUE_API_URL }}
@@ -44,3 +38,15 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node scripts/tasa-eltoque.mjs
+      - name: Publicar tasa.json (solo si cambió)
+        run: |
+          if [ -n "$(git status --porcelain tasa.json)" ]; then
+            git config user.name "tasa-bot"
+            git config user.email "tasa-bot@users.noreply.github.com"
+            git add tasa.json
+            git commit -m "Tasa elTOQUE $(date -u +'%Y-%m-%d %H:%M') UTC"
+            git pull --rebase --autostash || true
+            git push
+          else
+            echo "Sin cambios en tasa.json"
+          fi

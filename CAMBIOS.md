@@ -1,5 +1,18 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.37.0 (2026-11-27) — Tasa automática con un solo secreto (como TiendaMax)
+
+> Sin SQL. En GitHub basta el secreto `ELTOQUE_API_KEY` (ver INSTRUCCIONES-TASA.md).
+
+- GitHub lee elTOQUE cada 15 min y guarda la tasa en **tasa.json** junto a la
+  app (solo hace un cambio cuando la tasa cambia). Cada equipo la lee de ahí
+  y le suma el margen de Admin → Tasas. Ya no hacen falta los secretos de
+  Supabase (siguen siendo opcionales).
+- La tasa se revisa cada 10 min con la app abierta y, sin conexión, se usa
+  la última leída. Las tasas de la venta también tienen copia sin conexión.
+- `scripts/tasa-eltoque.mjs` acepta la clave nueva de Supabase (sb_secret_…)
+  y quita espacios o «Bearer» pegados por error.
+
 ## v5.36.0 (2026-11-26) — Pago mixto bien guardado · «Revisar» hasta confirmar el mínimo
 
 > Sin SQL.

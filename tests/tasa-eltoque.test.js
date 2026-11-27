@@ -38,8 +38,10 @@ describe("tasa elTOQUE (GitHub Actions, v5.34)", () => {
       throw new Error("inesperado " + url);
     };
     const env = { ELTOQUE_API_KEY: "k", SUPABASE_URL: "https://x.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "s", TELEGRAM_BOT_TOKEN: "b", TELEGRAM_CHAT_ID: "c" };
-    const r = await main({ env, fetchFn, log: () => {} });
+    const files = {};
+    const r = await main({ env, fetchFn, log: () => {}, readTasa: async () => null, writeTasa: async (p, d) => { files[p] = d; } });
     expect(r).toMatchObject({ usd: 475, eur: 525, appliedUsd: 485, changed: true });
+    expect(files["tasa.json"]).toMatchObject({ usd: 475, eur: 525 });
     const cfgWrite = calls.find((c) => c.url.includes("rate_config?on_conflict"));
     expect(cfgWrite.body).toMatchObject({ id: "default", last_usd_rate: 475, last_eur_rate: 525 });
     expect(calls.find((c) => c.url.includes("rates?on_conflict")).body).toHaveLength(4);
@@ -52,7 +54,26 @@ describe("tasa elTOQUE (GitHub Actions, v5.34)", () => {
       if (String(url).includes("/rest/v1/")) throw new Error("no debería escribir");
       return { ok: false, status: 503, json: async () => ({}), text: async () => "" };
     };
-    const r = await main({ env: { ELTOQUE_API_KEY: "k", SUPABASE_URL: "u", SUPABASE_SERVICE_ROLE_KEY: "s" }, fetchFn, log: () => {} });
+    const r = await main({ env: { ELTOQUE_API_KEY: "k", SUPABASE_URL: "u", SUPABASE_SERVICE_ROLE_KEY: "s" }, fetchFn, log: () => {}, readTasa: async () => null, writeTasa: async () => { throw new Error("no debería escribir"); } });
     expect(r.skipped).toBe(true);
+  });
+
+  it("como TiendaMax: con SOLO el token de elTOQUE escribe tasa.json (sin Supabase)", async () => {
+    const calls = [];
+    const fetchFn = async (url) => {
+      calls.push(String(url));
+      if (String(url).startsWith("https://tasas.eltoque.com")) return { ok: true, status: 200, json: async () => ({ tasas: { USD: 480, ECU: 530 } }) };
+      throw new Error("no debería llamar a " + url);
+    };
+    const files = {};
+    const r1 = await main({ env: { ELTOQUE_API_KEY: "k" }, fetchFn, log: () => {}, readTasa: async () => ({ usd: 470, eur: 520 }), writeTasa: async (p, d) => { files[p] = d; } });
+    expect(r1.changed).toBe(true);
+    expect(files["tasa.json"]).toMatchObject({ usd: 480, eur: 530 });
+    expect(calls.some((c) => c.includes("supabase"))).toBe(false);
+    // misma tasa → no reescribe (no hay commit)
+    const files2 = {};
+    const r2 = await main({ env: { ELTOQUE_API_KEY: "k" }, fetchFn, log: () => {}, readTasa: async () => ({ usd: 480, eur: 530 }), writeTasa: async (p, d) => { files2[p] = d; } });
+    expect(r2.changed).toBe(false);
+    expect(files2).toEqual({});
   });
 });

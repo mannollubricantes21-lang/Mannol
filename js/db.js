@@ -2467,26 +2467,39 @@ export function subscribeRates(cb) {
       return;
     }
     const s = await sb();
-    if (!s) { cb([]); return; }
+    if (!s) { cb(mirrorLoad("rates") || []); return; }
     try {
       await refresh();
       const channel = s.channel("rates-ch");
       channel.on("postgres_changes", { event: "*", schema: "public", table: "rates" }, () => refresh());
       channel.subscribe();
       unsub = () => { try { s.client.removeChannel(channel); } catch {} };
+      // v5.37.0: revisar la tasa publicada por GitHub cada 10 min
+      const iv = setInterval(() => refresh(), 10 * 60 * 1000);
+      const prevUnsub = unsub;
+      unsub = () => { clearInterval(iv); prevUnsub(); };
     } catch (err) {
       console.error("subscribeRates failed:", err);
-      cb([]);
+      cb(mirrorLoad("rates") || []);
     }
     async function refresh() {
+      let table = null;
       try {
-        const { data, error } = await s.from("rates").select("*");
+        const { data, error } = await slowGuard(s.from("rates").select("*"), "rates");
         if (error) throw error;
-        cb(rows(data).map((r) => ({ ...r, id: r.currency })));
+        table = rows(data).map((r) => ({ ...r, id: r.currency }));
+        mirrorSave("rates", table);
       } catch (err) {
         console.error("refresh rates failed:", err);
-        cb([]);
+        table = mirrorLoad("rates") || []; // v5.37.0: sin conexión, las últimas tasas
       }
+      // La de GitHub (tasa.json) si es más nueva que la de la tabla
+      try {
+        const tasa = await fetchPublishedTasa();
+        const tableT = Math.max(0, ...table.map((r) => (typeof r.updatedAt === "number" ? r.updatedAt : Date.parse(r.updatedAt) || 0)));
+        if (tasa && tasa.updatedAt > tableT) { cb(await ratesFromTasa(tasa)); return; }
+      } catch {}
+      cb(table);
     }
   })();
   return () => unsub();
@@ -2509,11 +2522,63 @@ export async function saveRate(rate) {
 }
 
 // Get today's rates with markup applied
+// =====================================================
+// v5.37.0: tasa publicada por GitHub (como TiendaMax)
+// El trabajo de GitHub (.github/workflows/tasa-eltoque.yml) guarda la tasa de
+// elTOQUE en «tasa.json», junto a la app. Basta el secreto ELTOQUE_API_KEY:
+// cada equipo la lee de ahí y le suma el margen de Admin → Tasas.
+// =====================================================
+const okRate = (v) => Number.isFinite(v) && v > 100 && v < 3000;
+
+/** { usd, eur, updatedAt(ms), source } de tasa.json, o la última leída (sin red). */
+export async function fetchPublishedTasa() {
+  try {
+    const r = await fetch(`./tasa.json?t=${Date.now()}`, { cache: "no-store" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    const usd = Number(j.usd), eur = Number(j.eur);
+    if (!okRate(usd)) throw new Error("tasa.json sin USD");
+    const tasa = { usd, eur: okRate(eur) ? eur : null, updatedAt: Date.parse(j.updatedAt) || 0, source: j.source || "elTOQUE" };
+    mirrorSave("tasa_json", tasa);
+    return tasa;
+  } catch {
+    return mirrorLoad("tasa_json");
+  }
+}
+
+/** Filas de tasas (como la tabla rates) a partir de tasa.json + el margen. */
+async function ratesFromTasa(tasa, config) {
+  const cfg = config || await getRateConfig();
+  const appliedUsd = applyMarkup(tasa.usd, cfg.markupMode, cfg.markupUsd) || tasa.usd;
+  const rawEur = tasa.eur || cfg.lastEurRate || null;
+  const appliedEur = (rawEur && applyMarkup(rawEur, cfg.markupMode, cfg.markupEur)) || cfg.manualEurRate || 345;
+  const t = tasa.updatedAt || Date.now();
+  const row = (currency, rateUSD) => ({ id: currency, currency, rateUSD, source: "eltoque", updatedAt: t });
+  return [row("USD", 1), row("MN", 1 / appliedUsd), row("EUR", appliedEur / appliedUsd), row("TRANSFERENCIA", 1 / appliedUsd)];
+}
+
 export async function getTodayRates() {
   const demo = await isDemo();
   if (demo) return { ...DEMO_TODAY_RATES };
 
-  const config = await getRateConfig();
+  // v5.37.0: si GitHub publicó una tasa más nueva que la guardada, manda esa
+  const [cfg0, tasa] = await Promise.all([getRateConfig(), fetchPublishedTasa()]);
+  if (tasa && tasa.updatedAt > (Number(cfg0.lastSyncAt) || 0)) {
+    const rawEur = tasa.eur || cfg0.lastEurRate || null;
+    return {
+      usd: applyMarkup(tasa.usd, cfg0.markupMode, cfg0.markupUsd),
+      eur: rawEur ? applyMarkup(rawEur, cfg0.markupMode, cfg0.markupEur) : cfg0.manualEurRate,
+      rawUsd: tasa.usd,
+      rawEur,
+      source: "api",
+      lastSyncAt: tasa.updatedAt,
+      markupMode: cfg0.markupMode,
+      markupUsd: cfg0.markupUsd,
+      markupEur: cfg0.markupEur,
+    };
+  }
+
+  const config = cfg0;
   const now = Date.now();
   const cacheTtlMs = config.cacheTtlMinutes * 60 * 1000;
   const isStale = !config.lastSyncAt || (now - config.lastSyncAt > cacheTtlMs);
@@ -2636,7 +2701,11 @@ export async function syncRatesFromElToque() {
   let newEur = null;
   let source = "manual";
 
-  if (config.apiToken) {
+  // v5.37.0: primero la tasa que publica GitHub (no necesita token en la app)
+  const tasa = await fetchPublishedTasa();
+  if (tasa) { newUsd = tasa.usd; newEur = tasa.eur; source = "api"; }
+
+  if (!newUsd && config.apiToken) {
     try {
       const res = await fetch(config.apiUrl || "https://api.eltoque.com/v1/currency/rates", {
         headers: {

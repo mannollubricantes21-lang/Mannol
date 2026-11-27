@@ -5511,7 +5511,7 @@ export function mountAdminView(container, navigateOrUser) {
             <div class="card-header"><h3 class="card-title">API elToque</h3></div>
             <div class="card-content" style="display:flex;flex-direction:column;gap:0.75rem">
               <div><label class="label label-xs">API URL</label><input class="input" id="r-apiUrl" value="${config.apiUrl}" /></div>
-              <div><label class="label label-xs">API Token (Bearer)</label><input class="input" type="password" id="r-apiToken" value="${esc(config.apiToken || '')}" placeholder="(opcional)" autocomplete="off" /><p class="text-xs text-muted" style="margin:0.25rem 0 0">Solo lo ve el admin. La tasa se actualiza sola cada 15 min desde GitHub (secretos del repositorio: ver INSTRUCCIONES-TASA.md); «Sincronizar» la trae al momento.</p></div>
+              <div><label class="label label-xs">API Token (Bearer)</label><input class="input" type="password" id="r-apiToken" value="${esc(config.apiToken || '')}" placeholder="(opcional)" autocomplete="off" /><p class="text-xs text-muted" style="margin:0.25rem 0 0">Solo lo ve el admin. No hace falta aquí: la tasa se actualiza sola cada 15 min desde GitHub con el secreto ELTOQUE_API_KEY (ver INSTRUCCIONES-TASA.md).</p></div>
             </div>
           </div>
 

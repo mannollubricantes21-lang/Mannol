@@ -17,7 +17,7 @@
 //    red no responde en 4 s se abre la copia guardada.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v66";
+const CACHE_VERSION = "mannol-pos-supabase-v67";
 const DATA_CACHE = "mannol-pos-data-v1"; // respuestas de Supabase (se conserva entre versiones)
 const NAV_TIMEOUT_MS = 4000;
 const API_TIMEOUT_MS = 6000;
@@ -288,6 +288,23 @@ self.addEventListener("fetch", (event) => {
   // Navigation: network-first (con tiempo límite), fallback to cache
   if (request.mode === "navigate") {
     event.respondWith(navigationHandler(request));
+    return;
+  }
+
+  // v5.37.0: tasa.json (la tasa que publica GitHub) siempre de la red; sin
+  // red, la última guardada. Una sola entrada en caché (sin el ?t=).
+  if (url.pathname.endsWith("/tasa.json")) {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE_VERSION);
+      const key = new Request(url.origin + url.pathname);
+      try {
+        const fresh = await fetch(request, { cache: "no-store" });
+        if (fresh && fresh.ok) cache.put(key, fresh.clone());
+        return fresh;
+      } catch {
+        return (await cache.match(key)) || new Response("", { status: 504 });
+      }
+    })());
     return;
   }
 

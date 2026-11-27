@@ -1,50 +1,43 @@
-# Tasa automática de elTOQUE (GitHub)
+# Tasa automática de elTOQUE (igual que en TiendaMax)
 
-Desde la v5.34.0 la tasa se actualiza **sola cada 15 minutos** con GitHub Actions,
-igual que en TiendaMax. No hace falta que nadie abra la app. Si cambia, te
-avisa por Telegram (opcional).
+La tasa se actualiza **sola cada 15 minutos** con GitHub. Solo hay que poner
+**un secreto** en GitHub, como en TiendaMax.
 
-## 1. Sube los archivos
+## 1. Pon el token de elTOQUE
 
-Tienen que estar en el repositorio:
+1. Abre el repositorio **mannollubricantes21-lang/mannol** en GitHub.
+2. **Settings → Secrets and variables → Actions → New repository secret**.
+3. Name: `ELTOQUE_API_KEY` · Secret: tu token de elTOQUE (el mismo de TiendaMax).
+4. **Add secret**.
 
-- `.github/workflows/tasa-eltoque.yml`
-- `scripts/tasa-eltoque.mjs`
+Listo. No hace falta nada de Supabase.
 
-> Si al subir por la web la carpeta `.github` no aparece (algunos navegadores
-> no suben carpetas que empiezan por punto), créala a mano: **Add file → Create
-> new file**, escribe `.github/workflows/tasa-eltoque.yml` como nombre y pega el
-> contenido del archivo.
+## 2. Pruébalo (una vez)
 
-## 2. Pon los secretos
+1. Pestaña **Actions** (si sale un botón verde para activar los workflows, tócalo).
+2. A la izquierda: **Tasa elTOQUE** → **Run workflow** → **Run workflow**.
+3. En un minuto, dentro de la ejecución, **Leer tasa de elTOQUE** debe decir:
+   ```
+   Tasa elTOQUE API: USD 470 · EUR 520
+   tasa.json actualizado (USD 470 · EUR 520).
+   ```
+4. Aparece un archivo nuevo **tasa.json** en el repositorio. En 1–2 minutos
+   GitHub lo publica con la web y todos los almacenes usan esa tasa + el
+   margen de **Admin → Tasas** (+10 / +20 MN).
 
-En GitHub: **Settings → Secrets and variables → Actions → New repository secret**.
+Después corre sola. Solo hace un cambio en el repositorio cuando la tasa cambia.
 
-| Nombre | Qué es | Dónde se saca |
-|---|---|---|
-| `ELTOQUE_API_KEY` | Token de la API de elTOQUE | El mismo que usas en TiendaMax |
-| `SUPABASE_URL` | `https://xxxx.supabase.co` | Supabase → Project Settings → API |
-| `SUPABASE_SERVICE_ROLE_KEY` | Clave **service_role** | Supabase → Project Settings → API (la secreta) |
-| `TELEGRAM_BOT_TOKEN` | *(opcional)* Token del bot | El mismo `BOT_TOKEN` de TiendaMax |
-| `TELEGRAM_CHAT_ID` | *(opcional)* A quién avisar | Tu chat o el canal (ej. `@mi_canal` o `-100…`) |
+## Opcional
 
-La clave **service_role** solo va en los secretos de GitHub. **Nunca** en la app
-ni en ningún archivo.
-
-## 3. Pruébalo
-
-**Actions → Tasa elTOQUE → Supabase → Run workflow**. En un minuto verás algo así:
-
-```
-Tasa elTOQUE API: USD 470 · EUR 520
-Guardada. Al cliente: USD 480 MN · EUR 530 MN
-```
-
-El margen (+10 o +20 MN) es el de **Admin → Tasas**.
+| Secreto | Para qué |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Aviso en Telegram cuando cambia la tasa (puedes usar el bot de TiendaMax) |
+| `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | Guardarla también en Supabase (no hace falta) |
 
 ## Bueno saber
 
 - El reloj de GitHub no es exacto: a veces se retrasa 5–20 minutos.
 - GitHub apaga los trabajos programados si el repositorio pasa **60 días sin
   cambios**. Si pasa, entra en Actions y vuelve a activarlo.
-- Si elTOQUE no responde, se queda la última tasa guardada (no se rompe nada).
+- Si elTOQUE no responde, se mantiene la última tasa (no se rompe nada).
+- Si el token falla (`HTTP 401`), lee la tasa de la página pública de elTOQUE.
