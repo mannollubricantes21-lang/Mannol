@@ -11,15 +11,14 @@ import { APP_LABEL } from "../version.js";
 import { isSupabaseConfiguredAsync } from "../supabase.js";
 
 // v5.10.0: tasas del inicio en un solo sitio (vista + conversor)
-const DEFAULT_USD_IN_MN = 320;
-const DEFAULT_EUR_IN_MN = 345;
 function getHomeRates(state) {
   const mnRate = state.rates["MN"];
   const eurRate = state.rates["EUR"];
-  const usdInMN = mnRate && mnRate.rateUSD > 0 ? (1 / mnRate.rateUSD) : DEFAULT_USD_IN_MN;
+  // v5.39.0: sin tasa real se muestra «—» (antes salían 320 / 345 inventados)
+  const usdInMN = mnRate && mnRate.rateUSD > 0 ? (1 / mnRate.rateUSD) : null;
   const eurInMN = (mnRate && mnRate.rateUSD > 0 && eurRate && eurRate.rateUSD > 0)
     ? (eurRate.rateUSD / mnRate.rateUSD)
-    : DEFAULT_EUR_IN_MN;
+    : null;
   const markupPct = state.settings?.elToqueMarkup > 0 ? state.settings.elToqueMarkup : 0;
   return { usdInMN, eurInMN, markupPct, mnRate, eurRate };
 }
@@ -49,7 +48,9 @@ export function renderHomeView(navigate) {
   const eurSource = eurRate?.source || "manual";
   // v5.28.0: el margen real sale de Admin → Tasas (fijo en MN, p. ej. +10, o %)
   const rm = state._rateMarkup;
-  const markupText = rm && Number(rm.markupUsd) > 0
+  // v5.39.0: el margen sobre la tasa oficial solo lo ve el admin
+  const isAdminUser = state.currentUser?.role === "admin";
+  const markupText = isAdminUser && rm && Number(rm.markupUsd) > 0
     ? (rm.markupMode === "FIXED" ? `+${Number(rm.markupUsd)} MN por USD` : `+${Number(rm.markupUsd)}%`)
     : "";
 
@@ -139,16 +140,16 @@ export function renderHomeView(navigate) {
             <div class="premium-rate-tile premium-rate-tile-usd" role="button" tabindex="0" data-convert="USD" aria-label="Convertir desde USD">
               <div class="premium-rate-tile-currency">${icon("dollar", 14)} USD</div>
               <div class="premium-rate-tile-value">
-                ${usdInMN.toFixed(0)}<span style="font-size:0.6875rem;color:var(--text-muted);font-weight:600;margin-left:0.25rem">MN</span>
+                ${usdInMN ? usdInMN.toFixed(0) : "—"}<span style="font-size:0.6875rem;color:var(--text-muted);font-weight:600;margin-left:0.25rem">MN</span>
               </div>
-              <div class="premium-rate-tile-sub">1 USD = ${usdInMN.toFixed(0)} MN</div>
+              <div class="premium-rate-tile-sub">${usdInMN ? `1 USD = ${usdInMN.toFixed(0)} MN` : "Sin tasa real"}</div>
             </div>
             <div class="premium-rate-tile premium-rate-tile-eur" role="button" tabindex="0" data-convert="EUR" aria-label="Convertir desde EUR">
               <div class="premium-rate-tile-currency">${icon("euro", 14)} EUR</div>
               <div class="premium-rate-tile-value">
-                ${eurInMN.toFixed(0)}<span style="font-size:0.6875rem;color:var(--text-muted);font-weight:600;margin-left:0.25rem">MN</span>
+                ${eurInMN ? eurInMN.toFixed(0) : "—"}<span style="font-size:0.6875rem;color:var(--text-muted);font-weight:600;margin-left:0.25rem">MN</span>
               </div>
-              <div class="premium-rate-tile-sub">1 EUR = ${eurInMN.toFixed(0)} MN</div>
+              <div class="premium-rate-tile-sub">${eurInMN ? `1 EUR = ${eurInMN.toFixed(0)} MN` : "Sin tasa real"}</div>
             </div>
           </div>
           ${markupText ? `
@@ -388,6 +389,7 @@ export function mountHomeView(container, navigate) {
   // v5.10.0: conversor USD / EUR / MN con las tasas del día (las mismas de las tarjetas)
   function openConverter(initialFrom) {
     const rates = getHomeRates(store.getState());
+    if (!rates.usdInMN || !rates.eurInMN) { toast("Aún no hay una tasa real de elTOQUE. Avisa al admin.", "error", 4000); return; }
     const QUICK = { USD: [5, 10, 20, 50, 100], EUR: [5, 10, 20, 50, 100], MN: [500, 1000, 5000, 10000, 20000] };
     let from = initialFrom;
     if (!from) { try { from = localStorage.getItem("mannol_conv_from") || "USD"; } catch { from = "USD"; } }
@@ -405,7 +407,7 @@ export function mountHomeView(container, navigate) {
           </div>
           <div class="converter-quick" id="conv-quick"></div>
           <div class="converter-results" id="conv-results" aria-live="polite"></div>
-          <p class="converter-note">1 USD = ${+rates.usdInMN.toFixed(2)} MN · 1 EUR = ${+rates.eurInMN.toFixed(2)} MN${rates.markupPct > 0 ? ` · incluye margen +${rates.markupPct}%` : ""}</p>
+          <p class="converter-note">1 USD = ${+rates.usdInMN.toFixed(2)} MN · 1 EUR = ${+rates.eurInMN.toFixed(2)} MN${rates.markupPct > 0 && store.getState().currentUser?.role === "admin" ? ` · incluye margen +${rates.markupPct}%` : ""}</p>
         </div>
       `,
     });

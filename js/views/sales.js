@@ -140,8 +140,12 @@ export function mountSalesView(container, navigate) {
     if (saved && saved.def === mixCfg().def) mnSurchargeChoice = Number(saved.v);
   } catch {}
   let mnTouched = false; // el vendedor escribió el monto en MN a mano
+  // v5.39.0: el +10 / +20 solo se elige en Admin → Tasas. Los almacenes usan
+  // siempre el valor por defecto y no ven el desglose de la tasa.
+  const canPickSurcharge = () => store.getState().currentUser?.role === "admin";
   function currentSurcharge() {
     const cfg = mixCfg();
+    if (!canPickSurcharge()) return cfg.def;
     return mnSurchargeChoice != null && cfg.options.includes(mnSurchargeChoice) ? mnSurchargeChoice : cfg.def;
   }
   function setMnSurcharge(v) {
@@ -184,9 +188,8 @@ export function mountSalesView(container, navigate) {
     if (!base) return "Sin tasa de MN";
     const baseMN = Math.round(1 / base);
     const sc = currentSurcharge();
-    return sc > 0
-      ? `1 USD = <strong>${baseMN + sc} MN</strong> (${baseMN} + ${sc})`
-      : `1 USD = <strong>${baseMN} MN</strong>`;
+    // Solo el total: nunca la tasa real ni el recargo por separado
+    return `1 USD = <strong>${baseMN + sc} MN</strong>`;
   }
   function multiSummary() {
     return summarizeMultiPayment(multiPayments, roundCents(cartTotal()), multiRates());
@@ -546,7 +549,7 @@ export function mountSalesView(container, navigate) {
               </div>
             ` : `
               <!-- v5.20.0: recargo por USD cuando el resto se cobra en MN -->
-              ${mixCfg().options.length > 1 ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem">
+              ${canPickSurcharge() && mixCfg().options.length > 1 ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem">
                 <span class="text-xs text-muted">Resto en MN con recargo por USD:</span>
                 <div class="seg-group" role="group" aria-label="Recargo por USD al cobrar en MN">
                   ${mixCfg().options.map((v) => `<button type="button" class="seg ${currentSurcharge() === v ? 'seg-on' : ''}" data-mix-surcharge="${v}" aria-pressed="${currentSurcharge() === v}">${v === 0 ? 'Tasa' : '+' + v}</button>`).join("")}

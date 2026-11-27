@@ -18,9 +18,9 @@ const sale = {
 
 describe("v5.21.0 · ticket", () => {
   it("muestra la tasa con recargo en el pago en MN", () => {
-    expect(mnRateLabel(sale.payments[1])).toBe("1 USD = 330 MN · +10");
+    expect(mnRateLabel(sale.payments[1])).toBe("1 USD = 330 MN");
     expect(mnRateLabel(sale.payments[0])).toBe("");
-    expect(paymentSummary(sale, fmt)).toBe("USD USD 5.00 + MN MN 12870.00 (1 USD = 330 MN · +10)");
+    expect(paymentSummary(sale, fmt)).toBe("USD USD 5.00 + MN MN 12870.00 (1 USD = 330 MN)");
   });
   it("arma el texto del ticket", () => {
     const t = buildTicketText(sale, fmt);

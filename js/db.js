@@ -2496,7 +2496,9 @@ export function subscribeRates(cb) {
       // La de GitHub (tasa.json) si es más nueva que la de la tabla
       try {
         const tasa = await fetchPublishedTasa();
-        const tableT = Math.max(0, ...table.map((r) => (typeof r.updatedAt === "number" ? r.updatedAt : Date.parse(r.updatedAt) || 0)));
+        // v5.39.0: solo cuentan las filas de una fuente real; una fila «manual» (p. ej. 320 + 10)
+        // con fecha nueva tapaba la tasa publicada y se quedaba para siempre
+        const tableT = Math.max(0, ...table.filter((r) => isRealSource(r.source)).map((r) => (typeof r.updatedAt === "number" ? r.updatedAt : Date.parse(r.updatedAt) || 0)));
         if (tasa && tasa.updatedAt > tableT) { cb(await ratesFromTasa(tasa)); return; }
       } catch {}
       // La tabla `rates` puede estar vacía y tasa.json sin publicar: sin MN no
@@ -2532,6 +2534,18 @@ export async function saveRate(rate) {
 // =====================================================
 const okRate = (v) => Number.isFinite(v) && v > 100 && v < 3000;
 
+// v5.39.0: 320 / 345 son los valores de fábrica de «tasa manual» y 305 / 332
+// los de ejemplo: nunca son una tasa real. Antes se cobraba con ellos (320 + 10
+// = 330 MN cuando el USD real ya estaba en ~980).
+const FACTORY_MANUAL = { usd: 320, eur: 345 };
+const realManual = (v, factory) => (okRate(Number(v)) && Number(v) !== factory ? Number(v) : null);
+/** Última tasa REAL de elTOQUE guardada en la configuración (o null). */
+function realLastRates(cfg) {
+  const placeholder = cfg.lastUsdRate === DEMO_RATE_CONFIG.lastUsdRate && cfg.lastEurRate === DEMO_RATE_CONFIG.lastEurRate;
+  return { usd: placeholder || !okRate(Number(cfg.lastUsdRate)) ? null : Number(cfg.lastUsdRate), eur: placeholder || !okRate(Number(cfg.lastEurRate)) ? null : Number(cfg.lastEurRate) };
+}
+const isRealSource = (s) => s === "api" || s === "eltoque";
+
 /** { usd, eur, updatedAt(ms), source } de tasa.json, o la última leída (sin red). */
 export async function fetchPublishedTasa() {
   try {
@@ -2553,13 +2567,16 @@ async function ratesFromTasa(tasa, config) {
   const cfg = config || await getRateConfig();
   const appliedUsd = applyMarkup(tasa.usd, cfg.markupMode, cfg.markupUsd) || tasa.usd;
   const rawEur = tasa.eur || cfg.lastEurRate || null;
-  const appliedEur = (rawEur && applyMarkup(rawEur, cfg.markupMode, cfg.markupEur)) || cfg.manualEurRate || 345;
+  const appliedEur = (rawEur && applyMarkup(rawEur, cfg.markupMode, cfg.markupEur)) || realManual(cfg.manualEurRate, FACTORY_MANUAL.eur) || appliedUsd;
   const t = tasa.updatedAt || Date.now();
   const row = (currency, rateUSD) => ({ id: currency, currency, rateUSD, source: "eltoque", updatedAt: t });
   return [row("USD", 1), row("MN", 1 / appliedUsd), row("EUR", appliedEur / appliedUsd), row("TRANSFERENCIA", 1 / appliedUsd)];
 }
 
-const hasMnRate = (list) => (list || []).some((r) => r && r.currency === "MN" && Number(r.rateUSD) > 0);
+// v5.39.0: una fila «manual» de la tabla es solo el eco de 320 + margen: se
+// recalcula desde la configuración en vez de fiarse de ella.
+const isManualRow = (r) => r && r.source === "manual";
+const hasMnRate = (list) => (list || []).some((r) => r && r.currency === "MN" && Number(r.rateUSD) > 0 && !isManualRow(r));
 
 /**
  * v5.38.0: si la lista de tasas no trae MN (tabla vacía y tasa.json sin
@@ -2570,18 +2587,19 @@ async function ensureMnRate(list) {
   if (hasMnRate(list)) return list;
   try {
     const cfg = await getRateConfig();
-    // Los valores de ejemplo (305 / 332) no son tasas reales: nunca se cobra con ellos
-    const isPlaceholder = cfg.lastUsdRate === DEMO_RATE_CONFIG.lastUsdRate && cfg.lastEurRate === DEMO_RATE_CONFIG.lastEurRate;
-    const lastUsd = isPlaceholder ? null : cfg.lastUsdRate;
-    const usd = applyMarkup(lastUsd || cfg.manualUsdRate, cfg.markupMode, cfg.markupUsd);
-    if (!okRate(usd)) return list;
-    const rawEur = (isPlaceholder ? null : cfg.lastEurRate) || cfg.manualEurRate;
-    const eur = applyMarkup(rawEur, cfg.markupMode, cfg.markupEur) || cfg.manualEurRate || 345;
+    // Los valores de ejemplo / de fábrica (305, 332, 320, 345) no son tasas reales: nunca se cobra con ellos
+    const last = realLastRates(cfg);
+    const lastUsd = last.usd;
+    const manualUsd = realManual(cfg.manualUsdRate, FACTORY_MANUAL.usd);
+    const usd = applyMarkup(lastUsd || manualUsd, cfg.markupMode, cfg.markupUsd);
+    if (!okRate(usd)) return (list || []).filter((r) => !isManualRow(r)); // sin tasa real: sin MN (no se cobra con una inventada)
+    const rawEur = last.eur || realManual(cfg.manualEurRate, FACTORY_MANUAL.eur);
+    const eur = (rawEur && applyMarkup(rawEur, cfg.markupMode, cfg.markupEur)) || usd;
     const t = cfg.lastSyncAt || Date.now();
     const source = lastUsd ? "api" : "manual";
     const row = (currency, rateUSD) => ({ id: currency, currency, rateUSD, source, updatedAt: t });
     return [row("USD", 1), row("MN", 1 / usd), row("EUR", eur / usd), row("TRANSFERENCIA", 1 / usd)];
-  } catch { return list; }
+  } catch { return (list || []).filter((r) => !isManualRow(r)); }
 }
 
 export async function getTodayRates() {
@@ -2590,7 +2608,7 @@ export async function getTodayRates() {
 
   // v5.37.0: si GitHub publicó una tasa más nueva que la guardada, manda esa
   const [cfg0, tasa] = await Promise.all([getRateConfig(), fetchPublishedTasa()]);
-  if (tasa && tasa.updatedAt > (Number(cfg0.lastSyncAt) || 0)) {
+  if (tasa && (tasa.updatedAt > (Number(cfg0.lastSyncAt) || 0) || !realLastRates(cfg0).usd)) {
     const rawEur = tasa.eur || cfg0.lastEurRate || null;
     return {
       usd: applyMarkup(tasa.usd, cfg0.markupMode, cfg0.markupUsd),
@@ -2734,7 +2752,7 @@ export async function syncRatesFromElToque() {
 
   if (!newUsd && config.apiToken) {
     try {
-      const res = await fetch(config.apiUrl || "https://api.eltoque.com/v1/currency/rates", {
+      const res = await fetch(config.apiUrl && !/api\.eltoque\.com/i.test(config.apiUrl) ? config.apiUrl : "https://tasas.eltoque.com/v1/trmi", {
         headers: {
           Accept: "application/json",
           ...(config.apiToken ? { Authorization: `Bearer ${config.apiToken}` } : {}),
@@ -2744,7 +2762,8 @@ export async function syncRatesFromElToque() {
       if (res.ok) {
         const data = await res.json();
         let rates = null;
-        if (data?.rates) rates = data.rates;
+        if (data?.tasas) rates = { CUP: data.tasas.USD, EUR: data.tasas.ECU ?? data.tasas.EUR };
+        else if (data?.rates) rates = data.rates;
         else if (data?.data?.rates) rates = data.data.rates;
         else if (Array.isArray(data)) {
           rates = {};
@@ -2760,15 +2779,21 @@ export async function syncRatesFromElToque() {
     }
   }
 
+  // v5.39.0: sin tasa real NO se guarda nada (antes se escribía 320 + 10 = 330
+  // como si fuera de elTOQUE y tapaba la tasa publicada por GitHub)
+  const keep = realLastRates(config);
+  if (!okRate(newUsd) && !keep.usd) {
+    throw new Error("Sin tasa real de elTOQUE: falta publicar tasa.json (GitHub) o poner la tasa en Admin → Tasas.");
+  }
   const update = {
     lastSyncAt: now,
-    lastUsdRate: newUsd || config.lastUsdRate || null,
-    lastEurRate: newEur || config.lastEurRate || null,
+    lastUsdRate: okRate(newUsd) ? newUsd : keep.usd,
+    lastEurRate: okRate(newEur) ? newEur : keep.eur,
   };
   await saveRateConfig(update);
 
-  const appliedUsd = applyMarkup(update.lastUsdRate || config.manualUsdRate, config.markupMode, config.markupUsd) || config.manualUsdRate || 320;
-  const appliedEur = applyMarkup(update.lastEurRate || config.manualEurRate, config.markupMode, config.markupEur) || config.manualEurRate || 345;
+  const appliedUsd = applyMarkup(update.lastUsdRate, config.markupMode, config.markupUsd);
+  const appliedEur = (update.lastEurRate && applyMarkup(update.lastEurRate, config.markupMode, config.markupEur)) || realManual(config.manualEurRate, FACTORY_MANUAL.eur) || appliedUsd;
   await saveRate({ id: "USD", currency: "USD", rateUSD: 1, source, updatedAt: now });
   await saveRate({ id: "MN", currency: "MN", rateUSD: 1 / appliedUsd, source, updatedAt: now });
   await saveRate({ id: "EUR", currency: "EUR", rateUSD: appliedEur / appliedUsd, source, updatedAt: now });
@@ -2782,10 +2807,10 @@ export async function syncRatesFromElToque() {
 export async function syncElToqueRates(markup) {
   const result = await syncRatesFromElToque();
   const config = await getRateConfig();
-  const usd = result.usd || config.manualUsdRate || 320;
-  const eur = result.eur || config.manualEurRate || 345;
+  const usd = result.usd;
+  const eur = result.eur || usd;
   const appliedUsd = applyMarkup(usd, config.markupMode, config.markupUsd) || usd;
-  const appliedEur = applyMarkup(eur, config.markupMode, config.markupEur) || eur;
+  const appliedEur = (result.eur && applyMarkup(eur, config.markupMode, config.markupEur)) || realManual(config.manualEurRate, FACTORY_MANUAL.eur) || appliedUsd;
   const now = Date.now();
   return [
     { id: "USD", currency: "USD", rateUSD: 1, source: result.source, updatedAt: now },

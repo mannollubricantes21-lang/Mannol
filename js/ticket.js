@@ -51,14 +51,13 @@ export function paymentSummary(sale, fmt) {
   return `${c === "TRANSFERENCIA" ? "Transf." : c} ${fmt(amount, cur === "TRANSFERENCIA" ? "USD" : cur)}`;
 }
 
-/** Para una línea de pago en MN: «1 USD = 330 MN (+10)». */
+/** Para una línea de pago en MN: «1 USD = 330 MN» (v5.39.0: sin desglosar el recargo). */
 export function mnRateLabel(line) {
   if (!line || line.currency !== "MN") return "";
   const r = Number(line.exchangeRate);
   if (!(r > 0)) return "";
   const mn = Math.round(1 / r);
-  const extra = Number(line.surchargeMNPerUSD) || 0;
-  return `1 USD = ${mn} MN${extra > 0 ? ` · +${extra}` : ""}`;
+  return `1 USD = ${mn} MN`;
 }
 
 /**

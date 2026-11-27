@@ -1,5 +1,25 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.39.0 (2026-11-27) — La tasa real y el +10/+20 solo se ven en Admin
+
+> Sin SQL.
+
+- Los almacenes ya no pueden cambiar el recargo +10/+20 del pago mixto: los
+  botones salieron del cobro. Se cambia solo en Admin → Tasas y todos los
+  almacenes usan el valor por defecto que ponga el admin.
+- Los almacenes ven únicamente el total («1 USD = 330 MN»), nunca la tasa real
+  ni el desglose («320 + 10»): ni en el cobro, ni en el ticket, ni en el
+  historial, ni en «Tasas del día» ni en el conversor. El margen solo lo ve el
+  admin.
+- **La tasa ya no se inventa.** Si no llegaba la tasa real de elTOQUE, la app
+  cobraba con el valor de fábrica (320) + margen = 330 MN (con el USD real en
+  ~980) y además ese valor falso «tapaba» a tasa.json. Ahora: 320 / 345 / 305 /
+  332 nunca se usan como tasa; un fallo de sincronización ya no guarda nada
+  inventado; tasa.json manda mientras no haya otra tasa real; y sin tasa real
+  se ve «—» / «Sin tasa real» en vez de un número falso.
+- Lo que hace falta del lado de GitHub para que llegue la tasa: ver
+  INSTRUCCIONES-TASA.md (secreto `ELTOQUE_API_KEY` y «Run workflow»).
+
 ## v5.38.0 (2026-11-27) — Pago mixto siempre con tasa de MN
 
 > Sin SQL.
