@@ -17,6 +17,11 @@
 //   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   (opcionales) para el aviso
 //   ELTOQUE_API_URL            (opcional) si elTOQUE te dio otra dirección
 // Sin dependencias: Node 20 trae fetch.
+//
+// v5.39.1: si TODAS las fuentes fallan (API + página pública + Wayback), el
+// proceso sale con error (exit 1) y un mensaje accionable — antes salía en
+// silencio con exit 0 y el run mostraba un check verde sin haber publicado
+// tasa.json.
 // =====================================================
 
 export const DEFAULT_API_URL = "https://tasas.eltoque.com/v1/trmi";
@@ -132,6 +137,23 @@ export function buildRateRows({ usd, eur }, cfg, nowIso) {
 /** ¿Cambió la tasa de forma visible (en números enteros)? */
 export const changed = (prev, next) => reasonable(next) && (!reasonable(Number(prev)) || Math.round(Number(prev)) !== Math.round(next));
 
+/**
+ * v5.39.1 — mensaje accionable cuando fallan todas las fuentes.
+ * @param {string} apiErr error de la API (fetchFromApi)
+ * @param {string} webErr error de la página pública / Wayback (fetchFromWeb)
+ */
+export function failureHint(apiErr, webErr) {
+  const api = String(apiErr || ""), web = String(webErr || "");
+  const base = `No se pudo leer elTOQUE. API: ${api} · Página/Wayback: ${web}`;
+  if (/Falta ELTOQUE_API_KEY/i.test(api)) {
+    return `${base}.\n→ El secreto ELTOQUE_API_KEY no existe o está vacío. Créalo en el repositorio: Settings → Secrets and variables → Actions → New repository secret (NO como secret de environment, este workflow no lo vería).`;
+  }
+  if (/\b(401|403|422)\b/.test(api)) {
+    return `${base}.\n→ El token fue rechazado por elTOQUE. Revísalo o renuévalo y actualiza el secreto ELTOQUE_API_KEY. Pruébalo a mano: curl -H "Authorization: Bearer TU_TOKEN" https://tasas.eltoque.com/v1/trmi (debe devolver JSON con las tasas).`;
+  }
+  return `${base}. Se mantiene la última tasa publicada; si el problema persiste, revisa ELTOQUE_API_KEY y la conectividad del runner.`;
+}
+
 async function supa(fetchFn, base, key, path, { method = "GET", body, prefer } = {}) {
   const r = await fetchFn(`${base.replace(/\/$/, "")}/rest/v1/${path}`, {
     method,
@@ -178,9 +200,9 @@ export async function main({ env = process.env, fetchFn = fetch, log = console.l
     try {
       t = await fetchFromWeb({ fetchFn });
     } catch (e2) {
-      // Sin tasa nueva: se queda la última guardada (los almacenes siguen vendiendo)
-      log(`⚠️ No se pudo leer elTOQUE (${e2.message}). Se mantiene la última tasa.`);
-      return { skipped: true };
+      // v5.39.1: fallar de verdad. Antes se salía con exit 0 y el run se veía
+      // en verde sin haber publicado tasa.json. El catch de abajo hace exit 1.
+      throw new Error(failureHint(e.message, e2.message));
     }
   }
   log(`Tasa ${t.source}: USD ${t.usd}${reasonable(t.eur) ? ` · EUR ${t.eur}` : ""}`);
@@ -230,5 +252,10 @@ export async function main({ env = process.env, fetchFn = fetch, log = console.l
 
 // Ejecutado directamente (no al importarlo en las pruebas)
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop())) {
-  main().catch((e) => { console.error("❌", e.message); process.exit(1); });
+  main().catch((e) => {
+    console.error("❌", e.message);
+    // Anotación de error en el resumen del run de GitHub Actions (v5.39.1)
+    console.error("::error::" + String(e.message).replace(/\n/g, " "));
+    process.exit(1);
+  });
 }
