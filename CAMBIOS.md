@@ -1,5 +1,40 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.36.0 (2026-11-26) — Pago mixto bien guardado · «Revisar» hasta confirmar el mínimo
+
+> Sin SQL.
+
+- **Pago mixto**: la venta guarda como moneda la que más se cobró (antes, la
+  que estaba marcada antes de pasar a mixto, p. ej. «Transf.»). La forma de
+  pago y la tarjeta solo cuentan si de verdad hubo transferencia.
+- **Venta mayorista → «Revisar»**: el mínimo de cajas sale marcado en
+  amarillo; si se guarda sin cambiarlo, pregunta «¿De verdad empieza desde
+  1 caja?». Solo al confirmar (o al cambiarlo) se quita «Revisar».
+
+## v5.35.0 (2026-11-26) — Vender sin conexión siempre · Arreglos de la prueba completa
+
+> Sin SQL.
+
+- **Sin conexión el catálogo ya carga siempre.** El catálogo, el stock, las
+  marcas, los tipos, los gestores, las tarjetas y la **tasa** se guardan
+  también en el propio equipo. Si no hay red (o si la nube tarda, por ejemplo
+  con una sesión vencida que intenta renovarse), se usa esa copia al instante
+  y se puede vender; la venta queda en espera y sube sola. Antes, en un
+  teléfono donde también se había entrado como admin, el catálogo salía vacío
+  y sin conexión la tasa caía a la de ejemplo.
+- «Volver» en la venta abierta desde Caja o Inventario sacaba de la app:
+  ahora vuelve a esa sección (también con el «atrás» del teléfono).
+- La barra «Cobrar» tapaba «Gestor y nota» en el móvil.
+- Hoy: el desglose por moneda mostraba el total en USD con símbolo de MN/EUR;
+  ahora cada moneda en su moneda. Las ventas con pago mixto dicen «Mixto».
+- El «+» de los botones salía diminuto; «Iconos pequeños» con letra grande
+  se salía de la tarjeta; el aviso «Sin conexión» salía repetido en la venta.
+- Admin: Ajustes / GitHub / Tasas ya no se pintan encima de otra sección si
+  se cambia rápido; CSV con nombre y fecha correctos (antes «.csv-fecha.csv»
+  y con el día siguiente de noche); totales «Pagado / Falta» y botones de
+  Productos sin salirse en el móvil; «1 caja» (no «1 cajas»); guardar gestor
+  o tasas muestra el error real y no guarda dos veces.
+
 ## v5.34.0 (2026-11-26) — Tasa automática por GitHub · Pago a vendedores · Caja sin cerrar · Copia en Excel
 
 > **SQL**: ejecutar `pagos-vendedores-v5.34.sql` (o `instalar.sql`, sección 13).

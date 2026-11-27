@@ -361,6 +361,29 @@ function mirrorLoad(name) {
     return v && v.data !== undefined ? v.data : null;
   } catch { return null; }
 }
+// v5.35.0: si la nube tarda (sin conexión, o con una sesión vencida que
+// supabase-js intenta renovar durante ~30 s), se usa la copia del equipo.
+const offlineNow = () => typeof navigator !== "undefined" && navigator.onLine === false;
+const slowMs = () => (offlineNow() ? 1500 : 8000);
+/** Rechaza con SLOW_MIRROR si tarda y HAY copia guardada (si no, espera). */
+function slowGuard(promise, mirrorName) {
+  if (mirrorLoad(mirrorName) == null) return Promise.resolve(promise);
+  let t;
+  return Promise.race([
+    Promise.resolve(promise).finally(() => clearTimeout(t)),
+    new Promise((_, rej) => { t = setTimeout(() => rej(Object.assign(new Error("La nube tarda: se usa la copia del equipo"), { code: "SLOW_MIRROR" })), slowMs()); }),
+  ]);
+}
+/** Entrega la copia si en `slowMs` no llegó nada; devuelve cómo cancelarlo. */
+function earlyMirror(mirrorName, isDelivered, deliver) {
+  const t = setTimeout(() => {
+    if (isDelivered()) return;
+    const m = mirrorLoad(mirrorName);
+    if (m != null) deliver(m);
+  }, slowMs());
+  return () => clearTimeout(t);
+}
+
 /** Fecha (ms) de la última copia buena guardada de `name`, o null. */
 export function getMirrorTimestamp(name) {
   try {
@@ -395,13 +418,19 @@ export async function warmOfflineCache({ force = false } = {}) {
     .map((w) => w.id);
   const tasks = [
     // mismas consultas que subscribeProducts / subscribeStock / subscribeCategories
-    () => s.from("products").select("*").order("created_at", { ascending: true }),
-    () => s.from("categories").select("*").order("sort_order", { ascending: true }),
+    // v5.35.0: además se guarda una copia en este equipo (no depende del service worker)
+    () => listProducts(),
+    () => listCategories(),
     () => fetchBrands(),
     () => listCards(),
     () => listManagers(),
     () => getSettings(),
-    ...ids.map((id) => () => s.from("stock").select("*").eq("warehouse_id", id)),
+    () => getRateConfig(),
+    ...ids.map((id) => async () => {
+      const r = await s.from("stock").select("*").eq("warehouse_id", id);
+      if (!r.error) mirrorSave(`stock:${id}`, rows(r.data));
+      return r;
+    }),
   ];
   let ok = 0;
   for (const task of tasks) {
@@ -464,13 +493,16 @@ function toRow(obj) {
 function subscribeTable({ channelName, table, filter, order, fn, demoData, isDemoMode, select }) {
   let unsub = noopUnsub;
   let delivered = false; // v5.13.0: con red inestable se conserva la última lista buena
+  // v5.35.0: copia en este equipo → sin conexión se ve la última lista buena
+  const mirrorName = `t:${table}${filter ? ":" + JSON.stringify(filter) : ""}`;
+  const fromMirror = () => { const m = mirrorLoad(mirrorName); fn(Array.isArray(m) ? m : []); };
   (async () => {
     if (isDemoMode) {
       cb_with_demo();
       return;
     }
     const s = await sb();
-    if (!s) { fn([]); return; }
+    if (!s) { fromMirror(); return; }
     try {
       // Initial fetch
       await refresh();
@@ -488,13 +520,14 @@ function subscribeTable({ channelName, table, filter, order, fn, demoData, isDem
       };
     } catch (err) {
       console.error(`subscribe ${table} failed:`, err);
-      if (!delivered) fn([]);
+      if (!delivered) fromMirror();
     }
   })();
 
   async function refresh() {
     const s = await sb();
-    if (!s) { if (!delivered) fn([]); return; }
+    if (!s) { if (!delivered) fromMirror(); return; }
+    const cancelEarly = earlyMirror(mirrorName, () => delivered, (m) => { delivered = true; fn(m); });
     try {
       let query = s.from(table).select(select || "*");
       if (filter) {
@@ -507,11 +540,15 @@ function subscribeTable({ channelName, table, filter, order, fn, demoData, isDem
       if (order) query = query.order(order[0], { ascending: order[1] === "asc" });
       const { data, error } = await query;
       if (error) throw error;
-      fn(rows(data));
+      const list = rows(data);
+      mirrorSave(mirrorName, list);
+      fn(list);
       delivered = true;
     } catch (err) {
       console.error(`refresh ${table} failed:`, err);
-      if (!delivered) fn([]);
+      if (!delivered) fromMirror();
+    } finally {
+      cancelEarly();
     }
   }
 
@@ -555,9 +592,9 @@ export async function getSettings() {
     const BASE_COLS = "id, el_toque_enabled, el_toque_markup, business_name, last_rate_sync, weekend_warehouse_id, weekend_redirect_enabled";
     const MIX_COLS = `${BASE_COLS}, mix_surcharge_options, mix_surcharge_default`;
     const colErr = (e) => e && (String(e.code) === "42703" || /does not exist|permission denied/i.test(e.message || ""));
-    let { data, error } = await s.from("settings")
+    let { data, error } = await slowGuard(s.from("settings")
       .select(`${MIX_COLS}, vendor_sale_rule`)
-      .eq("id", "global").maybeSingle();
+      .eq("id", "global").maybeSingle(), "settings");
     // v5.26.0 / v5.21.0: si aún no se ejecutó el SQL (columnas nuevas), listas más cortas
     if (colErr(error)) ({ data, error } = await s.from("settings").select(MIX_COLS).eq("id", "global").maybeSingle());
     if (colErr(error)) ({ data, error } = await s.from("settings").select(BASE_COLS).eq("id", "global").maybeSingle());
@@ -827,9 +864,9 @@ export async function listWarehouses() {
     return _whCache.data.map((w) => ({ ...w }));
   }
   const fetchList = async (cols) => {
-    const { data, error } = await s.from("warehouses")
+    const { data, error } = await slowGuard(s.from("warehouses")
       .select(cols)
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: true }), "warehouses");
     if (error) throw error;
     return rows(data);
   };
@@ -1335,21 +1372,23 @@ let _brandsTableMissing = false;
 export async function fetchBrands() {
   if (await isDemo()) return { brands: loadDemoCatalog().brands, missingTable: false };
   const s = await sb();
-  if (!s) return { brands: [], missingTable: false };
+  if (!s) return { brands: mirrorLoad("brands") || [], missingTable: false };
   try {
-    const { data, error } = await s.from("brands").select("*")
+    const { data, error } = await slowGuard(s.from("brands").select("*")
       .order("sort_order", { ascending: true })
-      .order("name", { ascending: true });
+      .order("name", { ascending: true }), "brands");
     if (error) throw error;
     _brandsTableMissing = false;
-    return { brands: rows(data), missingTable: false };
+    const list = rows(data);
+    mirrorSave("brands", list); // v5.35.0: para abrir sin conexión
+    return { brands: list, missingTable: false };
   } catch (err) {
     if (isMissingTableError(err, "brands")) {
       _brandsTableMissing = true;
       return { brands: [], missingTable: true };
     }
     console.error("fetchBrands failed:", err);
-    return { brands: [], missingTable: false, error: err?.message || String(err) };
+    return { brands: mirrorLoad("brands") || [], missingTable: false, error: err?.message || String(err) };
   }
 }
 
@@ -1582,7 +1621,9 @@ export function subscribeProducts(cb) {
     const demo = await isDemo();
     if (demo) { unsub = subscribeDemoCatalog((c) => c.products, cb); return; }
     const s = await sb();
-    if (!s) { cb([]); return; }
+    // v5.35.0: sin conexión → el último catálogo guardado en este equipo
+    if (!s) { cb(mirrorLoad("products") || []); return; }
+    let delivered = false;
     try {
       await refresh();
       const channel = s.channel("products-ch");
@@ -1591,17 +1632,24 @@ export function subscribeProducts(cb) {
       unsub = () => { try { s.client.removeChannel(channel); } catch {} };
     } catch (err) {
       console.error("subscribeProducts failed:", err);
-      cb([]);
+      if (!delivered) cb(mirrorLoad("products") || []);
     }
     async function refresh() {
+      const cancelEarly = earlyMirror("products", () => delivered, (m) => { delivered = true; cb(m); });
       try {
         const { data, error } = await s.from("products").select("*").order("created_at", { ascending: true });
         if (error) throw error;
         recordDataOk("products"); // v5.17: para «datos de hace X» en el banner
-        cb(rows(data));
+        const list = rows(data);
+        mirrorSave("products", list);
+        delivered = true;
+        cb(list);
       } catch (err) {
         console.error("refresh products failed:", err);
-        cb([]);
+        // v5.35.0: antes quedaba VACÍO sin conexión (no se podía vender)
+        if (!delivered) { const m = mirrorLoad("products"); if (m) { delivered = true; cb(m); } else cb([]); }
+      } finally {
+        cancelEarly();
       }
     }
   })();
@@ -1793,13 +1841,15 @@ export async function listProducts() {
   const demo = await isDemo();
   if (demo) return loadDemoCatalog().products;
   const s = await sb();
-  if (!s) return [];
+  if (!s) return mirrorLoad("products") || [];
   try {
-    const { data, error } = await s.from("products").select("*").order("created_at", { ascending: true });
+    const { data, error } = await slowGuard(s.from("products").select("*").order("created_at", { ascending: true }), "products");
     if (error) throw error;
-    return rows(data);
+    const list = rows(data);
+    mirrorSave("products", list);
+    return list;
   } catch {
-    return [];
+    return mirrorLoad("products") || [];
   }
 }
 
@@ -1810,14 +1860,16 @@ export async function listCategories() {
   const demo = await isDemo();
   if (demo) return loadDemoCatalog().categories;
   const s = await sb();
-  if (!s) return [];
+  if (!s) return mirrorLoad("t:categories") || [];
   try {
     // BUG FIX: usar sort_order consistentemente (antes usaba sortOrder que no existe en DB)
-    const { data, error } = await s.from("categories").select("*").order("sort_order", { ascending: true });
+    const { data, error } = await slowGuard(s.from("categories").select("*").order("sort_order", { ascending: true }), "t:categories");
     if (error) throw error;
-    return rows(data);
+    const list = rows(data);
+    mirrorSave("t:categories", list);
+    return list;
   } catch {
-    return [];
+    return mirrorLoad("t:categories") || [];
   }
 }
 
@@ -1862,7 +1914,7 @@ export function subscribeStock(warehouseId, cb) {
     const demo = await isDemo();
     if (demo) { last = DEMO_STOCK.filter((s) => s.warehouseId === warehouseId); emit(); return; }
     const s = await sb();
-    if (!s) { last = []; emit(); return; }
+    if (!s) { last = mirrorLoad(`stock:${warehouseId}`) || []; emit(); return; }
     try {
       refreshFn = refresh;
       await refresh();
@@ -1875,17 +1927,21 @@ export function subscribeStock(warehouseId, cb) {
       unsub = () => { try { s.client.removeChannel(channel); } catch {} };
     } catch (err) {
       console.error("subscribeStock failed:", err);
-      if (!last) { last = []; emit(); }
+      if (!last) { last = mirrorLoad(`stock:${warehouseId}`) || []; emit(); }
     }
     async function refresh() {
+      const cancelEarly = earlyMirror(`stock:${warehouseId}`, () => !!last, (m) => { last = m; emit(); });
       try {
         const { data, error } = await s.from("stock").select("*").eq("warehouse_id", warehouseId);
         if (error) throw error;
         recordDataOk(`stock:${warehouseId}`); // v5.17: «stock de hace X min»
         last = rows(data);
+        mirrorSave(`stock:${warehouseId}`, last); // v5.35.0: para vender sin conexión
       } catch (err) {
         console.error("refresh stock failed:", err);
-        if (!last) last = []; // se conserva el último stock bueno
+        if (!last) last = mirrorLoad(`stock:${warehouseId}`) || []; // se conserva el último stock bueno
+      } finally {
+        cancelEarly();
       }
       emit();
     }
@@ -2463,7 +2519,8 @@ export async function getTodayRates() {
   const isStale = !config.lastSyncAt || (now - config.lastSyncAt > cacheTtlMs);
 
   // Auto-sync si está habilitado y el caché está vencido
-  if (config.autoSync && isStale) {
+  // v5.35.0: sin conexión no se intenta (antes esperaba a que fallara)
+  if (config.autoSync && isStale && !offlineNow()) {
     try { await syncRatesFromElToque(); } catch {}
   }
 
@@ -2529,12 +2586,15 @@ export async function getRateConfig({ withToken = false } = {}) {
   const demo = await isDemo();
   if (demo) return { ...DEMO_RATE_CONFIG };
   const s = await sb();
-  if (!s) return { ...DEMO_RATE_CONFIG };
+  // v5.35.0: sin conexión, la última tasa REAL guardada (antes: la de ejemplo)
+  const lastGood = () => { const m = mirrorLoad("rate_config"); return m ? { ...DEMO_RATE_CONFIG, ...m, apiToken: null } : { ...DEMO_RATE_CONFIG }; };
+  if (!s) return lastGood();
   try {
-    const { data, error } = await s.from("rate_config").select(RATE_CONFIG_COLUMNS).eq("id", "default").maybeSingle();
+    const { data, error } = await slowGuard(s.from("rate_config").select(RATE_CONFIG_COLUMNS).eq("id", "default").maybeSingle(), "rate_config");
     if (error) throw error;
     if (data) {
       const cfg = { ...DEMO_RATE_CONFIG, ...row(data), apiToken: null };
+      mirrorSave("rate_config", { ...cfg, apiToken: null });
       if (withToken) cfg.apiToken = await getRateApiToken();
       return cfg;
     }
@@ -2543,7 +2603,7 @@ export async function getRateConfig({ withToken = false } = {}) {
     await s.from("rate_config").insert(r).catch(() => {});
     return { ...DEMO_RATE_CONFIG };
   } catch {
-    return { ...DEMO_RATE_CONFIG };
+    return lastGood();
   }
 }
 
@@ -3177,13 +3237,13 @@ export async function listManagers() {
   if (!s) return mirrorLoad("managers") || [];
   try {
     // Select managers + join warehouses para LOCAL
-    const { data, error } = await s
+    const { data, error } = await slowGuard(s
       .from("managers")
       .select(`
         *,
         warehouse:warehouse_id ( id, name, code )
       `)
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: true }), "managers");
     if (error) throw error;
     // Aplanar el join
     const list = (data || []).map((row) => {
@@ -3261,9 +3321,9 @@ export async function listCards() {
   try {
     // v5.17: columnas seguras — a anon solo se leen los últimos 4 dígitos
     // (last4, columna generada). El admin ve el número completo con listCardsAdmin.
-    const { data, error } = await s.from("cards")
+    const { data, error } = await slowGuard(s.from("cards")
       .select("id, name, bank, active, created_at, initial_balance, balance_currency, last4")
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: true }), "cards");
     if (error) throw error;
     const list = rows(data);
     mirrorSave("cards", list);

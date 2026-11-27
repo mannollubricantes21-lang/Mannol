@@ -260,7 +260,9 @@ export function mountDashboardView(container, navigate) {
           const url = new URL(window.location.href);
           url.searchParams.set("view", "dashboard");
           if (view === "dashboard") url.searchParams.delete("tab"); else url.searchParams.set("tab", view);
-          window.history.replaceState(view === "dashboard" ? {} : { mannolTab: view }, "", url.toString());
+          // v5.35.0: una sección NO es una pantalla apilada (mannolTab): si lo
+          // fuera, «Vender» desde Caja no apilaba y «Volver» salía de la app
+          window.history.replaceState(view === "dashboard" ? {} : { mannolSection: view }, "", url.toString());
         } catch {}
         activeView = view;
         window.dispatchEvent(new CustomEvent("mannol:wi-section", { detail: { section: WI_SECTION[view] } }));
@@ -281,7 +283,7 @@ export function mountDashboardView(container, navigate) {
         if (view === "dashboard") url.searchParams.delete("tab");
         else url.searchParams.set("tab", view);
         const state = view === "dashboard" ? {} : { mannolTab: view };
-        if (view !== "dashboard" && !pushed && activeView === "dashboard") window.history.pushState(state, "", url.toString());
+        if (view !== "dashboard" && !pushed && (activeView === "dashboard" || WI_SECTION[activeView])) window.history.pushState(state, "", url.toString());
         else window.history.replaceState(state, "", url.toString());
       } catch {}
     }

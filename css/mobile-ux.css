@@ -2897,3 +2897,29 @@ html:not([data-palette="normal"])[data-palette] .bottom-nav-bar { background: va
 [data-theme="dark"] .admin-setup-tip--warn { background: #3d1311; color: #ffc9c3; border-color: #6b2620; box-shadow: 0 3px 0 #1f0807; }
 .bk-range { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; }
 .bk-range .input { width: 11rem; }
+
+/* v5.35.0 — arreglos de la prueba del admin en móvil */
+.prod-head { flex-wrap: wrap; gap: 0.625rem; }
+@media (max-width: 640px) {
+  .prod-head-actions { display: grid !important; grid-template-columns: 1fr 1fr; width: 100%; }
+  .prod-head-actions .btn { justify-content: center; white-space: nowrap; min-height: 2.5rem; }
+  .prod-head-actions #new-product { grid-column: 1 / -1; }
+  .wc-paytot { white-space: normal !important; overflow-wrap: anywhere; }
+}
+td .badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 640px) { .table-cards td .badge { white-space: normal !important; } }
+/* Sin conexión: el aviso general de arriba ya lo dice; el de la venta solo si no está */
+body:has(.sync-banner-offline[role="status"]) .sale-offline-banner { display: none; }
+/* v5.35.0: el «+» de los botones redondos salía diminuto (el icono se encogía) */
+.btn > svg, .btn-icon > svg { flex-shrink: 0; }
+/* v5.35.0: la barra «Cobrar» tapaba «Gestor y nota» al final de la venta */
+@media (max-width: 1023px) {
+  body.has-checkout-bar .sale-form-panel::after { content: ""; display: block; flex: none; height: calc(4.5rem + env(safe-area-inset-bottom)); }
+}
+/* v5.35.0: en «Iconos pequeños» el – 3 + se salía de la tarjeta */
+[data-catalog-view="small"] .ct-stepper { gap: 0.125rem; justify-content: space-between; min-width: 0; }
+[data-catalog-view="small"] .ct-stepper .btn { width: 1.875rem; min-width: 1.875rem; height: 1.875rem; min-height: 1.875rem; padding: 0; flex: none; }
+[data-catalog-view="small"] .ct-stepper .cr-qty { min-width: 0; font-size: 0.9375rem; }
+/* v5.36.0: mínimo de cajas por revisar */
+.wsa-check { border-color: var(--warning) !important; box-shadow: 0 0 0 3px color-mix(in oklab, var(--warning) 25%, transparent); }
+.wsa-check-hint { color: var(--warning); margin: 0.25rem 0 0; font-weight: 600; }

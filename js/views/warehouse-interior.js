@@ -218,7 +218,10 @@ export function mountWarehouseInterior(container, navigate) {
       totalUSD: 0,
     };
     for (const s of salesList) {
-      if (s.paymentMode === "MULTI") {
+      // v5.35.0: cada moneda en SU moneda (antes, una venta en MN o EUR sumaba
+      // aquí el total en USD con el símbolo de MN/EUR)
+      const hasPaid = (s.paidUSD > 0) || (s.paidMN > 0) || (s.paidEUR > 0) || (s.paidTransfer > 0);
+      if (s.paymentMode === "MULTI" || hasPaid) {
         if (s.paidUSD > 0) { stats.byCurrency.USD.count++; stats.byCurrency.USD.amount += s.paidUSD; }
         if (s.paidMN > 0) { stats.byCurrency.MN.count++; stats.byCurrency.MN.amount += s.paidMN; }
         if (s.paidEUR > 0) { stats.byCurrency.EUR.count++; stats.byCurrency.EUR.amount += s.paidEUR; }
@@ -681,7 +684,7 @@ export function mountWarehouseInterior(container, navigate) {
                   <span class="wi2-sale-mark" style="background:${CURR_COLOR[s.currency] || 'var(--primary)'}"></span>
                   <div class="wi2-sale-txt">
                     <div><strong>${esc(s.code)}</strong> ${esc(s.managerName || s.userName || '')}</div>
-                    <div class="wi2-sale-sub">${n} producto${n === 1 ? "" : "s"} · ${formatDate(s.createdAt)} · ${CURR_LABEL[s.currency] || esc(s.currency || 'USD')}</div>
+                    <div class="wi2-sale-sub">${n} producto${n === 1 ? "" : "s"} · ${formatDate(s.createdAt)} · ${s.paymentMode === "MULTI" || s.isMultiCurrency ? "Mixto" : (CURR_LABEL[s.currency] || esc(s.currency || 'USD'))}</div>
                   </div>
                   <span class="wi2-sale-amt">${formatMoney(s.totalAmount, "USD")}</span>
                 </div>`;

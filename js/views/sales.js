@@ -413,7 +413,7 @@ export function mountSalesView(container, navigate) {
         </div>
 
         ${!isOnline ? `
-          <div class="sync-banner sync-banner-offline">
+          <div class="sync-banner sync-banner-offline sale-offline-banner">
             <div class="sync-banner-icon">${icon("wifiOff", 18)}</div>
             <div class="sync-banner-content">
               <div class="sync-banner-title">Sin conexión</div>
@@ -1838,6 +1838,8 @@ export function mountSalesView(container, navigate) {
     // repite ni se confunde con las ventas de otros almacenes.
     const saleCode = generateSaleCode(finalWh.code);
 
+    // v5.36.0: la tarjeta solo cuenta si de verdad se cobró por transferencia
+    const usedCard = ((paymentMode !== "MULTI" && selectedCurrency === "TRANSFERENCIA") || paidTransfer > 0) ? selectedCard : null;
     const sale = {
       id: generateSaleId(),
       code: saleCode,
@@ -1859,15 +1861,19 @@ export function mountSalesView(container, navigate) {
       payments: paymentLines,
       isMultiCurrency: paymentMode === "MULTI",
       paymentMode,
-      currency: selectedCurrency,
+      // v5.36.0: en pago mixto, la moneda con la que más se cobró (antes quedaba
+      // la que estaba marcada ANTES de pasar a mixto, p. ej. «Transf.»)
+      currency: paymentMode === "MULTI"
+        ? ([...paymentLines].sort((x, y) => (Number(y.amountUSD) || 0) - (Number(x.amountUSD) || 0))[0]?.currency || "USD")
+        : selectedCurrency,
       paidUSD, paidMN, paidEUR, paidTransfer,
-      paymentMethod: (selectedCurrency === "TRANSFERENCIA" || paidTransfer > 0) ? "TRANSFERENCIA" : "EFECTIVO",
-      cardId: selectedCard?.id || null,
+      paymentMethod: ((paymentMode !== "MULTI" && selectedCurrency === "TRANSFERENCIA") || paidTransfer > 0) ? "TRANSFERENCIA" : "EFECTIVO",
+      cardId: usedCard?.id || null,
       // v5.17: solo los ÚLTIMOS 4 dígitos se guardan (la revisión detectó el
       // número completo de tarjeta en cada venta; en la base también se
       // recortan los históricos con migration-v5.17-seguridad.sql)
-      cardNumber: selectedCard ? (selectedCard.last4 || String(selectedCard.number || "").replace(/\D/g, "").slice(-4) || null) : null,
-      cardName: selectedCard?.name || null,
+      cardNumber: usedCard ? (usedCard.last4 || String(usedCard.number || "").replace(/\D/g, "").slice(-4) || null) : null,
+      cardName: usedCard?.name || null,
       transferAmount: paidTransfer || transferAmount || 0,
       note: note.trim() || null,
       status: "COMPLETADA",

@@ -905,7 +905,7 @@ export function mountAdminView(container, navigateOrUser) {
       case "movements": mountMovementsPanel(content, myGen); break;
       case "closures": mountClosuresPanel(content, myGen); break;
       case "storage": mountStoragePanel(content, myGen); break;
-      case "settings": mountSettingsView(content, navigate || (() => {}), { embedded: true }); break;
+      case "settings": mountSettingsView(content, navigate || (() => {}), { embedded: true, isStale: () => myGen !== tabGeneration }); break;
       case "rates": mountRatesPanel(content, myGen); break;
       case "profit": mountProfitPanel(content, myGen); break;
       case "audit": mountAuditPanel(content, myGen); break;
@@ -1781,7 +1781,7 @@ export function mountAdminView(container, navigateOrUser) {
                   <td class="font-medium">${esc(p.name)}${p.brand ? ` <span class="text-xs text-muted" style="font-weight:400">· ${esc(p.brand)}</span>` : ''}</td>
                   <td class="text-xs text-muted">${esc(catLabel(p) || '—')}</td>
                   <td class="text-right">${formatMoney(p.salePrice, "USD")}</td>
-                  <td class="text-right text-xs">${(() => { const w = wholesaleConfigOf(p); return (w ? `<span class="badge badge-outline" style="font-size:0.625rem;white-space:nowrap">desde ${w.minBoxes} cajas · ${formatMoney(w.pricePerBox, "USD")}</span>` : `<span class="text-muted">—</span>`) + (p.ownVendorCommission ? ` <span class="badge badge-accent" style="font-size:0.625rem;white-space:nowrap" title="Comisión propia del vendedor">Vend. ${p.vendorCommission} ${p.vendorCommissionCurrency || "MN"}/u</span>` : ""); })()}</td>
+                  <td class="text-right text-xs">${(() => { const w = wholesaleConfigOf(p); return (w ? `<span class="badge badge-outline" style="font-size:0.625rem;white-space:nowrap">desde ${w.minBoxes} caja${w.minBoxes === 1 ? "" : "s"} · ${formatMoney(w.pricePerBox, "USD")}</span>` : `<span class="text-muted">—</span>`) + (p.ownVendorCommission ? ` <span class="badge badge-accent" style="font-size:0.625rem;white-space:nowrap" title="Comisión propia del vendedor">Vend. ${p.vendorCommission} ${p.vendorCommissionCurrency || "MN"}/u</span>` : ""); })()}</td>
                   <td class="text-center">${p.active ? `<span class="badge badge-accent">Activo</span>` : `<span class="badge">Inactivo</span>`}</td>
                   <td class="text-right">
                     <button class="btn btn-ghost btn-sm" data-stock-product="${esc(p.id)}" aria-label="Añadir o ajustar stock de ${esc(p.name)}" title="Añadir / ajustar stock por almacén">${icon("boxes", 12)}</button>
@@ -1833,9 +1833,9 @@ export function mountAdminView(container, navigateOrUser) {
 
       content.innerHTML = `
         <div class="card">
-          <div class="card-header flex justify-between">
+          <div class="card-header flex justify-between prod-head">
             <h2 class="card-title">Productos (${products.length})</h2>
-            <div class="flex gap-2">
+            <div class="flex gap-2 prod-head-actions">
               <button class="btn btn-outline btn-sm" id="p-export-csv" title="Exportar productos filtrados a CSV">${icon("download", 12)} CSV</button>
               <button class="btn btn-outline btn-sm" id="bulk-prices" title="Cambiar el precio de varios productos a la vez">${icon("dollar", 12)} Precios en lote</button>
               <button class="btn btn-outline btn-sm" id="p-organize" title="Asignar tipo y marca a varios productos a la vez">${icon("listTree", 12)} Tipos y marcas</button>
@@ -3180,7 +3180,6 @@ export function mountAdminView(container, navigateOrUser) {
           commissionType: document.querySelector("#m-commissionType").value,
           commissionCurrency: document.querySelector("#m-commissionCurrency").value,
           commission: parseFloat(document.querySelector("#m-commission").value) || 0,
-          // v5.28.0: % para las ventas por caja (mayorista)
           warehouseId: document.querySelector("#m-warehouseId")?.value || null,
           notes: document.querySelector("#m-notes").value.trim() || null,
           active: true,
@@ -3194,10 +3193,18 @@ export function mountAdminView(container, navigateOrUser) {
           toast("El porcentaje debe estar entre 0 y 100", "error");
           return;
         }
-        await saveManager(data);
-        toast("Gestor guardado", "success");
-        close();
-        onSaved();
+        // v5.35.0: sin doble guardado y con el error real si falla
+        const btn = document.querySelector("#m-save");
+        btn.disabled = true;
+        try {
+          await saveManager(data);
+          toast("Gestor guardado", "success");
+          close();
+          onSaved();
+        } catch (err) {
+          btn.disabled = false;
+          toast("No se pudo guardar el gestor: " + (err?.message || "error"), "error", 6000);
+        }
       });
     });
   }
@@ -4744,6 +4751,7 @@ export function mountAdminView(container, navigateOrUser) {
     content.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
     const cfg = { ...(await getGitHubConfig()) };
     const configured = await isGitHubConfigured();
+    if (gen !== tabGeneration) return; // v5.35.0: ya se cambió de sección
     // v5.27.0: si la app está publicada en GitHub Pages, el repo ya se sabe
     const guess = guessGitHubRepo();
     if (!cfg.owner && guess.owner) cfg.owner = guess.owner;
@@ -5413,7 +5421,7 @@ export function mountAdminView(container, navigateOrUser) {
                       <td class="text-center">${t.sales}</td>
                       <td class="text-center">${t.units}</td>
                       <td class="text-right" style="white-space:nowrap">${moneyPair(t.usd, t.mn)}</td>
-                      <td class="text-right text-xs" style="white-space:nowrap">Pagado ${moneyPair(paidTot.usd, paidTot.mn)}<br>Falta ${moneyPair(Math.max(0, t.usd - paidTot.usd), Math.max(0, t.mn - paidTot.mn))}</td>
+                      <td class="text-right text-xs wc-paytot">Pagado ${moneyPair(paidTot.usd, paidTot.mn)}<br>Falta ${moneyPair(Math.max(0, t.usd - paidTot.usd), Math.max(0, t.mn - paidTot.mn))}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -5453,7 +5461,7 @@ export function mountAdminView(container, navigateOrUser) {
       content.querySelectorAll("[data-pay]").forEach((b) => b.addEventListener("click", () => payAction(b, true)));
       content.querySelectorAll("[data-unpay]").forEach((b) => b.addEventListener("click", () => payAction(b, false)));
       content.querySelector("#wc-csv")?.addEventListener("click", () => {
-        exportToCSV(`comisiones-vendedores-${period}.csv`, rows.map(({ w, sh }) => ({
+        exportToCSV(`comisiones-vendedores-${period}`, rows.map(({ w, sh }) => ({
           mes: period,
           almacen: w.name,
           codigo: w.code,
@@ -5480,6 +5488,7 @@ export function mountAdminView(container, navigateOrUser) {
 
     async function load() {
       config = await getRateConfig({ withToken: true });
+      if (gen !== tabGeneration) return; // v5.35.0: ya se cambió de sección
       render();
     }
 
@@ -5604,9 +5613,16 @@ export function mountAdminView(container, navigateOrUser) {
           cacheTtlMinutes: parseInt(content.querySelector("#r-cacheTtl").value) || 60,
           autoSync: content.querySelector("#r-autoSync").checked,
         };
-        await saveRateConfig(data);
-        toast("Configuración guardada", "success");
-        await load();
+        const btn = content.querySelector("#save-rates");
+        btn.disabled = true;
+        try {
+          await saveRateConfig(data);
+          toast("Configuración guardada", "success");
+          await load();
+        } catch (err) {
+          btn.disabled = false;
+          toast("No se pudo guardar: " + (err?.message || "error"), "error", 6000);
+        }
       });
 
       mountMixSurchargeCard(content.firstElementChild);

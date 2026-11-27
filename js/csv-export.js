@@ -47,9 +47,13 @@ function downloadCSV(filename, csvContent) {
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  const date = new Date().toISOString().slice(0, 10);
+  // v5.35.0: fecha LOCAL (antes UTC: de noche salía el día siguiente) y sin
+  // repetir «.csv» si el nombre ya lo trae
+  const d = new Date();
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const base = String(filename).replace(/\.csv$/i, "");
   a.href = url;
-  a.download = `${filename}-${date}.csv`;
+  a.download = `${base}-${date}.csv`;
   a.style.display = "none";
   document.body.appendChild(a);
   a.click();

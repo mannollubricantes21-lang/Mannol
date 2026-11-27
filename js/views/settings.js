@@ -7,7 +7,7 @@ import { getSettingsAdmin, saveSettings, syncElToqueRates, subscribeRates, listW
 import { formatDate } from "../currency.js";
 import { toast, icon, showModal, esc } from "../ui.js";
 
-export function mountSettingsView(container, navigate, { embedded = false } = {}) {
+export function mountSettingsView(container, navigate, { embedded = false, isStale = () => false } = {}) {
   const store = getStore();
   let form = { ...store.getState().settings };
   let warehouses = [];
@@ -20,6 +20,7 @@ export function mountSettingsView(container, navigate, { embedded = false } = {}
     form = await getSettingsAdmin();
     store.setSettings(form);
     warehouses = await listWarehousesAdmin();
+    if (isStale()) return; // v5.35.0: el admin ya cambió de sección
     render();
   }
 

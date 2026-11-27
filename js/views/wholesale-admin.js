@@ -102,6 +102,8 @@ export function mountWholesalePanel(content, { isStale = () => false } = {}) {
 function openDialog(product, products, warehouses, onSaved) {
   const isNew = !product;
   const cfg = product ? wholesaleConfigOf(product) : null;
+  // v5.36.0: producto de la versión anterior → el mínimo hay que revisarlo
+  const review = !!product && wholesaleNeedsReview(product);
   const candidates = products
     .filter((p) => p.active !== false && (!wholesaleConfigOf(p) || p.id === product?.id))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -132,7 +134,8 @@ function openDialog(product, products, warehouses, onSaved) {
       </div>
       <div class="wsa-field">
         <label class="label" for="wsa-minBoxes">Mínimo de cajas</label>
-        <input class="input" id="wsa-minBoxes" inputmode="numeric" placeholder="Ej: 10" value="${esc(cfg?.minBoxes ?? "")}" />
+        <input class="input${review ? " wsa-check" : ""}" id="wsa-minBoxes" inputmode="numeric" placeholder="Ej: 10" value="${esc(cfg?.minBoxes ?? "")}" />
+        ${review ? `<p class="pf-hint wsa-check-hint">Viene de la versión anterior: pon el mínimo real.</p>` : ""}
         <p class="pf-msg" id="wsa-minBoxes-msg" hidden></p>
       </div>
       <div class="wsa-field">
@@ -147,7 +150,7 @@ function openDialog(product, products, warehouses, onSaved) {
       </div>
       <div class="wsa-field wsa-span2">
         <label class="label" for="wsa-vendorAmount">Vendedor del almacén gana por esa venta (USD)</label>
-        <input class="input" id="wsa-vendorAmount" inputmode="decimal" placeholder="Vacío = regla por venta (1 USD)" value="${esc(cfg?.vendorAmount ?? "")}" />
+        <input class="input" id="wsa-vendorAmount" inputmode="decimal" placeholder="Vacío = regla por venta" value="${esc(cfg?.vendorAmount ?? "")}" />
         <p class="pf-hint" style="margin:0.25rem 0 0">Vacío: cobra como en cualquier venta. Al vender se puede cambiar.</p>
         <p class="pf-msg" id="wsa-vendorAmount-msg" hidden></p>
       </div>
@@ -198,7 +201,7 @@ function openDialog(product, products, warehouses, onSaved) {
       const retail = Number(p?.salePrice) || 0;
       const atMin = min > 0 ? price * min : 0;
       el.innerHTML = `Sale a <strong>${formatMoney(per, "USD")}</strong> el pomo${retail ? ` (por unidad: ${formatMoney(retail, "USD")})` : ""}.` +
-        (atMin ? ` Venta mínima: ${min} cajas = <strong>${formatMoney(atMin, "USD")}</strong>, gestor ${formatMoney(atMin * (pct || 0) / 100, "USD")}.` : "");
+        (atMin ? ` Venta mínima: ${min} caja${min === 1 ? "" : "s"} = <strong>${formatMoney(atMin, "USD")}</strong>, gestor ${formatMoney(atMin * (pct || 0) / 100, "USD")}.` : "");
     } else {
       el.textContent = "";
     }
@@ -225,12 +228,22 @@ function openDialog(product, products, warehouses, onSaved) {
     });
   });
 
+  let confirmedMin = false;
   $("#wsa-save").addEventListener("click", async () => {
     const res = validateWholesaleConfig(read());
     ["productId", "unitsPerBox", "minBoxes", "pricePerBox", "gestorPct", "vendorAmount"].forEach((k) => setMsg(k, res.errors[k] || ""));
     if (!res.ok) { toast("Revisa lo marcado en rojo", "error"); return; }
     const p = products.find((x) => x.id === res.values.productId);
     if (!p) { toast("Producto no encontrado", "error"); return; }
+    // v5.36.0: si no se tocó el mínimo de un producto viejo, confirmarlo
+    if (review && res.values.minBoxes === cfg?.minBoxes && !confirmedMin) {
+      const n = res.values.minBoxes;
+      confirmDialog(`¿De verdad la venta por caja de «${esc(p.name)}» empieza desde <strong>${n} caja${n === 1 ? "" : "s"}</strong>? Si no, pon el mínimo real.`, () => {
+        confirmedMin = true;
+        $("#wsa-save").click();
+      }, () => { try { $("#wsa-minBoxes").focus(); $("#wsa-minBoxes").select(); } catch {} });
+      return;
+    }
     const btn = $("#wsa-save");
     btn.disabled = true;
     try {
