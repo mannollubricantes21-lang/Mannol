@@ -11,7 +11,7 @@
 
 import { listProducts, listSales, listWarehouses } from "./db.js";
 import { formatMoney, formatDate } from "./currency.js";
-import { icon, escapeHtml } from "./ui.js";
+import { icon, escapeHtml, showModal } from "./ui.js";
 
 let _installed = false;
 let _cachedProducts = [];
@@ -76,32 +76,35 @@ function openSearch(navigate, opts = {}) {
   refreshCache();
   const navList = Array.isArray(opts.navItems) && opts.navItems.length > 0 ? opts.navItems : NAV_ITEMS;
 
-  const overlay = document.createElement("div");
-  overlay.className = "modal-overlay";
-  overlay.style.alignItems = "flex-start";
-  overlay.style.paddingTop = "10vh";
-  overlay.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Búsqueda global" style="max-width: 36rem; max-height: 70vh; display: flex; flex-direction: column;">
-      <div class="modal-header" style="padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border)">
-        <div style="position: relative; flex: 1;">
-          <span style="position: absolute; left: 0.5rem; top: 50%; transform: translateY(-50%); color: var(--text-muted);" aria-hidden="true">${icon("search", 16)}</span>
-          <input type="text" id="gs-input" placeholder="Buscar vistas, productos, ventas..." style="width: 100%; padding: 0.5rem 0.5rem 0.5rem 2rem; border: none; background: transparent; color: var(--text); font-size: 0.9375rem; outline: none;" autofocus />
+  // v5.39.6 (B3): dialog nativo del sistema vía showModal() de ui.js en vez
+  // del overlay a mano con role="dialog" — trampa de foco, Escape y
+  // restauración de foco los hace el navegador, igual que el resto de los
+  // modales desde v5.39.4.
+  const close = showModal({
+    noHeader: true,
+    ariaLabel: "Búsqueda global",
+    align: "top",
+    cardStyle: "max-width: 36rem; width: calc(100% - 1.5rem);",
+    body: `
+      <div style="display:flex;flex-direction:column;max-height:70vh">
+        <div style="position:relative;display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border)">
+          <span style="color:var(--text-muted);flex-shrink:0" aria-hidden="true">${icon("search", 16)}</span>
+          <input type="text" id="gs-input" placeholder="Buscar vistas, productos, ventas..." aria-label="Buscar vistas, productos y ventas" style="flex:1;min-width:0;padding:0.5rem 0;border:none;background:transparent;color:var(--text);font-size:0.9375rem;outline:none" />
+          <button class="btn btn-ghost btn-icon gs-close" aria-label="Cerrar" type="button">✕</button>
         </div>
-        <button class="btn btn-ghost btn-icon modal-close" aria-label="Cerrar" type="button">✕</button>
+        <div id="gs-results" style="overflow-y:auto;flex:1;min-height:0;padding:0.5rem"></div>
+        <div style="padding:0.5rem 0.75rem;border-top:1px solid var(--border);font-size:0.6875rem;color:var(--text-muted)">
+          <kbd>↑</kbd> <kbd>↓</kbd> navegar · <kbd>Enter</kbd> seleccionar · <kbd>Esc</kbd> cerrar
+        </div>
       </div>
-      <div id="gs-results" style="overflow-y: auto; flex: 1; padding: 0.5rem;"></div>
-      <div style="padding: 0.5rem 0.75rem; border-top: 1px solid var(--border); font-size: 0.6875rem; color: var(--text-muted);">
-        <kbd>↑</kbd> <kbd>↓</kbd> navegar · <kbd>Enter</kbd> seleccionar · <kbd>Esc</kbd> cerrar
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
-  const input = overlay.querySelector("#gs-input");
-  const results = overlay.querySelector("#gs-results");
-  const close = () => overlay.remove();
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-  overlay.querySelector(".modal-close").addEventListener("click", close);
+    `,
+  });
+  const container = document.getElementById("modal-container");
+  const dlg = container?.querySelector("dialog.modal-overlay:last-of-type");
+  const input = dlg?.querySelector("#gs-input");
+  const results = dlg?.querySelector("#gs-results");
+  if (!dlg || !input || !results) return;
+  dlg.querySelector(".gs-close")?.addEventListener("click", close);
 
   let selectedIdx = 0;
   let currentResults = [];
@@ -220,13 +223,12 @@ function openSearch(navigate, opts = {}) {
         selectResult(currentResults[selectedIdx], navigate, close);
       }
     } else if (e.key === "Escape") {
-      e.preventDefault();
-      close();
+      close(); // dialog nativo: el navegador ya cerró; en jsdom lo cierra showModal
     }
   });
 
-  // Initial render
-  setTimeout(() => { input.focus(); render(""); }, 50);
+  // Primer render con la navegación base (el foco lo puso showModal)
+  render("");
 }
 
 function selectResult(item, navigate, close) {

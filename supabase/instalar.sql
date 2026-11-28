@@ -3557,4 +3557,35 @@ create policy "seller_payouts_admin_delete" on public.seller_payouts
 
 create index if not exists idx_seller_payouts_month on public.seller_payouts (year, month);
 
+-- ############################################################
+-- ## v5.40 · TELEMETRÍA DE CAMPO (Etapa C): web_vitals
+-- ############################################################
+-- La auditoría UX (docs/AUDITORIA-UX-WCAG-2026-11-28.md) pide p75
+-- LCP/INP/CLS REALES de los equipos de los vendedores antes de optimizar
+-- rendimiento. js/telemetry.js mide con PerformanceObserver, encola en
+-- localStorage y sube en lote acá — SOLO con sesión iniciada: la portada
+-- anónima no genera filas.
+-- user_id se completa solo (default auth.uid() se evalúa con el JWT de
+-- cada inserción); view/build son informativos.
+create table if not exists public.web_vitals (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid default auth.uid(),
+  metric text not null check (metric in ('LCP','INP','CLS')),
+  value double precision not null check (value >= 0),
+  rating text check (rating in ('good','needs-improvement','poor')),
+  view text,
+  build text,
+  created_at timestamptz not null default now()
+);
+alter table public.web_vitals enable row level security;
+
+drop policy if exists "web_vitals_insert_auth" on public.web_vitals;
+create policy "web_vitals_insert_auth" on public.web_vitals
+  for insert to authenticated with check (auth.uid() = user_id);
+drop policy if exists "web_vitals_admin_read" on public.web_vitals;
+create policy "web_vitals_admin_read" on public.web_vitals
+  for select to authenticated using (public.is_admin());
+
+create index if not exists idx_web_vitals_metric_time on public.web_vitals (metric, created_at desc);
+
 notify pgrst, 'reload schema';

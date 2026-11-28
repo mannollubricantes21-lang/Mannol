@@ -44,6 +44,8 @@ const STATIC_ASSETS = [
   "./js/auth.js",
   "./js/db.js",
   "./js/error-report.js", // v5.39.2: red global de errores
+  "./js/telemetry.js", // v5.40: p75 LCP/INP/CLS (Etapa C)
+  "./js/pwa-install.js", // v5.40: instalar la app
   "./js/version.js",
   "./js/currency.js",
   "./js/ui.js",

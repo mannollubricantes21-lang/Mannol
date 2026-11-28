@@ -9,6 +9,9 @@ import { formatMoney, formatDate, convertAmount, formatMoneyGrouped, parseAmount
 import { toast, icon, esc, showModal, brandMark, warehouseColor } from "../ui.js";
 import { APP_LABEL } from "../version.js";
 import { isSupabaseConfiguredAsync, getStoredSupabaseConfig, saveStoredSupabaseConfig, clearStoredSupabaseConfig } from "../supabase.js";
+import { formatDataAge } from "../data-freshness.js";
+import { canPromptInstall, promptInstall, isStandalone, isIosSafari } from "../pwa-install.js";
+import { listWebVitals, getP75Summary } from "../telemetry.js";
 
 // v5.10.0: tasas del inicio en un solo sitio (vista + conversor)
 function getHomeRates(state) {
@@ -46,6 +49,23 @@ export function renderHomeView(navigate) {
   const { usdInMN, eurInMN } = getHomeRates(state);
   const usdSource = mnRate?.source || "manual";
   const eurSource = eurRate?.source || "manual";
+  // v5.39.6 (captura del usuario): frescura visible en la tarjeta y hint
+  // accionable cuando la tasa no es real — el «Sin tasa real» seco no decía
+  // qué hacer para arreglarlo.
+  const edadReal = (r) => (
+    r && (r.source === "api" || r.source === "eltoque")
+      ? formatDataAge(Date.now() - (typeof r.updatedAt === "number" ? r.updatedAt : Date.parse(r.updatedAt) || Date.now()))
+      : ""
+  );
+  const usdEdad = edadReal(mnRate);
+  const eurEdad = edadReal(eurRate);
+  const usdSub = usdInMN
+    ? `1 USD = ${usdInMN.toFixed(0)} MN${usdEdad ? ` · hace ${usdEdad}` : ""}`
+    : "Sin tasa real";
+  const eurSub = eurInMN
+    ? `1 EUR = ${eurInMN.toFixed(0)} MN${eurEdad ? ` · hace ${eurEdad}` : ""}`
+    : "Sin tasa real";
+  const hintSinTasa = "Publica tasa.json (secreto ELTOQUE_API_KEY en GitHub) o fija la tasa en Admin → Tasas";
   // v5.28.0: el margen real sale de Admin → Tasas (fijo en MN, p. ej. +10, o %)
   const rm = state._rateMarkup;
   // v5.39.0: el margen sobre la tasa oficial solo lo ve el admin
@@ -140,19 +160,19 @@ export function renderHomeView(navigate) {
             <!-- v5.39.4 (2.5.3): sin aria-label — el nombre accesible es el propio
                  contenido dinámico ("USD 455 MN 1 USD = 455 MN"), que siempre
                  coincide con lo visible aunque cambie la tasa -->
-            <div class="premium-rate-tile premium-rate-tile-usd" role="button" tabindex="0" data-convert="USD">
+            <div class="premium-rate-tile premium-rate-tile-usd" role="button" tabindex="0" data-convert="USD" ${usdInMN ? "" : `title="${hintSinTasa}"`}>
               <div class="premium-rate-tile-currency">${icon("dollar", 14)} USD</div>
               <div class="premium-rate-tile-value">
                 ${usdInMN ? usdInMN.toFixed(0) : "—"}<span style="font-size:0.6875rem;color:var(--text-muted);font-weight:600;margin-left:0.25rem">MN</span>
               </div>
-              <div class="premium-rate-tile-sub">${usdInMN ? `1 USD = ${usdInMN.toFixed(0)} MN` : "Sin tasa real"}</div>
+              <div class="premium-rate-tile-sub">${usdSub}</div>
             </div>
-            <div class="premium-rate-tile premium-rate-tile-eur" role="button" tabindex="0" data-convert="EUR">
+            <div class="premium-rate-tile premium-rate-tile-eur" role="button" tabindex="0" data-convert="EUR" ${eurInMN ? "" : `title="${hintSinTasa}"`}>
               <div class="premium-rate-tile-currency">${icon("euro", 14)} EUR</div>
               <div class="premium-rate-tile-value">
                 ${eurInMN ? eurInMN.toFixed(0) : "—"}<span style="font-size:0.6875rem;color:var(--text-muted);font-weight:600;margin-left:0.25rem">MN</span>
               </div>
-              <div class="premium-rate-tile-sub">${eurInMN ? `1 EUR = ${eurInMN.toFixed(0)} MN` : "Sin tasa real"}</div>
+              <div class="premium-rate-tile-sub">${eurSub}</div>
             </div>
           </div>
           ${markupText ? `
@@ -443,15 +463,99 @@ export function mountHomeView(container, navigate) {
     setTimeout(() => { try { input.focus({ preventScroll: true }); } catch {} }, 90);
   }
 
+  // v5.40: botón «Instalar la app» del menú — prompt nativo en Chromium,
+  // instrucciones manuales en iOS (no dispara beforeinstallprompt).
+  async function handleInstallClick() {
+    if (canPromptInstall()) {
+      const outcome = await promptInstall();
+      if (outcome === "aceptada") toast("success", "App instalada ✅ Ya la tenés en tu pantalla de inicio");
+      else if (outcome === "rechazada") toast("info", "Podés instalarla después desde este mismo menú");
+      else toast("warning", "Ahora no se puede instalar — probá desde el menú del navegador");
+      return;
+    }
+    if (isIosSafari()) { openInstallHelp(); return; }
+    toast("info", "Tu navegador no ofrece instalación en este momento");
+  }
+
+  function openInstallHelp() {
+    const close = showModal({
+      title: `${icon("smartphone", 16)} Instalar la app`,
+      body: `
+        <p style="margin:0 0 0.5rem;font-size:0.875rem">En iPhone/iPad (Safari):</p>
+        <ol style="margin:0 0 0.75rem;padding-left:1.25rem;font-size:0.875rem;display:grid;gap:0.25rem">
+          <li>Toca el botón <strong>Compartir</strong> (cuadrado con flecha ↑).</li>
+          <li>Elige <strong>«Añadir a pantalla de inicio»</strong>.</li>
+          <li>Confirma con <strong>Añadir</strong>.</li>
+        </ol>
+        <p class="text-muted" style="margin:0;font-size:0.75rem">Con la app instalada abre directo, a pantalla completa y sin barra del navegador.</p>
+      `,
+      footer: `<button class="btn btn-primary" id="ih-done" type="button">Entendido</button>`,
+    });
+    document.getElementById("modal-container")?.querySelector("#ih-done")?.addEventListener("click", close);
+  }
+
+  // v5.40 (Etapa C): p75 LCP/INP/CLS reales de los equipos — la métrica que
+  // la auditoría pide medir antes de optimizar rendimiento.
+  function openTelemetryDialog() {
+    const close = showModal({
+      title: `${icon("activity", 16)} Rendimiento (velocidad real)`,
+      body: `<div id="tel-body" style="display:grid;gap:0.625rem"><p class="text-muted" style="margin:0;font-size:0.875rem">Leyendo muestras…</p></div>`,
+      footer: `
+        <button class="btn btn-outline" id="tel-reload" type="button">Actualizar</button>
+        <button class="btn btn-primary" id="tel-done" type="button">Cerrar</button>
+      `,
+    });
+    const container = document.getElementById("modal-container");
+    let _telSum = null;
+    const fmtValor = (m, p75) => (m === "LCP" ? `${(p75 / 1000).toFixed(2)} s` : m === "INP" ? `${Math.round(p75)} ms` : p75.toFixed(3));
+    const row = (m, meta, objetivo) => {
+      const s = _telSum[m];
+      const sinDatos = s.p75 == null;
+      const valor = sinDatos ? "sin datos" : fmtValor(m, s.p75);
+      const ok = !sinDatos && s.p75 <= ({ LCP: 2500, INP: 200, CLS: 0.1 })[m];
+      const marca = sinDatos ? "" : ok ? "✓" : "⚠";
+      return `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;border:1px solid var(--border);border-radius:var(--radius);padding:0.625rem 0.75rem">
+          <div><div style="font-weight:700;font-size:0.9375rem">${m} · p75</div><div style="font-size:0.6875rem;color:var(--text-muted)">${meta}</div></div>
+          <div style="text-align:right"><div style="font-weight:700;font-size:0.9375rem">${valor} <span aria-hidden="true">${marca}</span></div><div style="font-size:0.6875rem;color:var(--text-muted)">${objetivo}</div></div>
+        </div>`;
+    };
+    const load = async () => {
+      const body = container?.querySelector("#tel-body");
+      if (!body) return;
+      const rows = await listWebVitals(600);
+      _telSum = getP75Summary(rows);
+      const total = _telSum.LCP.n + _telSum.INP.n + _telSum.CLS.n;
+      if (total === 0) {
+        body.innerHTML = `<p class="text-muted" style="margin:0;font-size:0.875rem">Aún no hay muestras del equipo. Se acumulan solas cuando el personal usa la app con sesión iniciada: cada visita sube LCP, INP y CLS al ocultar la pantalla, y acá se ve el p75 real.</p>`;
+        return;
+      }
+      const ultima = _telSum.LCP.last || _telSum.INP.last || _telSum.CLS.last;
+      body.innerHTML = `
+        ${row("LCP", "carga: mayor elemento visible", "objetivo ≤ 2.5 s")}
+        ${row("INP", "respuesta: peor interacción", "objetivo ≤ 200 ms")}
+        ${row("CLS", "estabilidad visual", "objetivo ≤ 0.1")}
+        <p class="text-muted" style="margin:0;font-size:0.6875rem">Última muestra: ${ultima ? esc(String(ultima).slice(0, 16).replace("T", " ")) : "—"} · ${total} muestras recientes. ⚠ = supera el umbral Core Web Vitals.</p>`;
+    };
+    container?.querySelector("#tel-reload")?.addEventListener("click", load);
+    container?.querySelector("#tel-done")?.addEventListener("click", close);
+    load();
+  }
+
   function openHomeMenu() {
     const st = store.getState();
     const canFs = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
+    // v5.40: instalar la PWA (Chromium con prompt o iOS con instrucciones)
+    const canInstall = !isStandalone() && (canPromptInstall() || isIosSafari());
+    const isAdmin = st.currentUser?.role === "admin";
     const close = showModal({
       title: "Menú",
       body: `
         <div class="home-menu">
           <button class="drawer-item" data-menu="rates">${icon("refresh", 18)}<span style="flex:1;text-align:left">Actualizar tasas del día</span></button>
           <button class="drawer-item" data-menu="rate-status">${icon("coins", 18)}<span style="flex:1;text-align:left">Estado de las tasas</span></button>
+          ${canInstall ? `<button class="drawer-item" data-menu="instalar">${icon("smartphone", 18)}<span style="flex:1;text-align:left">Instalar la app</span></button>` : ""}
+          ${isAdmin ? `<button class="drawer-item" data-menu="rendimiento">${icon("activity", 18)}<span style="flex:1;text-align:left">Rendimiento (velocidad real)</span></button>` : ""}
           <button class="drawer-item" data-menu="conexion">${icon("key", 18)}<span style="flex:1;text-align:left">Conexión de datos (Supabase)</span></button>
           <button class="drawer-item" data-menu="theme">${st.theme === "dark" ? icon("sun", 18) : icon("moon", 18)}<span style="flex:1;text-align:left">${st.theme === "dark" ? "Tema claro" : "Tema oscuro"}</span></button>
           ${canFs ? `<button class="drawer-item" data-menu="fullscreen">${icon("smartphone", 18)}<span style="flex:1;text-align:left">${document.fullscreenElement ? "Salir de pantalla completa" : "Pantalla completa (kiosko)"}</span></button>` : ""}
@@ -465,6 +569,8 @@ export function mountHomeView(container, navigate) {
         close();
         if (action === "rates") handleSyncRates();
         else if (action === "rate-status") openRateStatusDialog();
+        else if (action === "instalar") handleInstallClick();
+        else if (action === "rendimiento") openTelemetryDialog();
         else if (action === "conexion") openConexionDialog();
         else if (action === "theme") {
           store.setTheme(store.getState().theme === "dark" ? "light" : "dark");

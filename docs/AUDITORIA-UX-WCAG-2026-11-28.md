@@ -209,7 +209,16 @@ volver → foco en Cobrar), suite 406/406 y `npm run validate` OK. Los
 reports quedan en `a11y-reports/axe-0*.json` y el guion de reproducción
 en `scripts/verificar-b2.sh`.
 
-**Queda para B3:** extracción completa de tokens a `:root` (color,
-espaciado, radios), foco visible estandarizado 2 px, estados de
-error/éxito con texto además de color, y revisar `global-search.js`,
-que mantiene su propio overlay div en vez del sistema `<dialog>`.
+**B3 aplicado (v5.39.6):** escala completa de tokens a `:root` — color ya
+tokenizado desde B1, ahora espaciado 4/8 (`--space-1…8`) y tipografía
+(`--text-xs…2xl`, `--leading-*`) en `css/mobile-ux.css`; radios
+(`--radius-*`) y foco visible 2 px (`:focus-visible`) ya estaban
+estandarizados en `styles.css` y quedan con test de regresión. Estados
+error/éxito con texto además de color: toasts con icono+texto y el punto
+«Caja sin cerrar» con `role="img"` + `aria-label` + `title`.
+`global-search.js` migrado al dialog nativo del sistema vía `showModal()`
+(sin cabecera, alineado arriba, `aria-label` «Búsqueda global») — recorrido
+Ctrl+K → escribir → Enter navega y cierra, Escape cierra; axe **0
+violaciones** con la paleta abierta (`a11y-reports/axe-08-b3-search.json`),
+suite 418/418 (+6 tests de B3 en `tests/b3-ui.test.js`). Report de
+verificación en `scripts/verificar-b3.sh`.

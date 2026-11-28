@@ -549,6 +549,38 @@
 :root, [data-theme="light"] { --edge-shadow: oklch(0.3 0.03 220 / 0.22); }
 [data-theme="dark"] { --edge-shadow: oklch(0 0 0 / 0.65); }
 
+/* ============================================================
+   LOTE B3 (v5.39.6): escala de tokens a :root — espaciado y
+   tipografía. El color ya vive en tokens (arriba); con esto el
+   sistema queda completo y las vistas nuevas no divergen:
+   · espaciado 4/8: usar --space-N (1=4px … 16=64px) en padding,
+     gap y margin en lugar de rem sueltos.
+   · tipografía: --text-* para tamaños, --leading-* para línea.
+     Las cifras siguen en Barlow Condensed (clase .numeric).
+   · radios y foco ya estandarizados en styles.css (--radius-*)
+     y :focus-visible { outline: 2px }.
+   Estados error/éxito: siempre texto además del color (los
+   toasts llevan icono+texto; los badges de estado, aria-label).
+   ============================================================ */
+:root {
+  --space-1: 0.25rem;   /* 4px  — separación mínima, icono↔texto */
+  --space-2: 0.5rem;    /* 8px  — gap dentro de una tarjeta */
+  --space-3: 0.75rem;   /* 12px — padding de botones/badges */
+  --space-4: 1rem;      /* 16px — padding de tarjeta */
+  --space-5: 1.5rem;    /* 24px — entre secciones relacionadas */
+  --space-6: 2rem;      /* 32px — entre bloques */
+  --space-8: 3rem;      /* 48px — aire de página */
+  --text-xs: 0.6875rem; /* 11px — kbd, notas al pie */
+  --text-sm: 0.75rem;   /* 12px — subtítulos, metadatos */
+  --text-base: 0.875rem;/* 14px — cuerpo en móvil */
+  --text-md: 0.9375rem; /* 15px — cuerpo cómodo / inputs */
+  --text-lg: 1.125rem;  /* 18px — títulos de tarjeta */
+  --text-xl: 1.5rem;    /* 24px — cifras destacadas */
+  --text-2xl: 2rem;     /* 32px — hero */
+  --leading-tight: 1.2;
+  --leading-normal: 1.45;
+}
+
 .admin-shell { background: var(--bg); }
 .admin-main {
   background:

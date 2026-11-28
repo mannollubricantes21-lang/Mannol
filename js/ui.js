@@ -79,7 +79,7 @@ function getToastIcon(type) {
 // Each modal is identified by a unique ID; selectors are scoped to that modal's overlay element.
 let _modalCounter = 0;
 
-export function showModal({ title, body, footer, onClose, size }) {
+export function showModal({ title, body, footer, onClose, size, noHeader, ariaLabel, align, cardStyle }) {
   const container = document.getElementById("modal-container");
   if (!container) return () => {};
   const prevFocus = document.activeElement; // para restaurar el foco al cerrar
@@ -92,13 +92,20 @@ export function showModal({ title, body, footer, onClose, size }) {
   const dlg = document.createElement("dialog");
   dlg.className = "modal-overlay";
   dlg.dataset.modalId = modalId;
-  dlg.setAttribute("aria-labelledby", `${modalId}-title`);
+  // v5.39.6: sin cabecera (paleta Ctrl+K) el nombre accesible viene por aria-label
+  if (noHeader && ariaLabel) dlg.setAttribute("aria-label", ariaLabel);
+  else dlg.setAttribute("aria-labelledby", `${modalId}-title`);
+  if (align === "top") {
+    dlg.style.alignItems = "flex-start";
+    dlg.style.paddingTop = "10vh";
+  }
   dlg.innerHTML = `
-    <div class="modal" style="${size === 'lg' ? 'max-width: 42rem;' : ''}">
+    <div class="modal" style="${size === 'lg' ? 'max-width: 42rem;' : ''}${cardStyle || ""}">
+      ${noHeader ? "" : `
       <div class="modal-header">
         <h3 class="modal-title" id="${modalId}-title">${title || ""}</h3>
         <button class="btn btn-ghost btn-icon modal-close" aria-label="Cerrar" type="button">✕</button>
-      </div>
+      </div>`}
       <div class="modal-body">${body || ""}</div>
       ${footer ? `<div class="modal-footer">${footer}</div>` : ""}
     </div>
@@ -134,7 +141,8 @@ export function showModal({ title, body, footer, onClose, size }) {
   dlg.addEventListener("click", (e) => {
     if (e.target === dlg) close();
   });
-  dlg.querySelector(".modal-close").addEventListener("click", close);
+  // v5.39.6: con noHeader no existe .modal-close (el cuerpo pone su propio ✕)
+  dlg.querySelector(".modal-close")?.addEventListener("click", close);
 
   container.appendChild(dlg);
   if (isNative && typeof dlg.showModal === "function") dlg.showModal();

@@ -1,5 +1,72 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.40.0 (2026-11-28) — Etapa C: telemetría real de velocidad + botón «Instalar la app»
+
+> Requiere SQL: sección **v5.40 · TELEMETRÍA** al final de
+> `supabase/instalar.sql` (tabla `web_vitals` + RLS). Ejecutar el archivo
+> entero en Supabase → SQL Editor; no borra datos. Cambian `app.js`,
+> `home.js`, `sw.js`, `version.js` y entran `js/telemetry.js`,
+> `js/pwa-install.js`. Suite 430/430 (+12 tests).
+
+- **Rendimiento (velocidad real) — Etapa C:** la auditoría pidió medir p75
+  LCP/INP/CLS de campo (los equipos de los vendedores) ANTES de optimizar
+  rendimiento. Nuevo `js/telemetry.js` sin dependencias externas: mide con
+  `PerformanceObserver` (LCP, CLS acumulado y la peor interacción como INP),
+  solo registra con sesión iniciada — la portada anónima no genera filas —,
+  encola en localStorage y sube en lote a `public.web_vitals` al ocultar la
+  pantalla o cada 60 s. Si Supabase rechaza, la cola espera al siguiente
+  intento. Verificado en navegador real: 4 muestras capturadas en 65 s
+  (LCP 60 ms «good» + INP, build 5.40.0).
+- **Panel «Rendimiento» (admin):** ítem del menú de home (solo admins) con
+  p75 por métrica, objetivo visible (LCP ≤ 2.5 s · INP ≤ 200 ms · CLS ≤ 0.1),
+  marca ✓/⚠ por umbral Core Web Vitals, n muestras y fecha de la última.
+  Sin datos muestra instrucción honesta en lugar de números vacíos.
+- **«Instalar la app»:** nuevo `js/pwa-install.js` — captura
+  `beforeinstallprompt` (Chromium/Android), el menú muestra el ítem solo
+  cuando aplica (`!standalone && (prompt || iOS)`); en iOS Safari abre
+  instrucciones de Compartir → «Añadir a pantalla de inicio». El resultado
+  del prompt avisa por toast (instalada / después / navegador).
+- **SQL + seguridad:** `web_vitals` con `user_id` completado por la DB
+  (`default auth.uid()`), insert solo de autenticados que escriben su propio
+  id, lectura solo admin (`public.is_admin()`) e índice `(metric, created_at)`.
+- **Verificación:** suite 430/430 + `npm run validate` OK; arranque limpio
+  (init done, sin errores), axe home **0 violaciones**,
+  `a11y-reports/axe-09-v540-home.json`, guion `scripts/verificar-v540.sh`.
+
+## v5.39.6 (2026-11-28) — Lote B3 de accesibilidad: tokens, foco y búsqueda global nativa
+
+> Sin SQL. Cambian `js/ui.js`, `js/global-search.js`, `js/views/{home,
+> warehouse-interior}.js`, `css/mobile-ux.css` y `js/version.js`. Suite
+> 418/418 (+6 tests).
+
+- **Búsqueda global en `<dialog>` nativo:** la paleta Ctrl+K era el último
+  modal que montaba su propio overlay div con `role="dialog"` a mano.
+  Ahora usa `showModal()` de ui.js como todo el sistema desde v5.39.4 —
+  trampa de foco, Escape y restauración de foco los hace el navegador.
+  `showModal()` gana las opciones `noHeader` (sin título, `aria-label`),
+  `align: "top"` (paleta arriba) y `cardStyle` (ancho de la paleta);
+  conservando su ✕ dentro del cuerpo. Recorrido verificado: Ctrl+K →
+  escribir → Enter navega y cierra, Escape cierra, foco en el input.
+- **Tokens a `:root` (B3):** el color ya estaba tokenizado; ahora también
+  el espaciado 4/8 (`--space-1…8`) y la tipografía (`--text-xs…2xl`,
+  `--leading-tight/normal`) en `css/mobile-ux.css`, con comentario de uso
+  para que las vistas nuevas no diverjan. Radios y foco 2 px ya estaban y
+  quedan con test de regresión (`tests/b3-ui.test.js`).
+- **Estados con texto además de color:** el punto rojo «Caja sin cerrar»
+  del interior de almacén ahora lleva `role="img"` + `aria-label` + `title`
+  (antes solo el color lo decía visualmente; los toasts ya llevaban
+  icono+texto).
+- **Tasas de la portada con frescura y salida (lo que muestra la captura):**
+  cuando hay tasa real, la tarjeta añade «· hace X» con la edad de la
+  lectura; cuando NO la hay («Sin tasa real»), la tarjeta lleva un
+  `title` accionable: «Publica tasa.json (secreto ELTOQUE_API_KEY en
+  GitHub) o fija la tasa en Admin → Tasas». El estado de la tasa completa
+  sigue en Menú → «Estado de las tasas» (v5.39.5).
+- **Verificación:** suite 418/418 + `npm run validate` OK; navegador:
+  dialog nativo `:modal` con aria-label correcto, resultados al teclear,
+  Enter/Escape correctos y axe **0 violaciones** con la paleta abierta
+  (`a11y-reports/axe-08-b3-search.json`, guion `scripts/verificar-b3.sh`).
+
 ## v5.39.5 (2026-11-28) — Mejoras de operación: credenciales fuera del repo, caché automática y estado de las tasas
 
 > Sin SQL. Cambian `sw.js`, `js/update-banner.js`, `js/version.js`,

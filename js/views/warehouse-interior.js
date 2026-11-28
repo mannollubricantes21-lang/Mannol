@@ -914,7 +914,7 @@ export function mountWarehouseInterior(container, navigate) {
       const cajaBtn = document.querySelector('.nav-btn[data-nav="wi-caja"]');
       if (cajaBtn) {
         cajaBtn.querySelector(".nav-badge")?.remove();
-        if (!todayClosed && (todayStats.salesCount > 0 || openingFloat)) cajaBtn.insertAdjacentHTML("beforeend", `<span class="nav-badge nav-badge--dot" aria-label="Caja sin cerrar"></span>`);
+        if (!todayClosed && (todayStats.salesCount > 0 || openingFloat)) cajaBtn.insertAdjacentHTML("beforeend", `<span class="nav-badge nav-badge--dot" role="img" aria-label="Caja sin cerrar" title="Caja sin cerrar"></span>`);
       }
     } catch {}
 

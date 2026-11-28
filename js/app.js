@@ -12,6 +12,8 @@ import { askPermission, notifyConnectionRestored } from "./push-notify.js";
 import { setupUpdateBanner } from "./update-banner.js";
 import { setupTableCards, escapeHtml, toast } from "./ui.js";
 import { setupErrorReporting } from "./error-report.js";
+import { initTelemetry } from "./telemetry.js";
+import { initPwaInstall } from "./pwa-install.js";
 import { mountHomeView } from "./views/home.js";
 import { mountPinLoginView } from "./views/pin-login.js";
 import { mountUserLoginView } from "./views/user-login.js";
@@ -267,6 +269,10 @@ function init() {
 
   // Setup global search palette (Cmd/Ctrl+K)
   setupGlobalSearch((view) => navigate(view));
+
+  // v5.40: telemetría de campo (p75 LCP/INP/CLS → Etapa C) + instalación PWA
+  initTelemetry();
+  initPwaInstall();
 
   // Setup offline badge + kiosk button
   setupOfflineBadge();
