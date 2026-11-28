@@ -350,8 +350,21 @@ async function isDemo() {
 // respuesta buena. Si la red falla y el service worker no tiene la respuesta,
 // se usa esta copia → el PIN y el almacén de cada venta siguen siendo reales.
 const MIRROR_PREFIX = "mannol-mirror-v1:";
-function mirrorSave(name, data) {
-  try { localStorage.setItem(MIRROR_PREFIX + name, JSON.stringify({ ts: Date.now(), data })); } catch {}
+// v5.39.2: los errores de cuota ya no se tragan en silencio (hallazgo 6 de la
+// revisión): se registran, se avisa por evento y se pueden consultar.
+let _mirrorQuotaFailedAt = 0;
+export function getMirrorStatus() {
+  return { quotaFailedAt: _mirrorQuotaFailedAt };
+}
+// Exportada solo para tests y diagnóstico; la app la usa internamente.
+export function mirrorSave(name, data) {
+  try {
+    localStorage.setItem(MIRROR_PREFIX + name, JSON.stringify({ ts: Date.now(), data }));
+  } catch (err) {
+    _mirrorQuotaFailedAt = Date.now();
+    console.warn("[Mirror] No se pudo guardar el espejo", name, "— cuota de localStorage llena:", err?.name || err);
+    try { window.dispatchEvent(new CustomEvent("mannol:mirror-quota", { detail: { name } })); } catch {}
+  }
 }
 function mirrorLoad(name) {
   try {

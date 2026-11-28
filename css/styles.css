@@ -48,19 +48,20 @@ table { border-collapse: collapse; width: 100%; }
   --border-strong: oklch(0.8 0.01 220);
   --border-on-dark: oklch(1 0 0 / 12%);
 
-  /* Primario: esmeralda */
-  --primary: oklch(0.55 0.13 165);
-  --primary-hover: oklch(0.5 0.13 165);
+  /* Primario: esmeralda — v5.39.3: L 0.55→0.53 para blanco ≥4.5:1 (WCAG 1.4.3) */
+  --primary: oklch(0.53 0.13 165);
+  --primary-hover: oklch(0.48 0.13 165);
   --primary-foreground: oklch(0.99 0.005 95);
   --primary-soft: oklch(0.95 0.03 165);
-  --primary-tint: oklch(0.55 0.13 165 / 0.1);
+  --primary-tint: oklch(0.53 0.13 165 / 0.1);
 
-  /* Acentos por moneda */
-  --accent: oklch(0.6 0.13 165);   /* alias de accent-usd para compat */
-  --accent-usd: oklch(0.6 0.13 165);   /* esmeralda */
+  /* Acentos por moneda — v5.39.3: L ajustados a ≥4.5:1 con blanco y como texto */
+  --accent: oklch(0.53 0.13 165);   /* alias de accent-usd para compat */
+  --accent-usd: oklch(0.53 0.13 165);   /* esmeralda */
   --accent-eur: oklch(0.55 0.2 305);   /* violeta */
-  --accent-mn: oklch(0.62 0.13 220);   /* cian */
-  --accent-transfer: oklch(0.7 0.13 200); /* cyan claro */
+  --accent-mn: oklch(0.53 0.13 220);   /* cian */
+  --accent-transfer: oklch(0.52 0.13 200); /* cyan claro */
+  --accent-foreground: oklch(0.99 0.005 95);
 
   --danger: oklch(0.58 0.22 27);
   --danger-foreground: #ffffff;
@@ -103,12 +104,13 @@ table { border-collapse: collapse; width: 100%; }
   --primary-soft: oklch(0.3 0.04 165);
   --primary-tint: oklch(0.7 0.15 165 / 0.15);
 
-  /* Acentos por moneda (dark) */
+  /* Acentos por moneda (dark) — v5.39.3: accent-foreground oscuro para texto sobre relleno verde claro */
   --accent: oklch(0.7 0.15 165);
   --accent-usd: oklch(0.7 0.15 165);
   --accent-eur: oklch(0.68 0.21 305);
   --accent-mn: oklch(0.72 0.14 220);
   --accent-transfer: oklch(0.75 0.13 200);
+  --accent-foreground: oklch(0.16 0.015 220);
 
   --danger: oklch(0.68 0.2 25);
   --warning: oklch(0.78 0.17 80);
@@ -174,7 +176,7 @@ table { border-collapse: collapse; width: 100%; }
 .text-on-dark { color: var(--text-on-dark); }
 .text-muted-on-dark { color: var(--text-muted-on-dark); }
 .bg-primary { background: var(--primary); color: var(--primary-foreground); }
-.bg-accent { background: var(--accent-usd); color: white; }
+.bg-accent { background: var(--accent-usd); color: var(--accent-foreground); }
 .bg-danger { background: var(--danger); color: var(--danger-foreground); }
 .bg-soft { background: var(--bg-soft); }
 .bg-elevated { background: var(--bg-elevated); }
@@ -208,6 +210,8 @@ table { border-collapse: collapse; width: 100%; }
 .py-6 { padding-top: 1.5rem; padding-bottom: 1.5rem; }
 .mt-1 { margin-top: 0.25rem; }
 .mt-2 { margin-top: 0.5rem; }
+/* v5.39.3 (WCAG 1.4.1): enlaces distinguibles sin depender del color */
+.mt-2 a { text-decoration: underline; }
 .mt-3 { margin-top: 0.75rem; }
 .mt-4 { margin-top: 1rem; }
 .mt-6 { margin-top: 1.5rem; }
@@ -388,7 +392,7 @@ table { border-collapse: collapse; width: 100%; }
 .btn-danger:hover:not(:disabled) { opacity: 0.9; }
 .btn-accent {
   background: var(--accent-usd);
-  color: white;
+  color: var(--accent-foreground);
 }
 .btn-sm { padding: 0.25rem 0.75rem; min-height: 2rem; font-size: 0.75rem; }
 .btn-lg { padding: 0.75rem 1.5rem; min-height: 3rem; font-size: 1rem; }
@@ -465,7 +469,7 @@ table { border-collapse: collapse; width: 100%; }
   border: 1px solid var(--border);
 }
 .badge-primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
-.badge-accent { background: var(--accent-usd); color: white; border-color: var(--accent-usd); }
+.badge-accent { background: var(--accent-usd); color: var(--accent-foreground); border-color: var(--accent-usd); }
 .badge-danger { background: var(--danger); color: var(--danger-foreground); border-color: var(--danger); }
 .badge-warning { background: color-mix(in oklab, var(--warning) 20%, transparent); color: var(--warning); border-color: color-mix(in oklab, var(--warning) 40%, transparent); }
 .badge-outline { background: transparent; color: var(--text-soft); border: 1px solid var(--border-strong); }
@@ -495,6 +499,22 @@ table { border-collapse: collapse; width: 100%; }
   animation: fadeIn 0.15s ease;
 }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+/* v5.39.4: .modal-overlay es ahora <dialog> nativo — reinicio del estilo UA
+   y el oscurecido en ::backdrop (el dialog en sí es transparente) */
+dialog.modal-overlay {
+  border: 0;
+  margin: 0;
+  max-width: none;
+  max-height: none;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  color: inherit;
+}
+dialog.modal-overlay::backdrop {
+  background: rgba(0,0,0,0.5);
+  animation: fadeIn 0.15s ease;
+}
 .modal {
   background: var(--bg-elevated);
   border-radius: var(--radius-xl);
@@ -917,6 +937,7 @@ code, .code {
 }
 .tabs-trigger {
   padding: 0.5rem 0.75rem;
+  min-height: 2.75rem;
   border-radius: var(--radius-sm);
   font-size: 0.875rem;
   font-weight: 500;
@@ -1024,6 +1045,9 @@ code, .code {
   border-color: var(--primary) !important;
   background: var(--primary-tint) !important;
 }
+/* v5.39.4 (1.4.3): el texto muted sobre el tinte verde del método seleccionado
+   caía bajo 4.5:1 — dentro de la tarjeta seleccionada pasa a text-soft */
+.payment-card.selected .text-muted { color: var(--text-soft); }
 
 /* ===================================================== */
 /* Skeleton loaders — placeholders during async fetches  */
@@ -1961,12 +1985,13 @@ kbd {
 }
 .premium-source-badge.api {
   background: color-mix(in oklab, var(--primary) 12%, transparent);
-  color: var(--primary);
+  /* v5.39.3 (WCAG 1.4.3): tinta oscura/clara según tema en vez de primary puro */
+  color: color-mix(in oklab, var(--primary) 45%, var(--text));
   border: 1px solid color-mix(in oklab, var(--primary) 25%, transparent);
 }
 .premium-source-badge.manual {
   background: color-mix(in oklab, var(--warning) 12%, transparent);
-  color: var(--warning);
+  color: color-mix(in oklab, var(--warning) 45%, var(--text));
   border: 1px solid color-mix(in oklab, var(--warning) 25%, transparent);
 }
 .premium-source-badge .dot {

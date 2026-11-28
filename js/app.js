@@ -10,7 +10,8 @@ import { setupAutoSync } from "./offline-sync.js";
 import { setupGlobalSearch } from "./global-search.js";
 import { askPermission, notifyConnectionRestored } from "./push-notify.js";
 import { setupUpdateBanner } from "./update-banner.js";
-import { setupTableCards } from "./ui.js";
+import { setupTableCards, escapeHtml, toast } from "./ui.js";
+import { setupErrorReporting } from "./error-report.js";
 import { mountHomeView } from "./views/home.js";
 import { mountPinLoginView } from "./views/pin-login.js";
 import { mountUserLoginView } from "./views/user-login.js";
@@ -113,7 +114,7 @@ function renderView(container, view, navigate) {
           <div class="card">
             <div class="card-content">
               <h2 class="text-lg font-bold mb-2">⚠️ Error al cargar la vista</h2>
-              <p class="text-sm text-muted mb-4">${err.message}</p>
+              <p class="text-sm text-muted mb-4">${escapeHtml(err.message)}</p>
               <button class="btn btn-primary" onclick="location.reload()">Reintentar</button>
             </div>
           </div>
@@ -126,6 +127,9 @@ function renderView(container, view, navigate) {
 // ===== Init =====
 function init() {
   console.info("[App] init starting...");
+  // v5.39.2: la red global de errores se instala PRIMERO; cualquier fallo
+  // posterior (promesas incluidas) queda registrado y reportable.
+  setupErrorReporting();
   const store = getStore();
 
   // Apply initial theme
@@ -240,6 +244,16 @@ function init() {
   // Setup auto-sync: triggers on 'online' event + periodic check every 30s
   setupAutoSync();
 
+  // v5.39.2: si la cuota de localStorage se llena, los espejos offline dejan
+  // de actualizarse en silencio (hallazgo 6 de la revisión); ahora avisa.
+  window.addEventListener("mannol:mirror-quota", () => {
+    toast(
+      "Memoria del navegador llena: los datos para trabajar sin conexión pueden quedar desactualizados. Exporta un respaldo y libera espacio.",
+      "warning",
+      8000
+    );
+  });
+
   // v5.13.0: precarga en segundo plano de lo necesario para vender sin
   // conexión en cualquier almacén (al abrir y al volver internet).
   const warmUp = () => {
@@ -339,7 +353,7 @@ try {
     container.innerHTML = `
       <div style="padding: 2rem; text-align: center; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; font-family: sans-serif;">
         <h2 style="color: #ef4444;">⚠️ Error al iniciar</h2>
-        <p style="color: #666; max-width: 400px;">${err.message}</p>
+        <p style="color: #666; max-width: 400px;">${escapeHtml(err.message)}</p>
         <button onclick="location.reload()" style="padding: 0.5rem 1.5rem; background: #10b981; color: white; border: none; border-radius: 0.5rem; cursor: pointer; font-size: 1rem;">Reintentar</button>
       </div>
     `;

@@ -80,7 +80,8 @@ export function setupUpdateBanner({ register = false } = {}) {
 
   if (register) {
     const doRegister = () => {
-      navigator.serviceWorker.register("./sw.js", { scope: "./" })
+      // v5.39.5: el SW es módulo ES (importa la versión de js/version.js)
+      navigator.serviceWorker.register("./sw.js", { scope: "./", type: "module" })
         .then(activate)
         .catch((err) => console.warn("[SW] registration failed:", err));
     };

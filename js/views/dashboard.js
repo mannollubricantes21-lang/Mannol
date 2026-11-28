@@ -128,7 +128,7 @@ export function mountDashboardView(container, navigate) {
     const pin = isPinUser(user) && !!warehouse;
     const navList = pin ? PIN_NAV_ITEMS : navItemsFor(user.role);
     const navBtn = (item) => `
-                <button class="nav-btn ${activeView === item.id ? 'active' : ''}" data-nav="${item.id}" aria-label="${item.label}" aria-current="${activeView === item.id ? 'page' : 'false'}">${icon(item.icon, 20)}<span class="nav-btn-label">${item.label}</span></button>`;
+                <button class="nav-btn ${activeView === item.id ? 'active' : ''}" data-nav="${item.id}" aria-current="${activeView === item.id ? 'page' : 'false'}">${icon(item.icon, 20)}<span class="nav-btn-label">${item.label}</span></button>`;
     const pinHeader = pin ? `
         <header class="app-header app-header--wh" style="--wh:${warehouseColor(warehouse)}">
           <div class="app-header-inner">
@@ -174,7 +174,7 @@ export function mountDashboardView(container, navigate) {
 
         <nav class="bottom-nav" aria-label="Navegación principal">
           <div style="position:relative">
-            ${user.role !== "admin" ? `<button class="fab" id="fab-sell" aria-label="Registrar nueva venta" title="Registrar venta">${icon("cart", 24)}${pin ? `<span class="fab-label">Vender</span>` : ""}</button>` : ''}
+            ${user.role !== "admin" ? `<button class="fab" id="fab-sell" aria-label="Vender — registrar nueva venta" title="Registrar venta">${icon("cart", 24)}${pin ? `<span class="fab-label">Vender</span>` : ""}</button>` : ''}
             <div class="bottom-nav-bar">
               ${navList.slice(0, 2).map(navBtn).join('')}
               <div class="flex items-center justify-center"></div>

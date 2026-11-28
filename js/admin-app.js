@@ -23,6 +23,7 @@ import { setupGlobalSearch } from "./global-search.js";
 import { setupUpdateBanner } from "./update-banner.js";
 import { notifyLowStock } from "./push-notify.js";
 import { mountAdminPanel } from "./views/admin.js";
+import { setupErrorReporting } from "./error-report.js";
 
 // Registro del service worker + banner "Nueva versión disponible".
 // admin.html se puede abrir directo sin pasar por index — así el SW
@@ -32,6 +33,8 @@ setupUpdateBanner({ register: true });
 // ===== Bootstrap =====
 async function init() {
   console.info("[Admin] init starting...");
+  // v5.39.2: red global de errores también en el panel admin
+  setupErrorReporting();
   const store = getStore();
 
   // Apply initial theme
@@ -262,7 +265,7 @@ function renderAdminLogin(container, errorMessage) {
                 <form id="admin-login-form" style="display:flex;flex-direction:column;gap:0.75rem">
                   <div>
                     <label class="label" for="admin-email">Email</label>
-                    <input class="input" type="email" id="admin-email" placeholder="admin@mannol.cu" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus />
+                    <input class="input" type="text" id="admin-email" placeholder="admin@mannol.cu" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus />
                   </div>
                   <div>
                     <label class="label" for="admin-password">Contraseña</label>

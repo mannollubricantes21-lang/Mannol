@@ -21,21 +21,13 @@ async function sb() {
   return await getSupabase();
 }
 
-// Get settings (cached) for PIN validation
-async function getSettingsForPin() {
-  const store = getStore();
-  const cached = store.getState().settings;
-  if (cached && cached.pinCode) return cached;
-  // Lazy-load db helpers
-  const { getSettings } = await import("./db.js");
-  return await getSettings();
-}
-
-// Validate PIN against settings
-export async function validatePin(pin) {
-  const settings = await getSettingsForPin();
-  return pin === settings.pinCode;
-}
+// v5.39.2: se eliminan validatePin() y getSettingsForPin() — código muerto.
+// El ingreso por PIN se verifica SIEMPRE del lado servidor (RPC
+// verify_warehouse_pin con límite de intentos) o contra el hash cacheado;
+// comparar el PIN en claro contra settings.pinCode era una vía débil y
+// sin usos. Tampoco hay registerUser(): crear usuarios es tarea del
+// servidor (RPC saveUser); la API auth.admin exige service_role y con la
+// clave anon siempre respondía 401.
 
 // Login with email + password
 export async function loginWithEmail(email, password) {
@@ -194,20 +186,6 @@ export function subscribeAuth(cb) {
     }
   })();
   return () => unsub();
-}
-
-// Helper: register a new user (admin only — used by users.js view via saveUser)
-export async function registerUser(email, password, metadata = {}) {
-  const s = await sb();
-  if (!s) throw new Error("Supabase no está configurado");
-  const { data, error } = await s.auth.admin.createUser({
-    email: email.toLowerCase(),
-    password,
-    email_confirm: true,
-    user_metadata: metadata,
-  });
-  if (error) throw error;
-  return data.user;
 }
 
 // Helper: change current user's password

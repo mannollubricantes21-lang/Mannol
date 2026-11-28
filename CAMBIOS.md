@@ -1,5 +1,204 @@
 # 📦 MANNOL POS — Actualizaciones aplicadas
 
+## v5.39.5 (2026-11-28) — Mejoras de operación: credenciales fuera del repo, caché automática y estado de las tasas
+
+> Sin SQL. Cambian `sw.js`, `js/update-banner.js`, `js/version.js`,
+> `js/views/home.js` y `js/supabase-config.js` (fuera del índice de git).
+> Suite 412/412 (+6 tests).
+
+- **Credenciales fuera del código (#1):** `js/supabase-config.js` (URL +
+  clave pública del proyecto real) estaba en el índice de git pese al
+  `.gitignore` — se agregó al repo antes de que existiera la exclusión y
+  `git add` la seguía comiteando. Ahora: `git rm --cached` + `.gitignore`
+  vigente. El archivo sigue funcionando en el servidor donde exista
+  (tiene prioridad, como en v5.20.0); un clon fresco sin ese archivo
+  configura la conexión desde la app.
+- **Conexión desde la app de vuelta:** el asistente retirado (setup.html)
+  dejaba a un clon fresco sin forma de configurar Supabase. El menú de la
+  portada tiene «Conexión de datos (Supabase)»: muestra el estado real
+  (archivo del servidor / config de este equipo / modo demo), guarda URL +
+  clave pública SOLO en el localStorage del equipo, valida la URL
+  (`https://<proyecto>.supabase.co`) y permite borrarla. Diálogo nativo
+  del sistema `<dialog>` de v5.39.4.
+- **CACHE_VERSION automático (#3):** el SW ya no lleva contador manual
+  («v74»): es módulo ES e importa `APP_VERSION/APP_BUILD` de
+  `js/version.js` (única fuente de verdad) → la caché se llama
+  `mannol-pos-<versión>(<build>)` y cada release invalida la anterior sin
+  tocar sw.js. El registro usa `type: "module"`. Tests estáticos impiden
+  la regresión (no queda «mannol-pos-supabase-vNN» en el archivo).
+- **Estado de las tasas (#4):** nueva entrada «Estado de las tasas» en el
+  menú: lee `tasa.json` (elToque, publicada al lado de la app, con
+  respaldo local) y muestra USD/EUR → MN, hace cuánto se publicó, la
+  fuente y un chip de frescura medido: «Al día» ≤48 h,
+  «Desactualizada» ≤7 días, «Vencida» más de 7 días, con botón «Releer
+  tasa.json». Los colores del chip reusan los pares de contraste AA
+  medidos en v5.39.3 (blanco/primary 4.82:1, blanco/danger 4.78:1).
+- **Verificación:** suite 412/412 + `npm run validate` OK; en navegador:
+  menú con las dos entradas nuevas, ambos diálogos nativos (`:modal`),
+  el estado del archivo de config correcto, validación de URL sin recargar,
+  Escape y axe **0 violaciones** con el diálogo de conexión abierto
+  (`a11y-reports/axe-07-conexion-dialog.json`).
+
+## v5.39.4 (2026-11-28) — Lote B2 de accesibilidad: semántica del flujo de venta
+
+> Sin SQL. Cambian `js/ui.js`, `js/views/{home,sales}.js`, 2 CSS,
+> `js/version.js` y `sw.js` (v74). Aplica los hallazgos P0-2 y P1-3 de la
+> auditoría UX/WCAG del 28/11/2026 y refina P2-7.
+
+- **Sistema de modales sobre `<dialog>` nativo (P1-3):** `showModal()` en
+  `js/ui.js` ahora crea un `<dialog class="modal-overlay">` y lo abre con
+  `showModal()`. La trampa de foco, el Escape y la restauración del foco
+  al cerrar los maneja el navegador (se eliminaron ~40 líneas de
+  trap/ESC manuales). Fallback con `open` + ESC manual para jsdom (tests)
+  y navegadores sin `<dialog>`. Beneficia al catálogo de productos,
+  confirmDialog y todos los modales del POS; el `:backdrop` y el bottom
+  sheet móvil se reposicionan en CSS (`dialog.modal-overlay::backdrop`).
+- **Filas de almacén sin interactivos anidados (P0-2):** el contenedor
+  `.wh-row` ya no es `role=button`; lleva un `<button class="wh-row-enter">`
+  nativo estirado (`position:absolute; inset:0`) con el nombre accesible
+  «Entrar al almacén X con PIN», y el enlace de llamar queda encima
+  (z-index) como hermano, no como descendiente. Tap en toda la fila y
+  Tab en orden natural (entrar → llamar).
+- **Foco gestionado en el paso de cobro:** el re-render que muestra el
+  paso «Cobrar» destruye el botón Cobrar y el foco se iba al `body`;
+  ahora aterriza en `#payment-section` (con `tabindex="-1"`) y al volver
+  al carrito el foco regresa al botón Cobrar. Recorrido verificado solo
+  con teclado: Cobrar → sección de pago → Tab → «Una moneda» → volver →
+  Cobrar.
+- **Hallazgos nuevos al auditar con los modales ABIERTOS** (estado que
+  las auditorías previas no cubrían): productos agotados ya no usan
+  `opacity` en el contenedor (componía el subárbol y dejaba el texto y el
+  tag «Agotado» a 3.88:1) — la atenuación vive solo en las fotos; el
+  badge del botón Catálogo pierde el tinte blanco 20 % (3.43:1); los
+  chips de más vendidos nombran por contenido visible (2.5.3); los tiles
+  de tasa de la portada también (el nombre accesible era incompatible con
+  el texto dinámico de la tasa); el texto muted dentro de la tarjeta del
+  método de pago seleccionado pasa a text-soft; el «Cambiar» del resumen
+  usa tinta en vez de verde puro.
+- **Corrección del informe:** el «FAB de 24×24 px» era un artefacto de
+  medición — el botón real mide 64×64 y `targetsMenores44` da vacío en el
+  flujo canónico; P1-4 queda cerrado con el renombre accesible de v5.39.3.
+- **Verificación:** axe-core **0 violaciones en 7 estados** (5 pantallas +
+  catálogo-modal abierto + paso de cobro), suite 406/406 verde,
+  `npm run validate` OK. Se mantienen para B3: tokens de color/espaciado
+  completos en `:root`, foco visible 2 px y estados con texto además de
+  color.
+
+## v5.39.3 (2026-11-28) — Lote B1 de accesibilidad: contraste AA, targets de 44 px y nombres accesibles
+
+> Sin SQL. Cambian 2 CSS, 2 vistas js/, index/admin.html (cache-bust de CSS),
+> `js/version.js` y `sw.js` (v73). Aplica los hallazgos P0-1, P1-4 (nombre),
+> P1-5 y P2-6/P2-7 de la auditoría UX/WCAG del 28/11/2026
+> (`docs/AUDITORIA-UX-WCAG-2026-11-28.md`).
+
+- **Contraste WCAG 1.4.3 en verde (P0-1):** el tema claro pasa de
+  `--primary: oklch(0.55…)` a `0.53` y los acentos usd/cian bajan a
+  L 0.52–0.53, de modo que el blanco sobre verde rinde ≥4.6:1 (botones
+  `#admin-login-submit`, `.btn` del PIN, FAB). El tema oscuro añade
+  `--accent-foreground` (texto oscuro sobre relleno verde claro, el mismo
+  patrón que ya usaba `--primary-foreground`) y `.bg-accent`,
+  `.btn-accent` y `.badge-accent` dejan el `color: white` hardcoded.
+- **Tinta sobre tinte:** `.rates-convert-btn`, `.premium-source-badge`
+  (api/manual) y `.wh-row-icon` usan ahora
+  `color-mix(45%, var(--text))` — tinta oscura en tema claro y clara en
+  oscuro — en vez del color puro del acento, que medía 3.66:1 sobre su
+  propio tinte.
+- **Etiqueta activa del nav inferior (1.4.3):** la barra inferior móvil es
+  siempre oscura; el ítem activo pasa a verde claro `oklch(0.82 0.12 165)`
+  con especificidad `.bottom-nav .nav-btn.active` (verde L 0.53 sobre la
+  barra oscura no llegaba a 4.5:1).
+- **Enlace de admin subrayado (1.4.1):** `.mt-2 a` con subrayado, el
+  «volver al POS» ya no se distingue solo por color.
+- **Targets de 44 px (2.5.8, estándar fuerte):** chips de periodo `.seg`
+  y modos de pago `.tabs-trigger` suben a `min-height: 2.75rem` (medían
+  36/37 px).
+- **Nombres accesibles coherentes (2.5.3):** el FAB ahora se llama
+  «Vender — registrar nueva venta» (empieza por el texto visible), los
+  botones del nav pierden el `aria-label` que no coincidía con el badge
+  visible, y los tiles de tasa se anuncian «USD/EUR — convertir tasa a MN».
+- **Cache-bust:** los `<link>` de CSS llevan `?v=5.39.3` y el Service
+  Worker pasa a `v73`, para que ningún cliente quede con el CSS viejo.
+- **Verificación:** axe-core 0 violaciones en las 5 pantallas auditadas
+  (antes: 8 violaciones / 23 nodos), ningún target bajo 44 px, suite
+  406/406 verde y `npm run validate` OK. Quedan para B2: dialog accesible
+  del cobro, filas de almacén sin interactivos anidados y FAB de tamaño
+  real (el botón enfocable mide 24×24).
+
+## v5.39.2 (2026-11-28) — Etapa A del plan de mejoras: 5 arreglos rápidos
+
+> Sin SQL. Cambian 7 archivos js/, sw.js y 4 tests nuevos. Corresponde a los
+> hallazgos 3, 4, 6, 9 y 10 de la revisión de código del 28/11/2026
+> (informe «Revisión de código y plan de mejoras v5.39.1»).
+
+- **Código muerto eliminado (hallazgo 3):** fuera `validatePin()` y
+  `registerUser()` de `js/auth.js`. La comparación de PIN en claro contra
+  `settings.pinCode` (que para lecturas no-admin es siempre el 2025 por
+  defecto) era una vía débil sin usos; y `auth.admin.createUser` con la
+  clave anon siempre responde 401 (exige service_role). El ingreso por PIN
+  sigue solo por la RPC del servidor o el hash cacheado; crear usuarios es
+  tarea de la RPC `saveUser`.
+- **Red global de errores (hallazgo 4):** `js/error-report.js` nuevo
+  instala `window.onerror` + `unhandledrejection` y guarda un anillo de los
+  últimos 30 errores en memoria y localStorage (`mannol-error-log-v1`),
+  con dedupe de ráfagas. Se instala al inicio en `index` y en el panel
+  admin. Además, los dos mensajes de error de `js/app.js` ya interpolan
+  `err.message` escapado con `escapeHtml()` (antes iba crudo a `innerHTML`).
+- **Cuota llena del espejo avisa (hallazgo 6):** `mirrorSave()` en
+  `js/db.js` ya no traga los errores con un `catch {}` vacío: registra la
+  fecha del fallo (nuevo `getMirrorStatus()`), avisa por consola y dispara
+  el evento `mannol:mirror-quota`; la app muestra un toast de aviso para
+  exportar respaldo. Antes, llenarse la cuota dejaba el modo offline
+  sirviendo datos viejos sin que nadie se enterara.
+- **La tasa sobrevive a las actualizaciones (hallazgo 9):** el respaldo sin
+  conexión de `tasa.json` se guarda ahora en `DATA_CACHE`, que `activate`
+  conserva entre releases. Antes caía en la caché de versión: justo tras
+  actualizar la app, un equipo sin internet perdía la tasa hasta volver a
+  tener red.
+- **CSV blindado contra fórmulas (hallazgo 10):** `escapeCSV()`
+  (`js/csv-export.js`, ahora exportada) neutraliza las celdas que empiezan
+  por `= + - @` o tabulador con un apóstrofe inicial (Excel las lee como
+  texto). Los números reales con signo (`-5`, `+2.5`) pasan intactos, así
+  que los montos no cambian.
+- **Tests nuevos:** `csv-formula-guard`, `error-report`, `mirror-quota` y
+  `sw-tasa-cache` (verifica por fuente que el respaldo de la tasa vive en
+  `DATA_CACHE`). Además `js/error-report.js` entró en el precache del
+  service worker y sube `CACHE_VERSION` a v72.
+- **Extra descubierto al montar la demo:** el login del panel admin
+  (`js/admin-app.js`) tenía el campo como `type="email"` y la validación
+  nativa del navegador rechazaba «admin» sin `@` — bloqueaba el inicio de
+  sesión por nombre de usuario documentado en v5.20.0 y hacía imposible
+  probar el modo demo. Ahora es `type="text"` (con test de regresión
+  `admin-login`).
+
+## v5.39.1 (2026-11-28) — El workflow de la tasa ya no pasa en verde sin publicar nada
+
+> Sin SQL. Solo cambia el script de GitHub Actions, la documentación y un test.
+
+- **El problema:** si fallaban la API de elTOQUE, la página pública y Wayback,
+  el script salía en silencio con exit 0 y el run mostraba un check verde sin
+  haber publicado `tasa.json`. Así fue como la tasa dejó de verse durante
+  horas/días sin que nadie lo notara: Actions parecía sano y la app mostraba
+  «Sin tasa real» (comportamiento correcto de la v5.39.0 ante falta de tasa).
+- **El arreglo:** ahora el run **falla en rojo** con un mensaje accionable:
+  - Si falta el secreto → recuerda crearlo como **secret de repositorio**
+    (no de environment) con el nombre exacto `ELTOQUE_API_KEY`.
+  - Si el token fue rechazado (HTTP 401/403/422) → cómo probarlo a mano con
+    curl y cómo renovarlo.
+  - Además emite una anotación `::error::` visible en el resumen del run.
+- `INSTRUCCIONES-TASA.md` nuevo: cómo verificar de verdad que se publicó
+  (`tasa.json` en la raíz / commit del tasa-bot / la URL de Pages), tabla de
+  errores comunes, y el aviso de que **el token puesto en Admin → Tasas de la
+  app no puede funcionar** (elToque no manda cabeceras CORS; el navegador
+  bloquea la llamada — la única vía es GitHub Actions → `tasa.json`).
+- **Detección del caso real** (el secreto tenía el token de OTRA app): si lo
+  guardado en `ELTOQUE_API_KEY` no tiene forma de JWT de elTOQUE (una línea,
+  empieza por `eyJ`, 2 puntos), el mensaje del run lo dice explícitamente y
+  sugiere pedir un token de la API de tasas de elTOQUE. Nunca imprime el valor
+  del secreto, solo cuántas partes tiene.
+- **Blindaje de URL**: si `ELTOQUE_API_URL` (o el panel Admin) guarda
+  `api.eltoque.com/…` (no es la API pública, responde tras Cloudflare), el
+  script la ignora igual que la app y usa `tasas.eltoque.com/v1/trmi`.
+
 ## v5.39.0 (2026-11-27) — La tasa real y el +10/+20 solo se ven en Admin
 
 > Sin SQL.

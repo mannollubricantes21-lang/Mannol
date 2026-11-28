@@ -528,7 +528,7 @@ export function mountSalesView(container, navigate) {
 
         ${(saleType === "WHOLESALE" ? wholesaleProduct : cart.length > 0) ? `
           <!-- Selector de modo de pago -->
-          <div id="payment-section" class="sale-pay-part">
+          <div id="payment-section" class="sale-pay-part" tabindex="-1">
             <div class="sale-step"><span class="sale-step-n">2</span><span>Cobro</span><span class="sale-step-meta">${formatMoney(cartTotal(), "USD")}</span></div>
             <div class="tabs-list" style="grid-template-columns: 1fr 1fr;margin-bottom:0.75rem">
               <button class="tabs-trigger ${paymentMode === 'SINGLE' ? 'active' : ''}" data-mode="SINGLE">Una moneda</button>
@@ -876,6 +876,9 @@ export function mountSalesView(container, navigate) {
         payStep = true;
         render();
         try { window.scrollTo({ top: 0 }); } catch {}
+        // v5.39.4 (WCAG 2.4.3): el re-render destruye el botón Cobrar y el foco
+        // se iba al body; ahora aterriza en la sección de cobro.
+        container.querySelector("#payment-section")?.focus({ preventScroll: true });
         return;
       }
       const section = container.querySelector("#payment-section");
@@ -1231,7 +1234,13 @@ export function mountSalesView(container, navigate) {
     }
 
     container.querySelector("[data-sale-extras]")?.addEventListener("toggle", (e) => { extrasOpen = e.currentTarget.open; });
-    const backToCart = () => { payStep = false; render(); try { window.scrollTo({ top: 0 }); } catch {} };
+    const backToCart = () => {
+      payStep = false;
+      render();
+      try { window.scrollTo({ top: 0 }); } catch {}
+      // v5.39.4: el foco vuelve al botón Cobrar tras descender al carrito
+      container.querySelector("#checkout-bar-btn")?.focus({ preventScroll: true });
+    };
     container.querySelector("#sale-back-cart")?.addEventListener("click", backToCart);
     container.querySelector("#sale-pay-summary")?.addEventListener("click", backToCart);
     container.querySelector("#sales-back-btn")?.addEventListener("click", () => {
@@ -1534,7 +1543,8 @@ export function mountSalesView(container, navigate) {
           ${tops.map((p) => {
             const inCart = cart.find((i) => i.productId === p.id)?.quantity || 0;
             return `
-              <button type="button" class="top-chip ${inCart ? "in-cart" : ""}" data-top-add="${esc(p.id)}" aria-label="Añadir ${esc(p.name)}${inCart ? `, ${inCart} en la venta` : ""}">
+              <!-- v5.39.4 (2.5.3): sin aria-label, el contenido visible nombra el chip -->
+              <button type="button" class="top-chip ${inCart ? "in-cart" : ""}" data-top-add="${esc(p.id)}">
                 <span class="top-chip-name">${esc(shortProductName(p))}</span>
                 <span class="top-chip-meta">${formatMoney(p.salePrice, "USD")}</span>
                 ${inCart ? `<span class="top-chip-qty" aria-hidden="true">${inCart}</span>` : ""}

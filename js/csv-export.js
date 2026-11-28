@@ -7,9 +7,19 @@
 //   → Downloads "my-report-2025-01-15.csv"
 // =====================================================
 
-function escapeCSV(value) {
+// v5.39.2: neutralizar inyección de fórmulas al abrir el CSV en Excel o
+// Google Sheets (hallazgo 10 de la revisión): una celda que empiece por
+// = + - @ o tabulador podría ejecutarse como fórmula al abrir el archivo.
+// Los números reales (con signo y decimales) pasan intactos; el resto de
+// celdas sospechosas llevan un apóstrofe inicial que Excel interpreta como
+// «esto es texto» y no muestra.
+export function escapeCSV(value) {
   if (value == null) return "";
-  const str = String(value);
+  let str = String(value);
+  const looksLikeNumber = /^[-+]?\d+(?:[.,]\d+)?$/.test(str);
+  if (!looksLikeNumber && /^[=+\-@\t\r]/.test(str)) {
+    str = "'" + str;
+  }
   // Quote if contains comma, quote, newline, or leading/trailing whitespace
   if (/[",\n\r]|^\s|\s$/.test(str)) {
     return `"${str.replace(/"/g, '""')}"`;

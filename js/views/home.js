@@ -4,11 +4,11 @@
 // =====================================================
 
 import { getStore } from "../store.js";
-import { listWarehouses, subscribeRates, syncElToqueRates, getSettings, getRateConfig } from "../db.js";
+import { listWarehouses, subscribeRates, syncElToqueRates, getSettings, getRateConfig, fetchPublishedTasa } from "../db.js";
 import { formatMoney, formatDate, convertAmount, formatMoneyGrouped, parseAmountInput } from "../currency.js";
 import { toast, icon, esc, showModal, brandMark, warehouseColor } from "../ui.js";
 import { APP_LABEL } from "../version.js";
-import { isSupabaseConfiguredAsync } from "../supabase.js";
+import { isSupabaseConfiguredAsync, getStoredSupabaseConfig, saveStoredSupabaseConfig, clearStoredSupabaseConfig } from "../supabase.js";
 
 // v5.10.0: tasas del inicio en un solo sitio (vista + conversor)
 function getHomeRates(state) {
@@ -137,14 +137,17 @@ export function renderHomeView(navigate) {
             </div>
           </div>
           <div class="premium-rates">
-            <div class="premium-rate-tile premium-rate-tile-usd" role="button" tabindex="0" data-convert="USD" aria-label="Convertir desde USD">
+            <!-- v5.39.4 (2.5.3): sin aria-label — el nombre accesible es el propio
+                 contenido dinámico ("USD 455 MN 1 USD = 455 MN"), que siempre
+                 coincide con lo visible aunque cambie la tasa -->
+            <div class="premium-rate-tile premium-rate-tile-usd" role="button" tabindex="0" data-convert="USD">
               <div class="premium-rate-tile-currency">${icon("dollar", 14)} USD</div>
               <div class="premium-rate-tile-value">
                 ${usdInMN ? usdInMN.toFixed(0) : "—"}<span style="font-size:0.6875rem;color:var(--text-muted);font-weight:600;margin-left:0.25rem">MN</span>
               </div>
               <div class="premium-rate-tile-sub">${usdInMN ? `1 USD = ${usdInMN.toFixed(0)} MN` : "Sin tasa real"}</div>
             </div>
-            <div class="premium-rate-tile premium-rate-tile-eur" role="button" tabindex="0" data-convert="EUR" aria-label="Convertir desde EUR">
+            <div class="premium-rate-tile premium-rate-tile-eur" role="button" tabindex="0" data-convert="EUR">
               <div class="premium-rate-tile-currency">${icon("euro", 14)} EUR</div>
               <div class="premium-rate-tile-value">
                 ${eurInMN ? eurInMN.toFixed(0) : "—"}<span style="font-size:0.6875rem;color:var(--text-muted);font-weight:600;margin-left:0.25rem">MN</span>
@@ -184,15 +187,18 @@ export function renderHomeView(navigate) {
                 const isOwn = user && user.role === 'warehouse' && user.warehouseId === w.id;
                 const tel = (w.phone || "").replace(/[^\d+]/g, "");
                 return `
-                  <div class="wh-row ${isOwn ? 'wh-row-own' : ''}" data-enter-warehouse="${esc(w.id)}" role="button" tabindex="0" aria-label="Entrar al almacén ${esc(w.name)} con PIN">
+                  <div class="wh-row ${isOwn ? 'wh-row-own' : ''}">
                     <div class="wh-row-icon" style="--wh:${warehouseColor(w)}">${esc(w.code || "")}</div>
                     <div class="wh-row-body">
                       <div class="wh-row-title">
                         <span class="wh-row-name">${esc(w.name)}</span>
                         ${isOwn ? `<span class="wh-row-tag">Tu local</span>` : ''}
-                      </div>
+                    </div>
                       ${w.address ? `<div class="wh-row-sub">${icon("mapPin", 12)}<span>${esc(w.address)}</span></div>` : ''}
                     </div>
+                    <!-- v5.39.4 (WCAG 4.1.2/axe nested-interactive): botón real estirado en vez de
+                         role=button en el contenedor, que anidaba el enlace de llamar -->
+                    <button class="wh-row-enter" type="button" data-enter-warehouse="${esc(w.id)}" aria-label="Entrar al almacén ${esc(w.name)} con PIN"></button>
                     ${tel ? `<a class="wh-row-call" href="tel:${esc(tel)}" aria-label="Llamar a ${esc(w.name)} (${esc(w.phone)})">${icon("phone", 18)}</a>` : ''}
                     <span class="wh-row-chev" aria-hidden="true">${icon("chevronRight", 18)}</span>
                   </div>
@@ -345,18 +351,9 @@ export function mountHomeView(container, navigate) {
         navigate("pin");
       }
     };
-    container.querySelectorAll("[data-enter-warehouse]").forEach((row) => {
-      row.addEventListener("click", (e) => {
-        if (e.target.closest("a, button")) return; // ej: "Llamar"
-        enterWarehouse(row.dataset.enterWarehouse);
-      });
-      row.addEventListener("keydown", (e) => {
-        if (e.target !== row) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          enterWarehouse(row.dataset.enterWarehouse);
-        }
-      });
+    container.querySelectorAll("[data-enter-warehouse]").forEach((btn) => {
+      // v5.39.4: [data-enter-warehouse] es ahora un <button> nativo (Enter/Espacio gratis)
+      btn.addEventListener("click", () => enterWarehouse(btn.dataset.enterWarehouse));
     });
 
     // Menú ☰ (v5.8: antes disparaba un evento "open-drawer" que nadie escuchaba)
@@ -454,6 +451,8 @@ export function mountHomeView(container, navigate) {
       body: `
         <div class="home-menu">
           <button class="drawer-item" data-menu="rates">${icon("refresh", 18)}<span style="flex:1;text-align:left">Actualizar tasas del día</span></button>
+          <button class="drawer-item" data-menu="rate-status">${icon("coins", 18)}<span style="flex:1;text-align:left">Estado de las tasas</span></button>
+          <button class="drawer-item" data-menu="conexion">${icon("key", 18)}<span style="flex:1;text-align:left">Conexión de datos (Supabase)</span></button>
           <button class="drawer-item" data-menu="theme">${st.theme === "dark" ? icon("sun", 18) : icon("moon", 18)}<span style="flex:1;text-align:left">${st.theme === "dark" ? "Tema claro" : "Tema oscuro"}</span></button>
           ${canFs ? `<button class="drawer-item" data-menu="fullscreen">${icon("smartphone", 18)}<span style="flex:1;text-align:left">${document.fullscreenElement ? "Salir de pantalla completa" : "Pantalla completa (kiosko)"}</span></button>` : ""}
           <p class="home-menu-version">${esc(APP_LABEL)}</p>
@@ -465,6 +464,8 @@ export function mountHomeView(container, navigate) {
         const action = btn.dataset.menu;
         close();
         if (action === "rates") handleSyncRates();
+        else if (action === "rate-status") openRateStatusDialog();
+        else if (action === "conexion") openConexionDialog();
         else if (action === "theme") {
           store.setTheme(store.getState().theme === "dark" ? "light" : "dark");
           render();
@@ -473,6 +474,123 @@ export function mountHomeView(container, navigate) {
           else document.exitFullscreen?.().catch(() => {});
         }
       });
+    });
+  }
+
+  // v5.39.5: estado de la tasa publicada (tasa.json + elToque): valor, edad,
+  // fuente y umbral de frescura — sin tener que abrir herramientas de desarrollo.
+  function openRateStatusDialog() {
+    const close = showModal({
+      title: `${icon("coins", 16)} Estado de las tasas`,
+      body: `<div id="rate-status-body" style="display:grid;gap:0.625rem"><p class="text-muted" style="margin:0;font-size:0.875rem">Leyendo tasa.json…</p></div>`,
+      footer: `
+        <button class="btn btn-outline" id="rs-reread" type="button">Releer tasa.json</button>
+        <button class="btn btn-primary" id="rs-done" type="button">Cerrar</button>
+      `,
+    });
+    const container = document.getElementById("modal-container");
+
+    const hace = (ms) => {
+      if (!Number.isFinite(ms) || ms < 0) return "—";
+      const min = Math.round(ms / 60000);
+      if (min < 60) return `${min} min`;
+      const h = Math.round(min / 60);
+      if (h < 48) return `${h} h`;
+      return `${Math.round(h / 24)} días`;
+    };
+    // Colores con contraste AA medido (v5.39.3): blanco sobre primary 4.82:1,
+    // warning-foreground sobre warning y blanco sobre danger 4.78:1.
+    const chip = (edadMs) => {
+      const base = "font-weight:700;font-size:0.75rem;padding:0.1875rem 0.625rem;border-radius:999px;white-space:nowrap";
+      if (Number.isFinite(edadMs) && edadMs <= 48 * 3600000) return `<span style="background:var(--primary);color:#fff;${base}">Al día</span>`;
+      if (Number.isFinite(edadMs) && edadMs <= 7 * 86400000) return `<span style="background:var(--warning);color:var(--warning-foreground);${base}">Desactualizada</span>`;
+      return `<span style="background:var(--danger);color:#fff;${base}">Vencida</span>`;
+    };
+
+    const load = async () => {
+      const body = container?.querySelector("#rate-status-body");
+      if (!body) return;
+      let t = null;
+      try { t = await fetchPublishedTasa(); } catch {}
+      if (!t || !(t.usd > 0)) {
+        body.innerHTML = `
+          <p style="margin:0;font-weight:700">Sin tasa publicada todavía</p>
+          <p class="text-muted" style="margin:0;font-size:0.875rem">El script de publicación (secreto <code>ELTOQUE_API_KEY</code>) escribe <code>tasa.json</code> junto a la app y la app lo lee con respaldo local. En modo demo no hay datos que mostrar.</p>`;
+        return;
+      }
+      const edad = Date.now() - (t.updatedAt || 0);
+      body.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
+          <span style="font-weight:700">Tasa publicada</span> ${chip(edad)}
+        </div>
+        <div style="display:flex;justify-content:space-between;gap:0.5rem"><span>USD → MN</span><strong>${esc(String(t.usd))} MN</strong></div>
+        <div style="display:flex;justify-content:space-between;gap:0.5rem"><span>EUR → MN</span><strong>${t.eur > 0 ? `${esc(String(t.eur))} MN` : "—"}</strong></div>
+        <div style="display:flex;justify-content:space-between;gap:0.5rem"><span>Publicada</span><span>${hace(edad)} atrás (${esc(new Date(t.updatedAt).toLocaleDateString("es"))})</span></div>
+        <div style="display:flex;justify-content:space-between;gap:0.5rem"><span>Fuente</span><span>${esc(t.source || "elToque")} · tasa.json</span></div>
+        <p class="text-muted" style="margin:0;font-size:0.8125rem">Las tasas salen de elToque y se publican en <code>tasa.json</code> al lado de la app; el POS las lee con respaldo local sin conexión. Sin publicar en más de 48 h se marcan «Desactualizada» y en más de 7 días «Vencida».</p>
+      `;
+    };
+    load();
+    container?.querySelector("#rs-reread")?.addEventListener("click", load);
+    container?.querySelector("#rs-done")?.addEventListener("click", () => close());
+  }
+
+  // v5.39.5: la conexión Supabase vuelve a configurarse desde la app (el
+  // antiguo asistente setup.html se retiró). La config va SOLO al
+  // localStorage de este equipo; js/supabase-config.js ya no se publica en
+  // el repo (está en .gitignore) — si el servidor lo tiene, ese archivo manda.
+  function openConexionDialog() {
+    const stored = getStoredSupabaseConfig();
+    const close = showModal({
+      title: `${icon("key", 16)} Conexión de datos (Supabase)`,
+      body: `
+        <p id="cx-status" class="text-muted" style="margin:0 0 0.75rem;font-size:0.875rem">Consultando…</p>
+        <label for="cx-url" style="font-weight:600;font-size:0.875rem;display:block;margin-bottom:0.25rem">URL del proyecto</label>
+        <input class="input" id="cx-url" type="url" inputmode="url" placeholder="https://xxxx.supabase.co" value="${esc(stored?.url || "")}" autocomplete="off" style="margin-bottom:0.75rem" />
+        <label for="cx-key" style="font-weight:600;font-size:0.875rem;display:block;margin-bottom:0.25rem">Clave pública (anon / publishable)</label>
+        <input class="input" id="cx-key" type="text" placeholder="sb_publishable_… o eyJhbGc…" value="${esc(stored?.anonKey || "")}" autocomplete="off" />
+        <p class="text-muted" style="margin:0.5rem 0 0;font-size:0.8125rem">La clave pública va en el frontend por diseño de Supabase; la privada (service_role) NUNCA va aquí. Se guarda solo en este equipo — no se publica en el repositorio.</p>
+      `,
+      footer: `
+        <button class="btn btn-outline" id="cx-clear" type="button">Borrar de este equipo</button>
+        <button class="btn btn-primary" id="cx-save" type="button">Guardar y recargar</button>
+      `,
+    });
+    const container = document.getElementById("modal-container");
+    // Estado real: ¿el servidor publica un archivo de config?
+    // (ruta relativa al módulo: home.js vive en js/views/)
+    import("../supabase-config.js")
+      .then((mod) => {
+        const c = mod?.supabaseConfig;
+        const el = container?.querySelector("#cx-status");
+        if (el && c?.url) el.textContent = `Este servidor publica js/supabase-config.js conectado a ${c.url} — ese archivo tiene prioridad sobre lo guardado en el equipo.`;
+      })
+      .catch(() => {
+        const el = container?.querySelector("#cx-status");
+        if (el) el.textContent = stored
+          ? "El servidor no publica js/supabase-config.js: se usa la configuración guardada en este equipo."
+          : "El servidor no publica js/supabase-config.js y este equipo no tiene configuración guardada: la app corre en modo demo hasta que guardes una conexión.";
+      });
+
+    container?.querySelector("#cx-save")?.addEventListener("click", () => {
+      const url = (container.querySelector("#cx-url")?.value || "").trim().replace(/\/+$/, "");
+      const key = (container.querySelector("#cx-key")?.value || "").trim();
+      if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url)) {
+        toast("URL inválida: debe ser https://<proyecto>.supabase.co", "error");
+        return;
+      }
+      if (!key) {
+        toast("Falta la clave pública del proyecto", "error");
+        return;
+      }
+      saveStoredSupabaseConfig(url, key);
+      toast("Conexión guardada en este equipo — recargando…", "success");
+      setTimeout(() => { try { location.reload(); } catch {} }, 700);
+    });
+    container?.querySelector("#cx-clear")?.addEventListener("click", () => {
+      clearStoredSupabaseConfig();
+      toast("Configuración de este equipo borrada — recargando…", "success");
+      setTimeout(() => { try { location.reload(); } catch {} }, 700);
     });
   }
 

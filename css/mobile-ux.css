@@ -62,6 +62,8 @@
   }
   .nav-btn.active svg { background: color-mix(in oklab, var(--primary) 22%, transparent); }
   .nav-btn-label { font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.01em; }
+  /* v5.39.3 (WCAG 1.4.3): la barra inferior es siempre oscura; verde claro en activo */
+  .bottom-nav .nav-btn.active, .app-header--wh .nav-btn.active { color: oklch(0.82 0.12 165); }
 
   /* FAB "Registrar venta" acoplado al centro de la barra */
   .fab {
@@ -125,6 +127,10 @@
   transition: transform 0.22s ease, opacity 0.22s ease;
 }
 .checkout-bar.is-hidden { transform: translateY(calc(100% + 6rem)); opacity: 0; pointer-events: none; }
+/* v5.39.4: la sección de cobro recibe el foco tras el re-render del paso de pago;
+   sin outline (es un contenedor grande, no un control — el foco visible queda
+   en los controles interiores que se recorren con Tab) */
+#payment-section:focus { outline: none; }
 .checkout-bar-info { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.15; }
 .checkout-bar-count { font-size: 0.75rem; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .checkout-bar-total { font-size: 1.3125rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
@@ -245,7 +251,15 @@
 }
 .wh-row + .wh-row { border-top: 1px solid var(--border); }
 .wh-row:active { background: var(--bg-soft); }
-.wh-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+/* v5.39.4 (WCAG 4.1.2): botón real estirado que cubre la fila; el enlace
+   de llamar queda encima (z-index) para no anidar interactivos */
+.wh-row-enter {
+  position: absolute; inset: 0;
+  background: transparent; border: 0; padding: 0;
+  border-radius: inherit; cursor: pointer;
+}
+.wh-row-enter:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.wh-row-call { position: relative; z-index: 1; }
 .wh-row-own { box-shadow: inset 3px 0 0 var(--primary); }
 .wh-row-icon {
   width: 2.625rem; height: 2.625rem; flex-shrink: 0;
@@ -370,7 +384,7 @@
   .cart-item .btn-icon { margin: 0 0.125rem; }
   .stock-row [data-view-others] { min-width: 2.75rem; min-height: 2.75rem; }
   /* Controles compactos: área táctil ampliada con un pseudo-elemento invisible */
-  .seg { min-height: 2.25rem; padding: 0.375rem 0.875rem; font-size: 0.75rem; position: relative; }
+  .seg { min-height: 2.75rem; padding: 0.375rem 0.875rem; font-size: 0.75rem; position: relative; }
   .seg::after { content: ""; position: absolute; inset: -0.25rem 0; }
   [data-stock-filter] { position: relative; }
   [data-stock-filter]::after { content: ""; position: absolute; inset: -0.5rem -0.25rem; }
@@ -742,7 +756,7 @@ html.scanner-open, html.scanner-open body { overflow: hidden; }
 .rates-convert-btn {
   display: inline-flex; align-items: center; gap: 0.375rem; min-height: 2rem; padding: 0 0.75rem;
   border-radius: 999px; border: 1px solid color-mix(in oklab, var(--primary) 35%, var(--border));
-  background: var(--primary-tint); color: var(--primary); font: inherit; font-size: 0.75rem; font-weight: 700; cursor: pointer;
+  background: var(--primary-tint); color: color-mix(in oklab, var(--primary) 45%, var(--text)); font: inherit; font-size: 0.75rem; font-weight: 700; cursor: pointer;
 }
 .rates-convert-btn::after { content: ""; position: absolute; inset: -0.375rem -0.25rem; }
 .rates-convert-btn { position: relative; }
@@ -1973,7 +1987,8 @@ body:has(.sync-banner-offline, .home-hint-offline, [data-action="retry-warehouse
 /* --- Color propio de cada almacén --- */
 .wh-row-icon {
   background: color-mix(in oklab, var(--wh, var(--primary)) 15%, transparent);
-  color: var(--wh, var(--primary));
+  /* v5.39.3 (WCAG 1.4.3): tinta con suficiente contraste sobre el tinte, según tema */
+  color: color-mix(in oklab, var(--wh, var(--primary)) 40%, var(--text));
   font-weight: 900; font-size: 0.75rem; letter-spacing: 0.02em;
 }
 .wh-chip[style*="--wh"] { background: var(--wh); color: #fff; }
@@ -1993,7 +2008,11 @@ body:has(.sync-banner-offline, .home-hint-offline, [data-action="retry-warehouse
   background: var(--bg-elevated);
 }
 .catalog-row.in-cart { border-color: var(--primary); background: color-mix(in oklab, var(--primary) 7%, var(--bg-elevated)); }
-.catalog-row.is-out { opacity: 0.5; }
+/* v5.39.4 (1.4.3): la opacidad en el padre compone todo el subárbol y dejaba
+   el texto y el tag «Agotado» bajo 4.5:1. Se atenúa solo lo no textual
+   (fotos); el texto queda a pleno contraste y el tag comunica el estado. */
+.catalog-row.is-out, .catalog-tile.is-out, .sp-row.is-out { opacity: 1; }
+.catalog-row.is-out .cr-pic, .catalog-tile.is-out .ct-pic, .sp-row.is-out .sp-pic { opacity: 0.5; }
 .cr-pic {
   width: 2.5rem; height: 2.5rem; flex: none; border-radius: 0.625rem; overflow: hidden;
   background: var(--bg-soft); color: var(--text-muted); display: grid; place-items: center; cursor: pointer;
@@ -2087,7 +2106,7 @@ html[data-font-scale] body { font-size: 1rem; }
   transition: border-color .15s, transform .1s;
 }
 .catalog-tile.in-cart { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
-.catalog-tile.is-out { opacity: .55; }
+/* v5.39.4: la atenuación de agotados vive en .cr-pic/.ct-pic/.sp-pic (ver arriba) */
 .catalog-tile .ct-pic {
   position: relative; aspect-ratio: 4 / 3; width: 100%; height: auto;
   display: grid; place-items: center;
@@ -2219,7 +2238,7 @@ html[data-font-scale] body { font-size: 1rem; }
   box-shadow: none; padding: 1rem; display: flex; flex-direction: column; gap: 0.875rem;
 }
 .wi-v2 .wi2-seg { align-self: flex-start; background: transparent; border: 0; gap: 0.375rem; padding: 0; }
-.wi-v2 .wi2-seg .seg { min-height: 2.25rem; padding: 0 0.875rem; border-radius: 999px; background: #24332d; color: #c9d4cf; font-size: 0.875rem; font-weight: 600; }
+.wi-v2 .wi2-seg .seg { min-height: 2.75rem; padding: 0 0.875rem; border-radius: 999px; background: #24332d; color: #c9d4cf; font-size: 0.875rem; font-weight: 600; }
 .wi-v2 .wi2-seg .seg-on { background: #f4f6f5; color: #15201c; font-weight: 800; }
 .wi2-sum-main { display: flex; align-items: flex-end; justify-content: space-between; gap: 0.75rem; }
 .wi2-sum-label { font-size: 0.875rem; color: #a9b8b1; }
@@ -2423,7 +2442,7 @@ html[data-font-scale] body { font-size: 1rem; }
 }
 .sale-pay-summary span:first-child { flex: 1; color: var(--text-soft); font-size: 0.9375rem; }
 .sale-pay-summary strong { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 800; font-size: 1.75rem; }
-.sale-pay-change { color: var(--primary); font-weight: 700; font-size: 0.875rem; }
+.sale-pay-change { color: color-mix(in oklab, var(--primary) 45%, var(--text)); font-weight: 700; font-size: 0.875rem; } /* v5.39.4: tinta en vez de primary puro (1.4.3) */
 @media (max-width: 1023.98px) {
   .sale-form-panel[data-step="cart"] .sale-pay-part { display: none !important; }
   .sale-form-panel[data-step="pay"] .sale-cart-part { display: none !important; }
@@ -2593,7 +2612,7 @@ html[data-font-scale] body { font-size: 1rem; }
   box-shadow: 0 1px 0 var(--card-line);
 }
 .sp-row.in-cart { border: 2px solid var(--primary); background: color-mix(in oklab, var(--primary) 7%, var(--bg-elevated)); padding: calc(0.625rem - 1px) calc(0.625rem - 1px) calc(0.625rem - 1px) calc(0.75rem - 1px); }
-.sp-row.is-out { opacity: 0.55; }
+/* v5.39.4: ídem */
 .sp-info { flex: 1; min-width: 0; }
 .sp-name { font-weight: 700; font-size: 0.9375rem; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .sp-top { color: #d99a00; margin-right: 0.25rem; }
@@ -2736,7 +2755,7 @@ html[data-font-scale] body { font-size: 1rem; }
 .catalog-tile .ct-pic { background: var(--cell-bg) !important; border-bottom: 1px solid var(--card-line); color: var(--text-muted); }
 .view-small .catalog-tile .ct-pic { aspect-ratio: 4 / 3; }
 .view-medium .catalog-tile .ct-pic { aspect-ratio: 4 / 3; }
-.sp-catalog-btn .sp-catalog-n { background: rgb(255 255 255 / 0.2); border-color: transparent; color: inherit; }
+.sp-catalog-btn .sp-catalog-n { background: transparent; border-color: rgb(255 255 255 / 0.4); color: inherit; } /* v5.39.4: el tinte blanco 20% dejaba el texto a 3.43:1 */
 .sale-products .top-sellers { margin-top: 0; }
 /* Catálogo | Escanear, mitad y mitad */
 .sp-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.625rem; }

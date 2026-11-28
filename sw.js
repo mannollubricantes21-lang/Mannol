@@ -1,7 +1,10 @@
 // =====================================================
 // MANNOL POS — Service Worker
 // Cache-first for static assets, network-first for navigation.
-// Bump CACHE_VERSION on every release to force clients to refresh.
+// v5.39.5: CACHE_VERSION ya NO se mantiene a mano — se deriva de la versión
+// de la app (js/version.js). Bump de versión = caché nueva, sin editar este
+// archivo. Por eso el SW es módulo ES y el registro (js/update-banner.js)
+// usa type: "module".
 //
 // v5.13.0 — La app ABRE y FUNCIONA SIN CONEXIÓN:
 //  · La librería de Supabase ahora es local (js/supabase-js.min.js) y se
@@ -17,7 +20,9 @@
 //    red no responde en 4 s se abre la copia guardada.
 // =====================================================
 
-const CACHE_VERSION = "mannol-pos-supabase-v71";
+import { APP_VERSION, APP_BUILD } from "./js/version.js";
+
+const CACHE_VERSION = `mannol-pos-${APP_VERSION}(${APP_BUILD})`;
 const DATA_CACHE = "mannol-pos-data-v1"; // respuestas de Supabase (se conserva entre versiones)
 const NAV_TIMEOUT_MS = 4000;
 const API_TIMEOUT_MS = 6000;
@@ -38,6 +43,7 @@ const STATIC_ASSETS = [
   "./js/store.js",
   "./js/auth.js",
   "./js/db.js",
+  "./js/error-report.js", // v5.39.2: red global de errores
   "./js/version.js",
   "./js/currency.js",
   "./js/ui.js",
@@ -291,11 +297,13 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // v5.37.0: tasa.json (la tasa que publica GitHub) siempre de la red; sin
-  // red, la última guardada. Una sola entrada en caché (sin el ?t=).
+  // v5.39.2: tasa.json (la tasa que publica GitHub) siempre de la red; sin
+  // red, la última guardada en DATA_CACHE — que NO se borra al actualizar.
+  // Antes el respaldo caía en la caché de versión, que activate elimina en
+  // cada release: tras actualizar sin internet, la tasa se perdía.
   if (url.pathname.endsWith("/tasa.json")) {
     event.respondWith((async () => {
-      const cache = await caches.open(CACHE_VERSION);
+      const cache = await caches.open(DATA_CACHE);
       const key = new Request(url.origin + url.pathname);
       try {
         const fresh = await fetch(request, { cache: "no-store" });

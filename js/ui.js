@@ -85,11 +85,16 @@ export function showModal({ title, body, footer, onClose, size }) {
   const prevFocus = document.activeElement; // para restaurar el foco al cerrar
 
   const modalId = `modal-${++_modalCounter}`;
-  const overlay = document.createElement("div");
-  overlay.className = "modal-overlay";
-  overlay.dataset.modalId = modalId;
-  overlay.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="${modalId}-title" style="${size === 'lg' ? 'max-width: 42rem;' : ''}">
+  // v5.39.4 (WCAG 2.1.2/4.1.2): <dialog> nativo con showModal() — la trampa
+  // de foco, el Escape y la restauración de foco las hace el navegador.
+  // jsdom (tests) no implementa showModal(): fallback con atributo open.
+  const isNative = typeof document.createElement("dialog").showModal === "function";
+  const dlg = document.createElement("dialog");
+  dlg.className = "modal-overlay";
+  dlg.dataset.modalId = modalId;
+  dlg.setAttribute("aria-labelledby", `${modalId}-title`);
+  dlg.innerHTML = `
+    <div class="modal" style="${size === 'lg' ? 'max-width: 42rem;' : ''}">
       <div class="modal-header">
         <h3 class="modal-title" id="${modalId}-title">${title || ""}</h3>
         <button class="btn btn-ghost btn-icon modal-close" aria-label="Cerrar" type="button">✕</button>
@@ -99,78 +104,62 @@ export function showModal({ title, body, footer, onClose, size }) {
     </div>
   `;
 
-  const close = () => {
-    if (!overlay.parentNode) return; // already removed
-    overlay.remove();
+  const cleanup = () => {
+    if (dlg.parentNode) dlg.remove();
     document.removeEventListener("keydown", escHandler);
-    // Accesibilidad: devolver el foco al elemento que abrió el modal
-    try {
-      if (prevFocus && prevFocus.isConnected) prevFocus.focus();
-    } catch {}
+    if (!isNative) {
+      // El <dialog> nativo ya devuelve el foco al elemento que lo abrió.
+      try { if (prevFocus && prevFocus.isConnected) prevFocus.focus(); } catch {}
+    }
     if (onClose) onClose();
   };
+  dlg.addEventListener("close", cleanup); // camino nativo: close() → "close" → cleanup
 
-  // Cerrar con tecla Escape (solo el último modal abierto)
-  const escHandler = (e) => {
-    if (e.key === "Escape") {
-      // Only close if this is the topmost modal
-      const overlays = container.querySelectorAll(".modal-overlay");
-      if (overlays[overlays.length - 1] === overlay) {
-        e.preventDefault();
-        close();
-      }
-    }
+  const close = () => {
+    if (!dlg.isConnected) return; // already removed
+    if (isNative && dlg.open) dlg.close(); // dispara el evento "close"
+    else if (!isNative) cleanup();
   };
-  document.addEventListener("keydown", escHandler);
 
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) close();
+  // Escape: el <dialog> nativo ya lo maneja (cancel→close); el polyfill lo
+  // simula cerrando solo el modal más arriba (último hijo del contenedor).
+  const escHandler = (e) => {
+    if (e.key !== "Escape") return;
+    const overlays = container.querySelectorAll(".modal-overlay");
+    if (overlays[overlays.length - 1] === dlg) { e.preventDefault(); close(); }
+  };
+  if (!isNative) document.addEventListener("keydown", escHandler);
+
+  // Clic fuera de la tarjeta = cerrar (el clic en el borde llega al <dialog>)
+  dlg.addEventListener("click", (e) => {
+    if (e.target === dlg) close();
   });
-  overlay.querySelector(".modal-close").addEventListener("click", close);
+  dlg.querySelector(".modal-close").addEventListener("click", close);
 
-  // Focus trap: enfocar el primer elemento interactivo del modal.
-  // v5.8 (móvil): en pantallas táctiles NO se enfocan campos de texto al abrir
-  // (abría el teclado del sistema y tapaba medio catálogo); se enfoca el diálogo.
+  container.appendChild(dlg);
+  if (isNative && typeof dlg.showModal === "function") dlg.showModal();
+  else {
+    dlg.setAttribute("open", ""); // modo polyfill (jsdom / navegadores viejos)
+    dlg.style.background = "rgba(0,0,0,0.5)";
+  }
+
+  // Enfoque inicial al abrir. v5.8 (móvil): en pantallas táctiles NO se
+  // enfocan campos de texto (abría el teclado del sistema y tapaba medio
+  // catálogo); se enfoca el diálogo.
   setTimeout(() => {
     let isTouch = false;
     try { isTouch = window.matchMedia("(pointer: coarse)").matches; } catch {}
-    const modalEl = overlay.querySelector(".modal");
     if (isTouch) {
-      if (modalEl) {
-        modalEl.setAttribute("tabindex", "-1");
-        modalEl.style.outline = "none";
-        modalEl.focus({ preventScroll: true });
-      }
+      dlg.setAttribute("tabindex", "-1");
+      dlg.style.outline = "none";
+      dlg.focus({ preventScroll: true });
       return;
     }
-    const focusable = overlay.querySelector("input, button:not(.modal-close), select, textarea");
+    const focusable = dlg.querySelector("input, button:not(.modal-close), select, textarea");
     if (focusable) focusable.focus();
-    else modalEl?.focus();
+    else dlg.focus({ preventScroll: true });
   }, 50);
 
-  // Focus trap completo: Tab cicla dentro del modal, nunca se sale (accesibilidad)
-  const trapHandler = (e) => {
-    if (e.key !== "Tab") return;
-    const focusables = [...overlay.querySelectorAll(
-      'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )].filter((el) => el.offsetParent !== null || el === document.activeElement);
-    if (focusables.length === 0) return;
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    if (!overlay.contains(document.activeElement)) {
-      e.preventDefault();
-      first.focus();
-    } else if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  };
-  overlay.addEventListener("keydown", trapHandler);
-
-  container.appendChild(overlay);
   return close;
 }
 
